@@ -74,7 +74,7 @@ ParleyPort groups the connections that present the same relay key, a hash derive
 
 Probably not. There are three ways to reach your instances across networks, and ParleyPort is only one of them:
 
-- **The project relay** at `relay.halleluja.design` is the default in both apps. Nothing to set up.
+- **The project relay** at `parleyport.halleluja.design` is the default in both apps, and runs ParleyPort itself. Older builds still reach it as `relay.halleluja.design`. Nothing to set up.
 - **One of your own instances as the relay.** If one KnightLoader or BombVault is already reachable from outside, switch on **Serve as relay** there and the others dial it.
 - **ParleyPort**, for when you want your own relay but would rather not put a download manager or a backup tool on the open internet. It is a few megabytes, holds no data and can run on a small VPS while your instances stay at home.
 

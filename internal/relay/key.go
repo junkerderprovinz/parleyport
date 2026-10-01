@@ -17,7 +17,7 @@ import (
 // the secret, and every released binary depends on this domain staying alive.
 // Moving it means serving both names while old builds still dial the old one,
 // which is why PARLEYPORT_DOMAIN takes a list (see cmd/parleyport).
-const DefaultRelayURL = "wss://relay.halleluja.design/relay/connect"
+const DefaultRelayURL = "wss://parleyport.halleluja.design/relay/connect"
 
 // SeedAccountService is the credential-store service the seed-phrase secret is
 // sealed under. It is separate from AccountService, which holds a hand-entered
