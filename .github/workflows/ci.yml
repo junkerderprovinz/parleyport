@@ -1,0 +1,108 @@
+name: CI
+
+# Vet, tests and a boot of the binary and the image. It never pushes; only
+# release.yml publishes.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "LICENSE"
+      - ".github/assets/**"
+      - ".github/release-notes/**"
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  go:
+    name: gofmt · vet · test · native smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt found unformatted files:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test -race -count=1 ./...
+
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          "$(go env GOPATH)/bin/govulncheck" ./...
+
+      - name: Native boot smoke
+        run: |
+          set -euo pipefail
+          go build -o /tmp/parleyport ./cmd/parleyport
+          PARLEYPORT_ADDR=:38760 /tmp/parleyport > /tmp/parleyport.log 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          for i in $(seq 1 20); do
+            if body="$(curl -fsS http://127.0.0.1:38760/health)"; then
+              echo "health after ${i}s: $body"
+              echo "$body" | grep -q '"status":"ok"'
+              grep -q "ParleyPort ·" /tmp/parleyport.log
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/parleyport.log
+          exit 1
+
+  image:
+    name: build and boot the image (amd64, no push)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: parleyport:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Boot smoke
+        run: |
+          set -euo pipefail
+          docker run -d --name pp -p 8760:8760 parleyport:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8760/health; then
+              echo
+              docker logs pp 2>&1 | grep -q "ParleyPort ·"
+              status="$(docker inspect -f '{{.State.Health.Status}}' pp)"
+              echo "health status: $status"
+              docker rm -f pp >/dev/null
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs pp || true
+          docker rm -f pp >/dev/null
+          exit 1
