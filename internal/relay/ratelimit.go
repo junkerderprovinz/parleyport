@@ -6,13 +6,16 @@ package relay
 // connection, a TLS negotiation and a goroutine for up to helloTimeout, and
 // burying real failures in the journal.
 //
-// It is keyed on the socket's remote address, never a forwarded-for header.
-// The relay is dialled directly, so the peer is the client, and trusting a
-// header would let a caller pick its own bucket.
+// It is keyed on the socket's remote address. Only a peer in
+// Server.TrustedProxies may name the caller in X-Forwarded-For (see
+// clientAddr); from anywhere else a header would let a caller pick its own
+// bucket.
 
 import (
 	"net"
 	"net/http"
+	"net/netip"
+	"strings"
 	"sync"
 	"time"
 )
@@ -190,11 +193,47 @@ func (l *limiter) evictIfFullLocked() {
 
 // clientAddr is the bucket a request counts against: the peer's IP without its
 // port, since every connection gets a fresh source port.
-func clientAddr(r *http.Request) string {
+//
+// Behind a reverse proxy every caller arrives as the proxy, and one stranger
+// failing ten handshakes would lock out every member. So for a peer in
+// trusted the caller is the right-most X-Forwarded-For entry that is not
+// itself in trusted: everything right of it was appended by proxies of ours,
+// everything left of it by whoever sent the request. Any other peer's header
+// is ignored, or a caller could pick a fresh bucket for every attempt.
+func clientAddr(r *http.Request, trusted []netip.Prefix) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		// An unparseable address is still limited, as a whole.
 		return r.RemoteAddr
 	}
+	peer, err := netip.ParseAddr(host)
+	if err != nil || !inPrefixes(trusted, peer) {
+		return host
+	}
+	var hops []string
+	for _, v := range r.Header.Values("X-Forwarded-For") {
+		hops = append(hops, strings.Split(v, ",")...)
+	}
+	for i := len(hops) - 1; i >= 0; i-- {
+		addr, err := netip.ParseAddr(strings.TrimSpace(hops[i]))
+		if err != nil {
+			// Not an address the proxy saw; the proxy itself is all that
+			// is known.
+			return host
+		}
+		if !inPrefixes(trusted, addr) {
+			return addr.Unmap().String()
+		}
+	}
 	return host
+}
+
+func inPrefixes(prefixes []netip.Prefix, a netip.Addr) bool {
+	a = a.Unmap()
+	for _, p := range prefixes {
+		if p.Contains(a) {
+			return true
+		}
+	}
+	return false
 }

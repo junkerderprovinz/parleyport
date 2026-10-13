@@ -1,11 +1,16 @@
 package relay
 
 import (
+	"context"
 	"net/http"
+	"net/http/httptest"
+	"net/netip"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/coder/websocket"
 )
 
 // testLimiter returns a limiter whose clock the test drives, so a backoff
@@ -143,11 +148,93 @@ func TestClientAddrDropsThePort(t *testing.T) {
 		{"[2a01:4f8:c014:3544::1]:44444", "2a01:4f8:c014:3544::1"},
 		{"no-port-here", "no-port-here"},
 	} {
-		got := clientAddr(&http.Request{RemoteAddr: c.in})
+		got := clientAddr(&http.Request{RemoteAddr: c.in}, localNetworks())
 		if got != c.want {
 			t.Errorf("clientAddr(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
+}
+
+// localNetworks is loopback and the private ranges, where a proxy in front of
+// a relay on its own host or network sits.
+func localNetworks() []netip.Prefix {
+	var out []netip.Prefix
+	for _, s := range []string{"127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"} {
+		out = append(out, netip.MustParsePrefix(s))
+	}
+	return out
+}
+
+func TestClientAddrTakesTheForwardedAddressOnlyFromAProxy(t *testing.T) {
+	for _, c := range []struct{ remote, forwarded, want string }{
+		{"127.0.0.1:40000", "198.51.100.7", "198.51.100.7"},
+		{"172.18.0.5:40000", "10.0.0.9, 198.51.100.7", "198.51.100.7"},
+		{"[::1]:40000", "2a01:4f8:c014:3544::1", "2a01:4f8:c014:3544::1"},
+		{"127.0.0.1:40000", "not-an-address", "127.0.0.1"},
+		{"203.0.113.9:40000", "198.51.100.7", "203.0.113.9"},
+	} {
+		r := &http.Request{RemoteAddr: c.remote, Header: http.Header{"X-Forwarded-For": {c.forwarded}}}
+		if got := clientAddr(r, localNetworks()); got != c.want {
+			t.Errorf("clientAddr(%s, X-Forwarded-For %q) = %q, want %q", c.remote, c.forwarded, got, c.want)
+		}
+	}
+}
+
+// TestAPeerOffTheListNamesNoCaller: a machine on the same network that is not
+// a listed proxy cannot pick a fresh bucket for each attempt.
+func TestAPeerOffTheListNamesNoCaller(t *testing.T) {
+	proxy := []netip.Prefix{netip.MustParsePrefix("192.168.1.2/32")}
+	for _, c := range []struct {
+		remote  string
+		trusted []netip.Prefix
+		want    string
+	}{
+		{"192.168.1.20:40000", proxy, "192.168.1.20"},
+		{"127.0.0.1:40000", nil, "127.0.0.1"},
+		{"192.168.1.2:40000", proxy, "198.51.100.7"},
+	} {
+		r := &http.Request{RemoteAddr: c.remote, Header: http.Header{"X-Forwarded-For": {"198.51.100.7"}}}
+		if got := clientAddr(r, c.trusted); got != c.want {
+			t.Errorf("clientAddr(%s, trusted %v) = %q, want %q", c.remote, c.trusted, got, c.want)
+		}
+	}
+}
+
+// TestBehindAProxyOneCallerCannotLockOutTheOthers: every caller of a relay
+// behind a reverse proxy arrives from the proxy's address.
+func TestBehindAProxyOneCallerCannotLockOutTheOthers(t *testing.T) {
+	relay := New()
+	relay.TrustedProxies = localNetworks
+	srv := httptest.NewServer(relay)
+	t.Cleanup(srv.Close)
+	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/relay/connect"
+	dial := func(from string) (*websocket.Conn, *http.Response, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), wsTimeout)
+		defer cancel()
+		return websocket.Dial(ctx, url, &websocket.DialOptions{HTTPHeader: http.Header{"X-Forwarded-For": {from}}})
+	}
+
+	for i := 0; i < failsBeforeBlock; i++ {
+		c, _, err := dial("203.0.113.66")
+		if err != nil {
+			t.Fatalf("stranger's dial %d: %v", i, err)
+		}
+		readFrame(t, c, TypeChallenge)
+		writeFrame(t, c, TypeHello, Hello{Key: "too-short", Announce: Announce{InstanceID: bravoID}})
+		ctx, cancel := context.WithTimeout(context.Background(), wsTimeout)
+		_, _, _ = c.Read(ctx)
+		cancel()
+		_ = c.CloseNow()
+	}
+	if _, resp, err := dial("203.0.113.66"); err == nil || resp == nil || resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatal("the stranger was not blocked, so this test proves nothing")
+	}
+
+	c, _, err := dial("198.51.100.7")
+	if err != nil {
+		t.Fatalf("a member behind the same proxy was refused: %v", err)
+	}
+	_ = c.CloseNow()
 }
 
 // An address that fails once and never comes back, the usual scanner, is

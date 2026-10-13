@@ -16,8 +16,10 @@ package relay
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"net/http"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -37,9 +39,13 @@ const writeTimeout = 5 * time.Second
 // who it is, so a socket that goes quiet cannot hold a goroutine forever.
 const helloTimeout = 10 * time.Second
 
+// challengeSize is how many random bytes the challenge a hello signs has.
+const challengeSize = 32
+
 // helloLimit caps what a connection may send before its hello is checked. A
-// hello is a key, an instance id and a short sealed identity, so a larger
-// first frame only costs the relay memory on behalf of nobody.
+// hello is a key, an instance id, a short sealed identity and at most a proof
+// of the id, so a larger first frame only costs the relay memory on behalf of
+// nobody.
 const helloLimit = 4 << 10
 
 // readLimit caps one inbound frame once the hello has passed. The default 32 KiB is too small for a task
@@ -85,7 +91,12 @@ type client struct {
 	conn     Conn
 	key      string
 	announce Announce
-	send     chan []byte
+	// proven says the hello proved the key announce.InstanceID is made from.
+	proven bool
+	// only is the one id this connection may see and reach, "" for any (see
+	// Server.Confine).
+	only string
+	send chan []byte
 	// quit is closed once, by stop, to end the writer goroutine. send is never
 	// closed: frames are pushed into it without the server lock, so closing it
 	// would race a live send.
@@ -131,6 +142,27 @@ type Server struct {
 	// the switch and the key can change while the process runs.
 	Admit func(key string) bool
 
+	// Confine names, for a key the server admits on behalf of one instance
+	// alone, that instance's id: a connection on such a key sees and reaches
+	// that instance and nobody else, so whoever holds the key cannot use the
+	// relay to meet others who do. "" leaves a key open, and so does a nil
+	// Confine. It is read as each connection joins, and connections that
+	// joined the key under an answer that no longer holds are dropped then.
+	Confine func(key string) string
+
+	// Names gives, for the request a connection arrives with, the host names
+	// (RelayHost) this relay goes by, one of which a hello's proof has to name.
+	// It gets the request so a relay that knows its names only by rule can
+	// judge the Host header. nil takes the Host header as it is, which
+	// whoever opens the connection writes, so only a relay that sets Names
+	// keeps another relay from passing its challenge on to a member.
+	Names func(r *http.Request) []string
+
+	// TrustedProxies lists the reverse proxies whose X-Forwarded-For names
+	// the caller for the handshake throttle. nil trusts none. A function for
+	// the same reason as Admit.
+	TrustedProxies func() []netip.Prefix
+
 	// limiter backs off addresses that keep failing the handshake.
 	limiter *limiter
 }
@@ -152,6 +184,36 @@ func (s *Server) admits(key string) bool {
 	return s.Admit == nil || s.Admit(key)
 }
 
+// confined is the id connections on key are kept to, "" for none.
+func (s *Server) confined(key string) string {
+	if s.Confine == nil {
+		return ""
+	}
+	return s.Confine(key)
+}
+
+// sees reports whether cl may learn of other and call it: always on an open
+// key, and on a confined one only between the instance it is kept to and the
+// rest.
+func (cl *client) sees(other *client) bool {
+	return cl.only == "" || cl.announce.InstanceID == cl.only || other.announce.InstanceID == cl.only
+}
+
+// meets reports whether cl and other may learn of and call each other. It
+// asks both sides, since a connection that joined before its key was confined
+// sees everybody and must still not reach a device kept away from it.
+func (cl *client) meets(other *client) bool {
+	return cl.sees(other) && other.sees(cl)
+}
+
+// names is what a hello's proof on r may name as its relay.
+func (s *Server) names(r *http.Request) []string {
+	if s.Names == nil {
+		return []string{RelayHost(r.Host)}
+	}
+	return s.Names(r)
+}
+
 // Len reports how many connections are registered across every key.
 func (s *Server) Len() int {
 	s.mu.Lock()
@@ -166,18 +228,28 @@ func (s *Server) Len() int {
 // A connection announcing an instance ID already on this key replaces the old
 // one. An instance whose socket died without a close frame reconnects while
 // the relay still holds the dead socket, and requests routed there would never
-// be answered. The replaced connection gets no offline presence, since the
-// announce says the instance is back, but requests still waiting on it are
-// failed at once (see failPending).
+// be answered. Anybody else could announce the same id to take the instance's
+// calls, so an id whose holder proved the key behind it (proven, see
+// Hello.proves) is taken only by a connection that proves it too. A holder
+// that proved nothing, as every BombVault and every KnightLoader before 1.9
+// does, is replaced by whoever announces its id, since such a client has
+// nothing else to reclaim its place with. The replaced connection gets no
+// offline presence, since the announce says the instance is back, but
+// requests still waiting on it are failed at once (see failPending).
 //
-// Join reports whether the connection was admitted; on false the caller closes
-// it. That happens when the connection limits are reached and this is not a
-// reconnect, or when the same connection joins twice.
-func (s *Server) Join(key string, c Conn, a Announce) bool {
+// Connections on the key that joined while Confine answered otherwise for it
+// are dropped, so a device that was on a group's key before a reset kept the
+// key to one instance cannot reach the devices that join it afterwards.
+//
+// Join returns why the connection was not admitted, nil when it was; on an
+// error the caller closes it.
+func (s *Server) Join(key string, c Conn, a Announce, proven bool) error {
 	cl := &client{
 		conn:     c,
 		key:      key,
 		announce: a,
+		proven:   proven,
+		only:     s.confined(key),
 		send:     make(chan []byte, queueDepth),
 		quit:     make(chan struct{}),
 	}
@@ -185,31 +257,47 @@ func (s *Server) Join(key string, c Conn, a Announce) bool {
 	s.mu.Lock()
 	if _, ok := s.clients[c]; ok {
 		s.mu.Unlock()
-		return false
+		return errJoinedTwice
 	}
 	group := s.keys[key]
-	if group == nil {
-		group = map[Conn]*client{}
-		s.keys[key] = group
-	}
 	var replaced *client
+	var stale []Conn
 	siblings := make([]*client, 0, len(group))
 	for _, other := range group {
-		if other.announce.InstanceID == a.InstanceID {
+		switch {
+		case other.announce.InstanceID == a.InstanceID:
 			replaced = other
-			continue
+		case other.only != cl.only:
+			// It joined while the key was kept otherwise, such as before a
+			// reset confined it, and would keep what it could reach then. It
+			// reconnects and joins under what holds now.
+			stale = append(stale, other.conn)
+		case cl.meets(other):
+			siblings = append(siblings, other)
 		}
-		siblings = append(siblings, other)
 	}
-	if replaced == nil {
-		if len(s.clients) >= maxTotalClients || len(group) >= maxClientsPerKey {
-			s.mu.Unlock()
-			return false
-		}
+	switch {
+	case cl.only != "" && a.InstanceID == cl.only && !proven:
+		// Whoever announces the id a confined key is kept to sees and reaches
+		// everybody on it, so that takes the instance's own key.
+		s.mu.Unlock()
+		return errConfinedID
+	case replaced != nil && replaced.proven && !proven:
+		s.mu.Unlock()
+		return errIDTaken
+	case replaced == nil && (len(s.clients) >= maxTotalClients || len(group) >= maxClientsPerKey):
+		s.mu.Unlock()
+		return errGroupFull
 	}
 	var failures []pendingFailure
 	if replaced != nil {
 		_, failures = s.removeLocked(replaced.conn)
+	}
+	// Looked up again because removing the only connection on the key drops
+	// its group, and a newcomer added to that map would be invisible.
+	if group = s.keys[key]; group == nil {
+		group = map[Conn]*client{}
+		s.keys[key] = group
 	}
 	s.clients[c] = cl
 	group[c] = cl
@@ -219,6 +307,9 @@ func (s *Server) Join(key string, c Conn, a Announce) bool {
 		replaced.stop()
 	}
 	s.failPending(failures, "the instance that would have answered this reconnected before it replied; retry")
+	for _, gone := range stale {
+		s.Leave(gone)
+	}
 	go s.writeLoop(cl)
 
 	for _, sib := range siblings {
@@ -228,8 +319,16 @@ func (s *Server) Join(key string, c Conn, a Announce) bool {
 	for _, sib := range siblings {
 		s.enqueue(sib, arrival)
 	}
-	return true
+	return nil
 }
+
+// The reasons Join turns a connection away, which the close frame carries.
+var (
+	errJoinedTwice = errors.New("this connection has already joined")
+	errGroupFull   = errors.New("too many instances are already connected with this relay key")
+	errIDTaken     = errors.New("another connection holds this id; only one that proves the key behind it takes its place")
+	errConfinedID  = errors.New("this relay key is kept to one instance, and only a connection that proves its key announces its id")
+)
 
 // Leave unregisters a connection, stops its writer (which closes the socket),
 // tells its siblings it went offline and fails any request still waiting on
@@ -241,7 +340,9 @@ func (s *Server) Leave(c Conn) {
 	var siblings []*client
 	if cl != nil {
 		for _, sib := range s.keys[cl.key] {
-			siblings = append(siblings, sib)
+			if sib.meets(cl) {
+				siblings = append(siblings, sib)
+			}
 		}
 	}
 	s.mu.Unlock()
@@ -269,10 +370,10 @@ func (s *Server) Route(c Conn, frame []byte) {
 	switch env.Type {
 	case TypeProxyRequest:
 		var req ProxyRequest
-		if env.Into(&req) != nil || req.RequestID == "" || req.Target == "" {
+		if env.intoStrict(&req) != nil || req.RequestID == "" || req.Target == "" {
 			return
 		}
-		s.routeRequest(c, req, frame)
+		s.routeRequest(c, req)
 	case TypeProxyResponse:
 		var resp ProxyResponse
 		if env.Into(&resp) != nil || resp.RequestID == "" {
@@ -282,12 +383,12 @@ func (s *Server) Route(c Conn, frame []byte) {
 	}
 }
 
-// routeRequest forwards a call verbatim to the sibling it names; the frame is
-// never re-marshalled, so a body the relay does not understand arrives intact.
-// An unknown target, or a sender already at maxPendingPerSender, gets an
-// immediate error response instead of a timeout, and the refused frame never
-// reaches the target's queue.
-func (s *Server) routeRequest(c Conn, req ProxyRequest, frame []byte) {
+// routeRequest forwards a call to the sibling it names, encoded afresh from
+// what was decoded with the sender's own id in Sender, so nothing the sender
+// put in the frame can stand in for it. An unknown target, or a sender
+// already at maxPendingPerSender, gets an immediate error response instead of
+// a timeout, and the refused frame never reaches the target's queue.
+func (s *Server) routeRequest(c Conn, req ProxyRequest) {
 	s.mu.Lock()
 	cl := s.clients[c]
 	if cl == nil {
@@ -296,7 +397,7 @@ func (s *Server) routeRequest(c Conn, req ProxyRequest, frame []byte) {
 	}
 	var target *client
 	for _, sib := range s.keys[cl.key] {
-		if sib.conn != c && sib.announce.InstanceID == req.Target {
+		if sib.conn != c && sib.announce.InstanceID == req.Target && cl.meets(sib) {
 			target = sib
 			break
 		}
@@ -331,7 +432,8 @@ func (s *Server) routeRequest(c Conn, req ProxyRequest, frame []byte) {
 		s.enqueue(cl, frameOf(TypeProxyResponse, *refusal))
 		return
 	}
-	s.enqueue(target, frame)
+	req.Sender = cl.announce.InstanceID
+	s.enqueue(target, frameOf(TypeProxyRequest, req))
 }
 
 // routeResponse sends an answer back to whoever asked, using the relay's own
@@ -490,7 +592,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Refused before the upgrade, so a failing address costs one HTTP response
 	// rather than a WebSocket and a goroutine. 429 because the caller should
 	// slow down, not give up.
-	addr := clientAddr(r)
+	var trusted []netip.Prefix
+	if s.TrustedProxies != nil {
+		trusted = s.TrustedProxies()
+	}
+	addr := clientAddr(r, trusted)
 	if s.limiter.blocked(addr) {
 		http.Error(w, "too many failed handshakes from this address", http.StatusTooManyRequests)
 		return
@@ -507,6 +613,22 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	c.SetReadLimit(helloLimit)
 
+	// Sent before the hello is read and never waited on, so a client that
+	// writes its hello at once and skips frame types it does not know, as
+	// every BombVault does, connects without ever looking at it.
+	challenge := make([]byte, challengeSize)
+	if _, err := rand.Read(challenge); err != nil {
+		c.Close(websocket.StatusInternalError, "the relay has no randomness for a challenge")
+		return
+	}
+	writeCtx, cancel := context.WithTimeout(r.Context(), writeTimeout)
+	err = c.Write(writeCtx, websocket.MessageText, frameOf(TypeChallenge, Challenge{Nonce: challenge}))
+	cancel()
+	if err != nil {
+		_ = c.CloseNow()
+		return
+	}
+
 	hello, err := readHello(r.Context(), c)
 	if err != nil {
 		s.limiter.fail(addr)
@@ -521,8 +643,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.limiter.succeed(addr)
-	if !s.Join(hello.Key, c, hello.Announce) {
-		c.Close(websocket.StatusPolicyViolation, "too many instances are already connected with this relay key")
+	if err := s.Join(hello.Key, c, hello.Announce, hello.proves(challenge, s.names(r))); err != nil {
+		c.Close(websocket.StatusPolicyViolation, err.Error())
 		return
 	}
 	c.SetReadLimit(readLimit)

@@ -11,7 +11,11 @@ package relay
 // single frame whose length the relay can see, not a stream.
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
+	"reflect"
+	"strings"
 	"time"
 	"unicode/utf8"
 )
@@ -19,6 +23,10 @@ import (
 // The frame types. Anything else on the socket is ignored rather than treated
 // as an error, see Server.Route.
 const (
+	// TypeChallenge is sent by the relay only, first on every connection: what
+	// a hello's IDProof signs. A client that does not prove its id ignores it
+	// like any other frame type it does not know.
+	TypeChallenge = "challenge"
 	// TypeHello is the first frame a client sends and the only one carrying the
 	// relay key.
 	TypeHello = "hello"
@@ -46,6 +54,11 @@ type Envelope struct {
 	Data json.RawMessage `json:"data,omitempty"`
 }
 
+// Challenge is random bytes the relay draws for one connection.
+type Challenge struct {
+	Nonce []byte `json:"nonce"`
+}
+
 // Hello authenticates and identifies a connection in one frame.
 //
 // The key rides the first frame rather than the URL because a reverse proxy in
@@ -55,6 +68,9 @@ type Envelope struct {
 type Hello struct {
 	Key      string   `json:"key"`
 	Announce Announce `json:"announce"`
+	// Proof shows the key the announced id is made from. BombVault and
+	// KnightLoader before 1.9 send none.
+	Proof *IDProof `json:"proof,omitempty"`
 }
 
 // Announce is one instance introducing itself to everyone else on its key.
@@ -224,6 +240,10 @@ type ProxyRequest struct {
 	// Target as additional data, so a relay cannot redirect it to another
 	// instance and have it open.
 	Sealed []byte `json:"sealed,omitempty"`
+	// Sender is the id the sending connection announced, written by the relay
+	// over whatever the sender put there. It is not sealed, so the receiver
+	// only spreads its limits by it and trusts it with nothing else.
+	Sender string `json:"sender,omitempty"`
 }
 
 // ProxyCall is what a ProxyRequest asks once opened: the same (method, path,
@@ -361,4 +381,53 @@ func Decode(frame []byte) (Envelope, error) {
 // Into unmarshals the payload of an already-decoded frame.
 func (e Envelope) Into(v any) error {
 	return json.Unmarshal(e.Data, v)
+}
+
+// errLooseKey refuses a payload whose keys could be read two ways.
+var errLooseKey = errors.New("relay: a frame names a field twice or in another spelling")
+
+// intoStrict is Into for a payload whose fields one side checks and another
+// acts on. encoding/json matches a key without regard to case, Unicode
+// folding included ("ſender" reads as "sender"), and lets the last of two
+// equal keys win, so it refuses a payload with a key that is not spelled
+// exactly as one of v's, or that comes twice. Keys of no field are let
+// through, for a newer sender.
+func (e Envelope) intoStrict(v any) error {
+	known := jsonKeys(reflect.TypeOf(v).Elem())
+	dec := json.NewDecoder(bytes.NewReader(e.Data))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return errLooseKey
+	}
+	seen := map[string]bool{}
+	for dec.More() {
+		tok, err := dec.Token()
+		key, ok := tok.(string)
+		if err != nil || !ok || seen[key] {
+			return errLooseKey
+		}
+		seen[key] = true
+		for _, k := range known {
+			if key != k && strings.EqualFold(key, k) {
+				return errLooseKey
+			}
+		}
+		var skip json.RawMessage
+		if err := dec.Decode(&skip); err != nil {
+			return errLooseKey
+		}
+	}
+	return e.Into(v)
+}
+
+// jsonKeys is the JSON names of struct type t's fields.
+func jsonKeys(t reflect.Type) []string {
+	keys := make([]string, 0, t.NumField())
+	for i := range t.NumField() {
+		name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
+		if name == "" {
+			name = t.Field(i).Name
+		}
+		keys = append(keys, name)
+	}
+	return keys
 }
