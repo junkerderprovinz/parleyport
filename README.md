@@ -99,7 +99,9 @@ On Unraid, install **ParleyPort** from [Community Applications](https://ca.unrai
 docker run -d --name parleyport -p 8760:8760 junkerderprovinz/parleyport:latest
 ```
 
-The proxy sends `/relay/connect` to port 8760 with WebSocket upgrades allowed (in Nginx Proxy Manager, switch on **Websockets Support**). To let ParleyPort handle TLS itself instead, set `PARLEYPORT_DOMAIN`, forward port 443 to it and keep its certificates on a volume:
+The proxy sends `/relay/connect` to port 8760 with WebSocket upgrades allowed (in Nginx Proxy Manager, switch on **Websockets Support**). Set `PARLEYPORT_PUBLIC_URL` to the address your instances dial, for example `https://relay.example.org`. If the proxy runs in another container or on another machine, also name it in `PARLEYPORT_TRUSTED_PROXIES`, for example `172.18.0.5`. Failed handshakes then count against the caller and not against the proxy that everyone comes through.
+
+To let ParleyPort handle TLS itself instead, set `PARLEYPORT_DOMAIN`, forward port 443 to it and keep its certificates on a volume:
 
 ```sh
 docker run -d --name parleyport -p 443:443 \

@@ -12,6 +12,24 @@
 // it, it serves plain HTTP on PARLEYPORT_ADDR for a local test or a proxy in
 // front. The relay key is a credential, so anything reachable from outside a
 // trusted network needs one of the two.
+//
+// # Behind a proxy
+//
+// PARLEYPORT_TRUSTED_PROXIES lists the proxies, by address or CIDR range and
+// separated by commas, whose X-Forwarded-For names the caller for the
+// handshake throttle. Unset trusts loopback alone, which fits a proxy on the
+// same host; "none" trusts no proxy. A proxy in another container or on
+// another machine has to be named, such as 172.18.0.5 for a proxy container
+// on a Docker network. A range may be no wider than a /28, or a /124 for IPv6,
+// since anybody inside it could pick the address the throttle counts.
+//
+// PARLEYPORT_PUBLIC_URL is the address instances dial the relay at, such as
+// https://relay.example.com, or several separated by commas. A KnightLoader
+// member proves its id only to the relay its hello names, so another relay it
+// dials with the same key cannot pass this one's challenge on to it. The names
+// in PARLEYPORT_DOMAIN count too. With neither set the relay goes by the Host
+// header each connection arrives with, which whoever opens the connection
+// writes, so a relay reachable from outside sets one of the two.
 package main
 
 import (
@@ -26,6 +44,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"strings"
@@ -72,6 +91,25 @@ func main() {
 	addr := setting("ADDR", ":8760")
 
 	r := relay.New()
+	trusted, err := trustedProxies(setting("TRUSTED_PROXIES", ""))
+	if err != nil {
+		log.Fatalf("PARLEYPORT_TRUSTED_PROXIES: %v", err)
+	}
+	r.TrustedProxies = func() []netip.Prefix { return trusted }
+
+	// PARLEYPORT_DOMAIN is a comma-separated list because the relay address is
+	// compiled into released builds, so after a move the old name still needs
+	// a certificate until nothing dials it.
+	domains := splitNames(setting("DOMAIN", ""))
+	names, err := relayNames(setting("PUBLIC_URL", ""), domains)
+	if err != nil {
+		log.Fatalf("PARLEYPORT_PUBLIC_URL: %v", err)
+	}
+	if len(names) > 0 {
+		r.Names = func(*http.Request) []string { return names }
+	} else {
+		log.Printf("neither PARLEYPORT_PUBLIC_URL nor PARLEYPORT_DOMAIN is set, so a hello is checked against the Host header it arrives with")
+	}
 	// The request path sweeps too, but only while traffic arrives. The timer
 	// keeps the 61 minute retention the privacy notes promise on a
 	// quiet relay.
@@ -88,10 +126,6 @@ func main() {
 	})
 	mux.Handle("GET /relay/connect", r)
 
-	// PARLEYPORT_DOMAIN is a comma-separated list because the relay address is
-	// compiled into released builds, so after a move the old name still needs
-	// a certificate until nothing dials it.
-	domains := splitNames(setting("DOMAIN", ""))
 	domain := ""
 	if len(domains) > 0 {
 		domain = domains[0]
@@ -193,6 +227,82 @@ func splitNames(v string) []string {
 		}
 	}
 	return out
+}
+
+// relayNames is what a hello may name as this relay: the host of each address
+// in the comma-separated PARLEYPORT_PUBLIC_URL, and each name in domains.
+func relayNames(publicURL string, domains []string) ([]string, error) {
+	var names []string
+	for _, address := range splitNames(publicURL) {
+		name := relay.RelayHost(address)
+		if name == "" {
+			return nil, fmt.Errorf("%q names no host", address)
+		}
+		names = append(names, name)
+	}
+	for _, d := range domains {
+		names = append(names, relay.RelayHost(d))
+	}
+	return names, nil
+}
+
+// The widest trusted range for each family. Anybody inside a trusted range
+// names their own bucket in X-Forwarded-For, so a range is for a few proxies
+// and never for a network of callers.
+const (
+	maxProxyRangeV4 = 28
+	maxProxyRangeV6 = 124
+)
+
+// trustedProxies reads the comma-separated addresses and CIDR ranges of the
+// reverse proxies in front of the relay. Unset means loopback, where a proxy
+// on the relay's own host sits; "none" trusts no proxy.
+func trustedProxies(v string) ([]netip.Prefix, error) {
+	switch strings.TrimSpace(v) {
+	case "":
+		return []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8"), netip.MustParsePrefix("::1/128")}, nil
+	case "none":
+		return nil, nil
+	}
+	var out []netip.Prefix
+	for _, s := range splitNames(v) {
+		p, err := trustedProxy(s)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+// trustedProxy reads one entry: an IP address, which stands for itself, or a
+// CIDR range no wider than the limit for its family. An IPv4 range written
+// in IPv6 form is read as the IPv4 range it is, since that is how a caller's
+// address is compared with it.
+func trustedProxy(entry string) (netip.Prefix, error) {
+	if !strings.Contains(entry, "/") {
+		a, err := netip.ParseAddr(entry)
+		if err != nil {
+			return netip.Prefix{}, fmt.Errorf("%q is neither an IP address nor a CIDR range such as 10.10.0.0/28", entry)
+		}
+		a = a.Unmap()
+		return netip.PrefixFrom(a, a.BitLen()), nil
+	}
+	p, err := netip.ParsePrefix(entry)
+	if err != nil {
+		return netip.Prefix{}, fmt.Errorf("%q is neither an IP address nor a CIDR range such as 10.10.0.0/28", entry)
+	}
+	if p.Addr().Is4In6() && p.Bits() >= 96 {
+		p = netip.PrefixFrom(p.Addr().Unmap(), p.Bits()-96)
+	}
+	widest := maxProxyRangeV6
+	if p.Addr().Is4() {
+		widest = maxProxyRangeV4
+	}
+	if p.Bits() < widest {
+		return netip.Prefix{}, fmt.Errorf("%q is wider than a /%d; name the proxies themselves, or a range that holds nothing else", entry, widest)
+	}
+	return p.Masked(), nil
 }
 
 // setting reads PARLEYPORT_<name>, then KL_RELAY_<name>, which relays set up
