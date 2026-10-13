@@ -1,0 +1,22 @@
+# Secret scanning for this repository. The default rules do the work; the
+# allowlist only names test vectors that look like keys and are published
+# where they come from. They are matched as literals, so a real key in the same
+# test is still caught.
+#
+# relay-key-of-the-vector-0123456789 is the made-up relay key KnightLoader's
+# hello vector is signed for (internal/relay/member_test.go), copied from
+# KnightLoader's own tests.
+#
+# c1d52cbd... is BombVault's relay key for the all-zero group secret, pinned
+# in BombVault's key tests and used here to speak to the relay as BombVault
+# does (internal/relay/bombvault_test.go).
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Published test vectors of the apps that use the relay"
+regexes = [
+  '''relay-key-of-the-vector-0123456789''',
+  '''c1d52cbdb3cf9da68feb37b64543669aeb532e80e81c84390582f8e8dd70a4ee''',
+]
