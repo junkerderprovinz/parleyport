@@ -95,7 +95,9 @@ jobs:
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:8760/health; then
               echo
-              docker logs pp 2>&1 | grep -q "ParleyPort ·"
+              # Matched on a captured copy: `docker logs | grep -q` under pipefail dies of
+              # SIGPIPE once more log follows the match.
+              grep -q "ParleyPort ·" <<< "$(docker logs pp 2>&1)"
               status="$(docker inspect -f '{{.State.Health.Status}}' pp)"
               echo "health status: $status"
               docker rm -f pp >/dev/null
