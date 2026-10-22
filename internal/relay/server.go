@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"log"
 	"net/http"
 	"net/netip"
 	"sync"
@@ -174,6 +175,15 @@ func New() *Server {
 		keys:    map[string]map[Conn]*client{},
 		pending: map[string]map[string]pending{},
 		limiter: newLimiter(),
+	}
+}
+
+// failHandshake counts a failed handshake against addr and logs a block it
+// starts, without the address, so an owner can tell a refused client from a
+// relay that is down.
+func (s *Server) failHandshake(addr string) {
+	if d := s.limiter.fail(addr); d > 0 {
+		log.Printf("relay: an address that keeps failing the handshake is refused for %s", d)
 	}
 }
 
@@ -631,14 +641,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	hello, err := readHello(r.Context(), c)
 	if err != nil {
-		s.limiter.fail(addr)
+		s.failHandshake(addr)
 		c.Close(websocket.StatusPolicyViolation, "the first frame must be a hello with a relay key of at least 32 characters and an instance id")
 		return
 	}
 	// Checked before Join, so an unserved key never enters the registry. The
 	// close reason tells an instance whose key stopped matching what happened.
 	if !s.admits(hello.Key) {
-		s.limiter.fail(addr)
+		s.failHandshake(addr)
 		c.Close(websocket.StatusPolicyViolation, "this relay does not serve that relay key")
 		return
 	}
