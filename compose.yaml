@@ -7,7 +7,7 @@
 
 services:
   parleyport:
-    image: junkerderprovinz/parleyport:latest@sha256:5d65cdeabbd577ad02af0a42d74ebded1e2f04dad47035f26bf3bf808dab442d
+    image: junkerderprovinz/parleyport:latest
     container_name: parleyport
     restart: unless-stopped
     ports:
