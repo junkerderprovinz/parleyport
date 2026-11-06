@@ -2,6 +2,8 @@ module github.com/junkerderprovinz/parleyport
 
 go 1.26.10
 
+toolchain go1.27.3
+
 require (
 	github.com/coder/websocket v1.8.15
 	golang.org/x/crypto v0.58.0
