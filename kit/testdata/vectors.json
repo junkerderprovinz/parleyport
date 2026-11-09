@@ -1,0 +1,95 @@
+{
+  "phrase": [
+    {
+      "secret": "00000000000000000000000000000000",
+      "words": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+    }
+  ],
+  "derivations": [
+    {"domain": "knightloader", "purpose": "group", "input": "00000000000000000000000000000000", "output": "293fa85653adb9e7195717c1a6f34e3f433f0a610cd247bb9ff73b8642e7fc15"},
+    {"domain": "knightloader", "purpose": "group", "input": "00070e151c232a31383f464d545b6269", "output": "57d28da6bdc93397c9a3a8355b9c3e322a7e134b9985ae7e76c3667d240b5b52"},
+    {"domain": "knightloader", "purpose": "frame", "input": "", "output": "a94ace9821d4aa96f2f8c4bb250e2937a59655f53a14ba74c3e589d5f71f17b9"},
+    {"domain": "knightloader", "purpose": "frame", "input": "6b6e696768746c6f61646572", "output": "e04113452443266a47195c6b866225201d6312a88a6cfc0e2af1ecf5a4beeb88"},
+    {"domain": "knightloader", "purpose": "frame", "input": "00000000000000000000000000000000", "output": "4c37bce03df7694b1773bb770dfe755661a5937af1db33bc055402823363fe1e"},
+    {"domain": "knightloader", "purpose": "peer-auth", "input": "00000000000000000000000000000000", "output": "2b3f36447acef6ed8dcff3521f474cf99662f0d7d080f274492a09929af02dbb"},
+    {"domain": "knightloader", "purpose": "peer-auth", "input": "00070e151c232a31383f464d545b6269", "output": "073b6fb6cc2e047aaeb328601e7b63baf1ae28d446ca15365ceca04c0b72d252"},
+    {"domain": "knightloader", "purpose": "manual-frame", "input": "7368617265642d72656c61792d746573742d6b65792d303132333435363738396162", "output": "406daec339223f3f2d76e38a4e5baddfa1159c5f367821fb73f3bf871810a1fc"},
+    {"domain": "bombvault", "purpose": "group", "input": "00000000000000000000000000000000", "output": "c1d52cbdb3cf9da68feb37b64543669aeb532e80e81c84390582f8e8dd70a4ee"},
+    {"domain": "bombvault", "purpose": "group", "input": "00070e151c232a31383f464d545b6269", "output": "17ae59c2c16e13d2a0143f2ce8837efc4414414beb44152339c8f17ec3f012a5"},
+    {"domain": "bombvault", "purpose": "frame", "input": "", "output": "4b52777d3d6ac6d86936ab8d1d2aa30ef026740a28aaf46f1279b6675a45250d"},
+    {"domain": "bombvault", "purpose": "frame", "input": "626f6d627661756c74", "output": "11d2cefdb6b133871a70aaede7c185dd71df9103e3f34fad3747ea206889970f"},
+    {"domain": "bombvault", "purpose": "frame", "input": "00000000000000000000000000000000", "output": "b963fcbcace874083a9215283d6d807b2d7a05749ea9633858efccd4b7bc77e8"},
+    {"domain": "bombvault", "purpose": "peer-auth", "input": "00000000000000000000000000000000", "output": "b268dc1b63e5f686ef0875a8dfc3b192be18ea53ce67d1c2daff6c7169713e70"},
+    {"domain": "bombvault", "purpose": "peer-auth", "input": "00070e151c232a31383f464d545b6269", "output": "83cf0da5bf5bea102c987bd2dd7867376d9736661e203b71acd946241e79c2b7"},
+    {"domain": "arrowloop", "purpose": "group", "input": "00000000000000000000000000000000", "output": "d20e7925be20f973daff4096b745520fbfd70dac3bb57164913c035485a4f8e4"},
+    {"domain": "arrowloop", "purpose": "group", "input": "00070e151c232a31383f464d545b6269", "output": "5b912531c4534a7aae2cee37a97681296878a7d937fd60e3ed7bc576583ae0e9"},
+    {"domain": "arrowloop", "purpose": "frame", "input": "", "output": "5fbc791f76a83e89cc7fe704c1d81000dea174d1fc117e12e6b95186cb13be13"},
+    {"domain": "arrowloop", "purpose": "frame", "input": "6172726f776c6f6f70", "output": "a47d63041359189155a2476bea0fa65796b9feeb9d97e79035719b615a31bfd5"},
+    {"domain": "arrowloop", "purpose": "frame", "input": "00000000000000000000000000000000", "output": "c862c36d882b43167a55b0e778ac146a518a2c91c912230bfb1b546dd358f965"}
+  ],
+  "member": {
+    "seed": "2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a",
+    "publicKey": "GX9rI+FshTLGq8g4+s1ep4m+DHaykgM0A5v6iz02jWE=",
+    "ids": {
+      "instance": "b600306cfa76723fdec395e53a9b3d9fdb78b1e2",
+      "mobile": "phone-b600306cfa76723fdec395e53a9b3d9fdb78b1e2d7a23c32fcbcd2dc6d0c4092",
+      "extension": "browser-b600306cfa76723fdec395e53a9b3d9fdb78b1e2d7a23c32fcbcd2dc6d0c4092"
+    },
+    "fingerprint": "b600 306c fa76 723f",
+    "hello": {
+      "relayKey": "relay-key-of-the-vector-0123456789",
+      "relayHost": "relay.example.com",
+      "kind": "mobile",
+      "challenge": "XFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFw=",
+      "signature": "U/kIXyBTKTsSTbXyWn3IqdWTgkEKOfsDtY9+asOM8WTn7jG9XHeF9/toZ1+60J+ap70GId2ySigv7ZFT3PhvBg=="
+    }
+  },
+  "call": {
+    "target": "office",
+    "id": "req-7",
+    "method": "POST",
+    "path": "/api/links",
+    "body": "{\"urls\":[\"https://example.com/a\"]}",
+    "from": "phone-member",
+    "kind": "mobile",
+    "sent": 1760000000
+  },
+  "result": {
+    "sealedCall": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMw==",
+    "status": 410,
+    "body": "removed"
+  },
+  "signing": [
+    {
+      "call": "knightloader/relay/member-call/v2",
+      "result": "knightloader/relay/member-result/v3",
+      "callSignature": "2DRpY1IMpnl6W0mqYgRv6Nq2SDimJFXhcYv2I4d0LDAPGzf3vdgfuf2ty0nb1bchk9xZXmMdHkTGFQOHhGvhDg==",
+      "resultSignature": "efDaJoYEIIwKg5Z98dMHRSb3VtLTEx/lrphppJjTcHvDTTdEHRa9WZuRGNfTzdqgIXFzVed4Hq/TdRjWFncHBQ=="
+    },
+    {
+      "call": "arrowloop/relay/member-call/v1",
+      "result": "arrowloop/relay/member-result/v1",
+      "callSignature": "581G0Oo0S2PH8zPqwCO1whdZwMCm5A+oirI7qA+gSJYY3uF0x9FWaB5kCcdyURUZ8vwXcrO5C6ZegqA7WwtSCw==",
+      "resultSignature": "3uKiFhTMu5GjHBygWfQQjQ6S3K6aSKK4iphu2dRU/E/dBhkEx2flO4+M68LF4u8dM/ErIxVOhfILT2maFExKAA=="
+    }
+  ],
+  "sealed": {
+    "domain": "knightloader",
+    "secret": "cross-implementation vector",
+    "call": {
+      "requestId": "req-2",
+      "target": "alpha",
+      "sealed": "AwMDAwMDAwMDAwMDAXqxEhwJlzwnjSCTaEIl6yMvi98geuQjUvrQqyH8fBq7GmILoC34oL2V8ZfcU3G2JuI/liRh+cyXI7fOVBKffbJbA+V7b5nzgkzepCne/45/VHY=",
+      "method": "GET",
+      "path": "/api/tasks",
+      "sent": 1800000000
+    },
+    "identity": {
+      "instanceId": "phone",
+      "sealed": "BwcHBwcHBwcHBwcHKowzi1tX9hS/RbpFD36F1jz5pHjOvE8p9pXq7oULX/Xf0cCMQxbXtTdsUR7tCWHualBstwHbZzUY0vpg/urebU1me215Eg==",
+      "name": "Pixel 8",
+      "deployment": "mobile",
+      "client": true
+    }
+  }
+}

@@ -51,6 +51,12 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@latest
           "$(go env GOPATH)/bin/govulncheck" ./...
 
+      - name: kit vet and test
+        working-directory: kit
+        run: |
+          go vet ./...
+          go test -race -count=1 ./...
+
       - name: Native boot smoke
         run: |
           set -euo pipefail

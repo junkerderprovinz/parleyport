@@ -1,0 +1,241 @@
+package relay
+
+// Backoff for failed handshakes on a public relay. The group key keeps
+// strangers out; this only limits clients that fail the handshake over and
+// over, each attempt costing a connection, a TLS negotiation and a goroutine
+// for up to helloTimeout. It is keyed on the remote address, and only a peer
+// in Server.TrustedProxies may name the caller in X-Forwarded-For.
+
+import (
+	"net"
+	"net/http"
+	"net/netip"
+	"strings"
+	"sync"
+	"time"
+)
+
+const (
+	// failWindow is how long a failure stays on an address's record: long
+	// enough that a script cannot pace itself under the threshold, short
+	// enough that a fixed typo stops counting.
+	failWindow = 10 * time.Minute
+
+	// failsBeforeBlock is how many failures inside failWindow start a block.
+	// A person mistyping a phrase fails once or twice, not ten times.
+	failsBeforeBlock = 10
+
+	// baseBlock is the first refusal window. It doubles with each further
+	// failure during a block or within failWindow of its end, which is the
+	// case a single caller hits, since a blocked address is refused before its
+	// handshake can fail again. A persistent caller reaches maxBlock after six
+	// blocks.
+	//
+	// maxBlock is 50 minutes so a record runs out within the 61 minutes the
+	// privacy policy states: maxBlock + failWindow, plus sweepEvery.
+	baseBlock = 1 * time.Minute
+	maxBlock  = 50 * time.Minute
+
+	// maxTrackedAddrs bounds the limiter's own memory. When full, the least
+	// recently active record is dropped, so pushing an address out takes
+	// enough other addresses failing recently.
+	maxTrackedAddrs = 4096
+)
+
+type attempts struct {
+	fails        int
+	last         time.Time
+	blockedUntil time.Time
+	blockFor     time.Duration
+}
+
+// limiter tracks failed handshakes per remote address. now is a field so tests
+// can drive the clock instead of sleeping through a backoff.
+type limiter struct {
+	mu        sync.Mutex
+	addrs     map[string]*attempts
+	now       func() time.Time
+	lastSweep time.Time
+}
+
+// sweepEvery is how often the request path may walk the whole map to drop
+// expired records, which keeps the walk off the hot path of a flood.
+const sweepEvery = time.Minute
+
+func newLimiter() *limiter {
+	return &limiter{addrs: map[string]*attempts{}, now: time.Now}
+}
+
+// blocked reports whether addr is being refused. It is checked before the
+// upgrade, so a refused address costs a rejected HTTP request, not a
+// WebSocket.
+func (l *limiter) blocked(addr string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := l.now()
+	l.maybeSweepLocked(now)
+	a := l.addrs[addr]
+	return a != nil && now.Before(a.blockedUntil)
+}
+
+// sweep drops every record whose failures have aged out and whose block is
+// over: no later than maxBlock + failWindow after the last failure, so the
+// next sweep deletes it within the 61 minutes the privacy policy states.
+func (l *limiter) sweep() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.sweepLocked(l.now())
+}
+
+func (l *limiter) maybeSweepLocked(now time.Time) {
+	if now.Sub(l.lastSweep) < sweepEvery {
+		return
+	}
+	l.sweepLocked(now)
+}
+
+func (l *limiter) sweepLocked(now time.Time) {
+	l.lastSweep = now
+	for k, a := range l.addrs {
+		if now.Sub(lastActive(a)) > failWindow {
+			delete(l.addrs, k)
+		}
+	}
+}
+
+// tracked is how many addresses have a record.
+func (l *limiter) tracked() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.addrs)
+}
+
+// fail records one failed handshake and extends the block if the address
+// has now earned one.
+func (l *limiter) fail(addr string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := l.now()
+	l.maybeSweepLocked(now)
+
+	a := l.addrs[addr]
+	if a == nil {
+		l.evictIfFullLocked()
+		a = &attempts{}
+		l.addrs[addr] = a
+	}
+	// Failures older than the window no longer count. The gap is measured
+	// from the end of a block, since a long block outlasts failWindow and
+	// measuring from the failure would reset the backoff for any caller that
+	// waited the block out.
+	if !a.last.IsZero() && now.Sub(lastActive(a)) > failWindow {
+		a.fails = 0
+		a.blockFor = 0
+	}
+	a.fails++
+	a.last = now
+
+	if a.fails < failsBeforeBlock {
+		return
+	}
+	if a.blockFor == 0 {
+		a.blockFor = baseBlock
+	} else if a.blockFor < maxBlock {
+		a.blockFor *= 2
+		if a.blockFor > maxBlock {
+			a.blockFor = maxBlock
+		}
+	}
+	a.blockedUntil = now.Add(a.blockFor)
+}
+
+// succeed clears an address's record: a working handshake shows a real client,
+// and its earlier failures (a half-typed phrase, a reconnect during a key
+// change) should not count against it.
+func (l *limiter) succeed(addr string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.addrs, addr)
+}
+
+// lastActive is when an address last did something the limiter still holds
+// against it: its last failure, or the end of its block if that is later.
+func lastActive(a *attempts) time.Time {
+	if a.blockedUntil.After(a.last) {
+		return a.blockedUntil
+	}
+	return a.last
+}
+
+// evictIfFullLocked drops the least recently active record to make room, so an
+// address whose block is still running goes last.
+func (l *limiter) evictIfFullLocked() {
+	if len(l.addrs) < maxTrackedAddrs {
+		return
+	}
+	var oldestKey string
+	var oldest time.Time
+	for k, a := range l.addrs {
+		if t := lastActive(a); oldestKey == "" || t.Before(oldest) {
+			oldestKey, oldest = k, t
+		}
+	}
+	delete(l.addrs, oldestKey)
+}
+
+// clientAddr is the bucket a request counts against: the peer's IP without its
+// port, since every connection gets a fresh source port.
+//
+// Behind a reverse proxy every caller arrives as the proxy, and one stranger
+// failing ten handshakes would lock out every member. So for a peer in
+// trusted the caller is the right-most X-Forwarded-For entry that is not
+// itself in trusted: everything right of it was appended by proxies of ours,
+// everything left of it by whoever sent the request. Any other peer's header
+// is ignored, or a caller could pick a fresh bucket for every attempt.
+func clientAddr(r *http.Request, trusted []netip.Prefix) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		// An unparseable address is still limited, as a whole.
+		return r.RemoteAddr
+	}
+	peer, err := netip.ParseAddr(host)
+	if err != nil || !inPrefixes(trusted, peer) {
+		return host
+	}
+	var hops []string
+	for _, v := range r.Header.Values("X-Forwarded-For") {
+		hops = append(hops, strings.Split(v, ",")...)
+	}
+	for i := len(hops) - 1; i >= 0; i-- {
+		addr, err := netip.ParseAddr(strings.TrimSpace(hops[i]))
+		if err != nil {
+			// Not an address the proxy saw; the proxy itself is all that
+			// is known.
+			return host
+		}
+		if !inPrefixes(trusted, addr) {
+			return addr.Unmap().String()
+		}
+	}
+	return host
+}
+
+func inPrefixes(prefixes []netip.Prefix, a netip.Addr) bool {
+	a = a.Unmap()
+	for _, p := range prefixes {
+		if p.Contains(a) {
+			return true
+		}
+	}
+	return false
+}
+
+// LocalNetworks is loopback and the private ranges, where the proxy in front
+// of a relay on its own host or network sits.
+func LocalNetworks() []netip.Prefix {
+	var out []netip.Prefix
+	for _, s := range []string{"127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"} {
+		out = append(out, netip.MustParsePrefix(s))
+	}
+	return out
+}

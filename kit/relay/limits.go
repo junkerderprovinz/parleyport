@@ -1,0 +1,35 @@
+package relay
+
+import "time"
+
+// writeTimeout bounds one frame write.
+const writeTimeout = 5 * time.Second
+
+// helloTimeout bounds how long a connection may stay open without saying who
+// it is, so a socket that goes quiet cannot hold a goroutine forever.
+const helloTimeout = 10 * time.Second
+
+// challengeSize is how many random bytes the challenge a hello signs has.
+const challengeSize = 32
+
+// readLimit caps one frame once the hello has passed: room for a busy
+// instance's list of jobs, and still no way for one peer to pin unbounded
+// memory.
+const readLimit = 8 << 20
+
+// minKeyLength is the shortest group key the relay accepts. It cannot enforce
+// entropy, only rule out the laziest hand-made keys; a derived key has 64
+// characters.
+const minKeyLength = 32
+
+// maxClientsPerKey bounds one group on the relay, so a guessed or leaked key
+// can only make the relay hold so much, and a client keeps no more siblings
+// than the relay would introduce.
+const maxClientsPerKey = 64
+
+// frameOf marshals one outbound frame. Every payload is a struct of this
+// package that encoding/json cannot fail on.
+func frameOf(typ string, data any) []byte {
+	b, _ := Encode(typ, data)
+	return b
+}
