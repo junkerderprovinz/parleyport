@@ -1,0 +1,18 @@
+[
+  {"id": "1", "name": "Phone", "enabled": true,
+   "url": "https://ntfy.example.org/downloads?auth=QmFzaWMgYWJj",
+   "method": "post", "headers": {"Title": "%%task.name%%", "Priority": "4"},
+   "body": "%%task.name%% is done", "triggers": ["task.done", "package.done"],
+   "attempts": 0, "timeoutSeconds": 0},
+  {"id": "2", "name": "Discord", "enabled": true,
+   "url": "https://discord.com/api/webhooks/123456789/abcdefTOKENabcdef",
+   "method": "", "triggers": ["task.failed"], "attempts": 5, "timeoutSeconds": 30},
+  {"id": "3", "name": "Matrix", "enabled": false,
+   "url": "https://matrix.example.org/_matrix/client/v3/rooms/!r:example.org/send/m.room.message/%%time%%",
+   "method": "PUT", "headers": {"Authorization": "Bearer syt_x", "Content-Type": "application/json"},
+   "body": "{\"msgtype\":\"m.text\",\"body\":\"%%task.name%% failed\"}",
+   "triggers": ["task.failed", "extract.done"], "attempts": 2, "timeoutSeconds": 10},
+  {"id": "", "name": "Draft", "enabled": true, "url": "", "triggers": ["task.done"]},
+  {"name": "", "url": ""},
+  {"name": "No events yet", "enabled": true, "url": "https://hooks.example.org/in", "triggers": []}
+]

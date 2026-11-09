@@ -1,0 +1,10 @@
+{
+  "matrix": {"homeserver": "https://matrix.example.org", "room": "!sync:example.org", "token": "syt_YmV0YQ_token"},
+  "webhook": "https://ntfy.example.org/beta-sync",
+  "webhookFormat": "ntfy",
+  "webhookEnabled": false,
+  "smtp": {"enabled": true, "host": "smtp.example.org", "port": 465, "username": "beta", "password": "app-password", "from": "beta@example.org", "to": "ops@example.org", "tls": "tls"},
+  "apprise": {"url": "http://apprise:8000/notify/beta", "tags": "sync"},
+  "healthchecks": {"url": "https://hc.example.org/ping/7d1e0c2a", "jobs": {"photos": "https://hc.example.org/ping/3b9f4e11", "docs": ""}},
+  "onSuccess": true
+}
