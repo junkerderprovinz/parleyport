@@ -33,7 +33,8 @@
     "ids": {
       "instance": "b600306cfa76723fdec395e53a9b3d9fdb78b1e2",
       "mobile": "phone-b600306cfa76723fdec395e53a9b3d9fdb78b1e2d7a23c32fcbcd2dc6d0c4092",
-      "extension": "browser-b600306cfa76723fdec395e53a9b3d9fdb78b1e2d7a23c32fcbcd2dc6d0c4092"
+      "extension": "browser-b600306cfa76723fdec395e53a9b3d9fdb78b1e2d7a23c32fcbcd2dc6d0c4092",
+      "viewer": "viewer-b600306cfa76723fdec395e53a9b3d9fdb78b1e2d7a23c32fcbcd2dc6d0c4092"
     },
     "fingerprint": "b600 306c fa76 723f",
     "hello": {

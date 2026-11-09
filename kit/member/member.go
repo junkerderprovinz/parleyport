@@ -4,7 +4,8 @@
 // holding the phrase sent a frame. Each member therefore also holds an Ed25519
 // key and goes by an id made from it, so nobody can speak for that id without
 // the key behind it. The id's shape tells the kinds apart: 40 hex digits for an
-// instance, "phone-" and 64 for a phone, "browser-" and 64 for an extension.
+// instance, "phone-" and 64 for a phone, "browser-" and 64 for an extension,
+// "viewer-" and 64 for a viewer.
 package member
 
 import (
@@ -27,6 +28,9 @@ const (
 	KindInstance  Kind = "instance"
 	KindMobile    Kind = "mobile"
 	KindExtension Kind = "extension"
+	// KindViewer is a member that only reads, such as a tile showing the
+	// state of its group.
+	KindViewer Kind = "viewer"
 )
 
 // ID is the id a member of kind goes by with key, or "" for an unknown kind or
@@ -43,6 +47,8 @@ func ID(kind Kind, key []byte) string {
 		return "phone-" + hex.EncodeToString(sum[:])
 	case KindExtension:
 		return "browser-" + hex.EncodeToString(sum[:])
+	case KindViewer:
+		return "viewer-" + hex.EncodeToString(sum[:])
 	}
 	return ""
 }
@@ -76,7 +82,7 @@ func FromSeed(kind Kind, seed []byte) (Identity, error) {
 		return Identity{}, fmt.Errorf("member: seed is %d bytes, want %d", len(seed), ed25519.SeedSize)
 	}
 	switch kind {
-	case KindInstance, KindMobile, KindExtension:
+	case KindInstance, KindMobile, KindExtension, KindViewer:
 	default:
 		return Identity{}, fmt.Errorf("member: unknown kind %q", kind)
 	}
