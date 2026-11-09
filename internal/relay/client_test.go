@@ -2,6 +2,8 @@ package relay
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -16,9 +18,23 @@ import (
 const testBackoff = 20 * time.Millisecond
 
 // testFrameKey is the frame key shared by every client and hand-rolled peer in
-// these tests, as if they had entered the same connection phrase. It goes
-// through the real DeriveFrameKey so the tests follow any change to it.
-var testFrameKey = DeriveFrameKey([]byte("relay package tests"))
+// these tests, as if they had entered the same connection phrase. Clients
+// derive their frame keys themselves, so any 32 bytes stand in for one here.
+var testFrameKey = frameKeyFor("relay package tests")
+
+func frameKeyFor(secret string) []byte {
+	sum := sha256.Sum256([]byte(secret))
+	return sum[:]
+}
+
+// hexKey decodes a frame key pinned in a test.
+func hexKey(s string) []byte {
+	key, err := hex.DecodeString(s)
+	if err != nil {
+		panic(err)
+	}
+	return key
+}
 
 // sealFor, sealResultFor, openFrom and openResultFrom seal and open payloads
 // for the hand-rolled peers, keeping the additional data in one place.

@@ -1,5 +1,5 @@
-// Package relay routes messages between KnightLoader or BombVault instances
-// that present the same relay key, so two instances behind NAT can reach each
+// Package relay routes messages between instances of a client app that
+// present the same relay key, so two instances behind NAT can reach each
 // other by both dialling out to one place.
 //
 // Possession of the key is the whole authorization model: the relay has no
@@ -231,9 +231,9 @@ func (s *Server) Len() int {
 // be answered. Anybody else could announce the same id to take the instance's
 // calls, so an id whose holder proved the key behind it (proven, see
 // Hello.proves) is taken only by a connection that proves it too. A holder
-// that proved nothing, as every BombVault and every KnightLoader before 1.9
-// does, is replaced by whoever announces its id, since such a client has
-// nothing else to reclaim its place with. The replaced connection gets no
+// that proved nothing, as a hello-first client does, is replaced by whoever
+// announces its id, since such a client has nothing else to reclaim its place
+// with. The replaced connection gets no
 // offline presence, since the announce says the instance is back, but
 // requests still waiting on it are failed at once (see failPending).
 //
@@ -614,8 +614,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	c.SetReadLimit(helloLimit)
 
 	// Sent before the hello is read and never waited on, so a client that
-	// writes its hello at once and skips frame types it does not know, as
-	// every BombVault does, connects without ever looking at it.
+	// writes its hello at once and skips frame types it does not know
+	// connects without ever looking at it.
 	challenge := make([]byte, challengeSize)
 	if _, err := rand.Read(challenge); err != nil {
 		c.Close(websocket.StatusInternalError, "the relay has no randomness for a challenge")

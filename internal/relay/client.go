@@ -4,11 +4,11 @@ package relay
 // open to a relay, so two instances behind NAT reach each other without
 // either accepting an inbound connection.
 //
-// The client depends on protocol.go and the standard library only, because
-// the desktop build, which has no listener and can only be paired this way,
-// uses it as well as the container build. Unlike Server it has no queue or
-// writer goroutine: it has one peer, so a slow write only delays its own
-// caller, and coder/websocket serializes concurrent writes itself.
+// The client depends on protocol.go and the standard library only, so an app
+// can use it in a build that has no listener and can only be paired this way.
+// Unlike Server it has no queue or writer goroutine: it has one peer, so a
+// slow write only delays its own caller, and coder/websocket serializes
+// concurrent writes itself.
 
 import (
 	"context"
@@ -32,9 +32,13 @@ import (
 // so does "https://example.com/kl" for an instance a proxy serves under /kl.
 const connectPath = "/relay/connect"
 
-// proxyTimeout bounds one call to a sibling over the relay. It matches
-// federation's peerTimeout, so a call has the same patience over either
-// transport.
+// DefaultRelayURL is the project relay, the one a client app dials unless its
+// owner points it elsewhere. Released clients carry this address compiled in,
+// so moving it means serving both names while old builds still dial the old
+// one, which is why PARLEYPORT_DOMAIN takes a list (see cmd/parleyport).
+const DefaultRelayURL = "wss://parleyport.halleluja.design/relay/connect"
+
+// proxyTimeout bounds one call to a sibling over the relay.
 const proxyTimeout = 15 * time.Second
 
 // dialTimeout bounds one connection attempt, for a relay that accepts TCP and
@@ -78,7 +82,7 @@ type ClientOptions struct {
 	Key string
 	// FrameKey is the 32-byte key every proxy frame is sealed under. It must
 	// be the same on every instance in the group and must not be derivable
-	// from Key, which the relay receives (see DeriveFrameKey).
+	// from Key, which the relay receives.
 	FrameKey []byte
 	// Self is what siblings see on their Instances page.
 	Self Announce
@@ -225,7 +229,7 @@ func (c *Client) Siblings() []Announce {
 }
 
 // Proxy calls one sibling's REST API through the relay and waits for its
-// answer, in the shape federation.Manager.Proxy uses over direct HTTP.
+// answer.
 //
 // An error means no answer came from the sibling: the relay or the sibling is
 // not connected, or nobody replied in time. A reply the sibling produced is

@@ -10,10 +10,10 @@ import (
 	"testing"
 )
 
-// The vector KnightLoader's instances, app and extension are held to, copied
-// from its relay package. Ed25519 is deterministic, so a fixed seed and a
-// fixed hello give one signature, and a relay that checks hellos any other way
-// turns every KnightLoader member away.
+// The vector the members of a client app are held to, on an instance, a phone
+// and in a browser. Ed25519 is deterministic, so a fixed seed and a fixed
+// hello give one signature, and a relay that checks hellos any other way turns
+// every such member away.
 var (
 	vectorSeed     = bytes.Repeat([]byte{0x2a}, ed25519.SeedSize)
 	vectorRelayKey = "relay-key-of-the-vector-0123456789"
@@ -67,7 +67,7 @@ func TestTheHelloVectorStaysTheSame(t *testing.T) {
 	member := ed25519.NewKeyFromSeed(vectorSeed)
 	proof := ProveID(member, KindMobile, vectorRelayKey, vectorRelayHost, vectorPhoneID, decoded(t, vectorChallenge))
 	if got := base64.StdEncoding.EncodeToString(proof.Sig); got != vectorHelloSig {
-		t.Errorf("hello signature = %s, want %s; KnightLoader's app proves its id with the old message", got, vectorHelloSig)
+		t.Errorf("hello signature = %s, want %s; members prove their ids with the old message", got, vectorHelloSig)
 	}
 	hello := Hello{Key: vectorRelayKey, Announce: Announce{InstanceID: vectorPhoneID}, Proof: proof}
 	if !hello.proves(decoded(t, vectorChallenge), []string{vectorRelayHost}) {
@@ -128,8 +128,8 @@ func TestAHelloProvesOnlyTheIDItsKeyMakes(t *testing.T) {
 	}
 }
 
-// TestTheLargestClientHelloFitsTheLimit: the extension's hello is the largest
-// a KnightLoader 1.9 member sends, with its longest id, a name of characters
+// TestTheLargestClientHelloFitsTheLimit: a browser member's hello is the
+// largest a member sends, with its longest id, a name of characters
 // JSON escapes to six bytes, its lasting member id sealed beside them and a
 // proof for a relay name of the longest a DNS name can be.
 func TestTheLargestClientHelloFitsTheLimit(t *testing.T) {
@@ -157,8 +157,8 @@ func TestTheLargestClientHelloFitsTheLimit(t *testing.T) {
 	}
 }
 
-// TestRelayHost: the relay a hello's proof names. KnightLoader's app is held
-// to these rows too.
+// TestRelayHost: the relay a hello's proof names. Members are held to these
+// rows too.
 func TestRelayHost(t *testing.T) {
 	tests := []struct {
 		name string

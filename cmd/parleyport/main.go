@@ -1,6 +1,6 @@
-// Command parleyport is the message relay KnightLoader and BombVault instances
-// use when neither side can accept an inbound connection, such as two installs
-// on different networks. Both dial out to the relay, which forwards frames
+// Command parleyport is the message relay that instances of a client app use
+// when neither side can accept an inbound connection, such as two installs on
+// different networks. Both dial out to the relay, which forwards frames
 // between connections that present the same relay key.
 //
 // It downloads nothing, stores nothing and cannot open the frames it forwards.
@@ -24,10 +24,10 @@
 // since anybody inside it could pick the address the throttle counts.
 //
 // PARLEYPORT_PUBLIC_URL is the address instances dial the relay at, such as
-// https://relay.example.com, or several separated by commas. A KnightLoader
-// member proves its id only to the relay its hello names, so another relay it
-// dials with the same key cannot pass this one's challenge on to it. The names
-// in PARLEYPORT_DOMAIN count too. With neither set the relay goes by the Host
+// https://relay.example.com, or several separated by commas. A member proves
+// its id only to the relay its hello names, so another relay it dials with the
+// same key cannot pass this one's challenge on to it. The names in
+// PARLEYPORT_DOMAIN count too. With neither set the relay goes by the Host
 // header each connection arrives with, which whoever opens the connection
 // writes, so a relay reachable from outside sets one of the two.
 package main
@@ -87,7 +87,8 @@ func main() {
 	logOut := relay.RedactAddrs(os.Stderr)
 	log.SetOutput(logOut)
 
-	// Clear of KnightLoader's :8749 and :9666, so both can run on one host.
+	// Clear of :8749 and :9666, which a client app listens on, so both can run
+	// on one host.
 	addr := setting("ADDR", ":8760")
 
 	r := relay.New()
@@ -328,7 +329,7 @@ func hostOr(domain, addr string) string {
 
 const (
 	bannerName     = "ParleyPort"
-	bannerSubtitle = "The relay for KnightLoader and BombVault. It passes on what it cannot read."
+	bannerSubtitle = "A relay for apps that pair their instances. It passes on what it cannot read."
 )
 
 func printBanner() {
