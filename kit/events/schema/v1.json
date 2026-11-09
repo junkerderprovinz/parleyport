@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "kind", "at", "severity", "source"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "kind": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$", "maxLength": 100 },
+    "at": { "type": "string", "format": "date-time" },
+    "severity": { "enum": ["info", "warn", "error"] },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["app", "instance"],
+      "properties": {
+        "app": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$", "maxLength": 64 },
+        "instance": { "type": "string", "minLength": 1, "maxLength": 200 }
+      }
+    },
+    "subject": { "type": "string", "maxLength": 1000 },
+    "link": { "type": "string", "format": "uri-reference", "maxLength": 2048 },
+    "fields": {
+      "type": "object",
+      "maxProperties": 50,
+      "additionalProperties": { "type": "string", "maxLength": 2000 }
+    },
+    "depth": { "type": "integer", "minimum": 0 }
+  }
+}

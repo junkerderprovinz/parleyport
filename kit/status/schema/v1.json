@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Status report, contract 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract", "app", "instance", "state", "counts", "needsYou", "work", "next", "capabilities", "sampledAt"],
+  "properties": {
+    "contract": { "const": 1 },
+    "app": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "version"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$", "maxLength": 64 },
+        "name": { "$ref": "#/$defs/label" },
+        "version": { "$ref": "#/$defs/label" },
+        "commit": { "type": "string", "maxLength": 64 },
+        "ui": { "type": "string", "format": "uri", "maxLength": 2048 }
+      }
+    },
+    "instance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "name": { "$ref": "#/$defs/label" },
+        "container": { "type": "string", "maxLength": 128 },
+        "mounts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["container", "host"],
+            "properties": {
+              "container": { "$ref": "#/$defs/path" },
+              "host": { "$ref": "#/$defs/path" }
+            }
+          }
+        }
+      }
+    },
+    "state": { "enum": ["off", "ok", "starting", "warning", "overdue", "failed"] },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["needsYou", "work"],
+      "properties": {
+        "needsYou": { "type": "integer", "minimum": 0 },
+        "work": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "needsYou": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "severity", "code", "text"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "severity": { "$ref": "#/$defs/severity" },
+          "code": { "$ref": "#/$defs/code" },
+          "text": { "$ref": "#/$defs/text" },
+          "since": { "$ref": "#/$defs/time" },
+          "link": { "$ref": "#/$defs/link" }
+        }
+      }
+    },
+    "work": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind", "title", "startedAt", "blocksRestart"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "kind": { "$ref": "#/$defs/workKind" },
+          "title": { "$ref": "#/$defs/label" },
+          "progress": { "type": "number", "minimum": 0, "maximum": 1 },
+          "startedAt": { "$ref": "#/$defs/time" },
+          "blocksRestart": { "type": "boolean" }
+        }
+      }
+    },
+    "next": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "title", "at"],
+        "properties": {
+          "kind": { "$ref": "#/$defs/workKind" },
+          "title": { "$ref": "#/$defs/label" },
+          "at": { "$ref": "#/$defs/time" }
+        }
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/code" }
+    },
+    "sampledAt": { "$ref": "#/$defs/time" }
+  },
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "code": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$", "maxLength": 100 },
+    "label": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "text": { "type": "string", "minLength": 1, "maxLength": 2000 },
+    "link": { "type": "string", "format": "uri-reference", "maxLength": 2048 },
+    "path": { "type": "string", "minLength": 1, "maxLength": 4096 },
+    "time": { "type": "string", "format": "date-time" },
+    "severity": { "enum": ["info", "warn", "error"] },
+    "workKind": { "enum": ["backup", "restore", "download", "extract", "sync", "update", "check", "transfer", "other"] }
+  }
+}
