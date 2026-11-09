@@ -15,7 +15,7 @@ RUN CGO_ENABLED=0 go build \
       -ldflags="-s -w -X github.com/junkerderprovinz/parleyport/internal/buildinfo.Version=${VERSION} -X github.com/junkerderprovinz/parleyport/internal/buildinfo.Commit=${COMMIT}" \
       -o /out/parleyport ./cmd/parleyport
 
-FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
+FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
 # 99:100 is nobody:users on Unraid, the owner of everything under appdata, so
 # the certificate cache stays writable without a chown.
 RUN apk add --no-cache ca-certificates \
