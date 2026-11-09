@@ -521,6 +521,17 @@ func TestConnectURL(t *testing.T) {
 	}
 }
 
+// The client apps dial the project relay under this name, so the default has
+// to match theirs.
+func TestTheDefaultRelayIsTheProjectRelay(t *testing.T) {
+	if got := RelayHost(DefaultRelayURL); got != "parleyport.halleluja.design" {
+		t.Errorf("the default relay is %s, want parleyport.halleluja.design", got)
+	}
+	if got, err := connectURL(DefaultRelayURL); err != nil || got != DefaultRelayURL {
+		t.Errorf("connectURL(DefaultRelayURL) = %q, %v; the default should already be a full socket address", got, err)
+	}
+}
+
 func TestNewClientRejectsMisconfiguration(t *testing.T) {
 	valid := ClientOptions{
 		URL:      "https://relay.example.com",
