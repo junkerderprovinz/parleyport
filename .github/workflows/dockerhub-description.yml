@@ -32,5 +32,5 @@ jobs:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
           repository: ${{ vars.DOCKERHUB_USERNAME }}/parleyport
-          short-description: "The relay for KnightLoader and BombVault: instances on different networks meet there, and it passes on what it cannot read."
+          short-description: "A relay for apps that pair their instances. It passes on what it cannot read."
           enable-url-completion: true

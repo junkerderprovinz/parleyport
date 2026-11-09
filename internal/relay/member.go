@@ -1,15 +1,16 @@
 package relay
 
-// Member keys, the part of them the relay checks. A KnightLoader member, from
-// 1.9 on, holds an Ed25519 key pair and goes by an id made from its public
-// half (MemberID), so nobody can speak for that id without the key behind it.
+// Member keys, the part of them the relay checks. A member holds an Ed25519
+// key pair and goes by an id made from its public half (MemberID), so nobody
+// can speak for that id without the key behind it.
 // Its hello proves the id by signing the challenge the relay sent on that
 // connection (IDProof), and only such a proof lets a connection take the place
 // of one already holding the id. Calls are signed too, but inside the seal,
 // where the relay never looks.
 //
-// The domain strings and message layout are what KnightLoader's instances, app
-// and extension sign, so they keep the names they were introduced under.
+// The domain strings and message layout are what every member signs, on an
+// instance, a phone or in a browser, so they keep the names they were
+// introduced under.
 
 import (
 	"crypto/ed25519"

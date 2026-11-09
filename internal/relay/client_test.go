@@ -2,6 +2,8 @@ package relay
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -16,9 +18,23 @@ import (
 const testBackoff = 20 * time.Millisecond
 
 // testFrameKey is the frame key shared by every client and hand-rolled peer in
-// these tests, as if they had entered the same connection phrase. It goes
-// through the real DeriveFrameKey so the tests follow any change to it.
-var testFrameKey = DeriveFrameKey([]byte("relay package tests"))
+// these tests, as if they had entered the same connection phrase. Clients
+// derive their frame keys themselves, so any 32 bytes stand in for one here.
+var testFrameKey = frameKeyFor("relay package tests")
+
+func frameKeyFor(secret string) []byte {
+	sum := sha256.Sum256([]byte(secret))
+	return sum[:]
+}
+
+// hexKey decodes a frame key pinned in a test.
+func hexKey(s string) []byte {
+	key, err := hex.DecodeString(s)
+	if err != nil {
+		panic(err)
+	}
+	return key
+}
 
 // sealFor, sealResultFor, openFrom and openResultFrom seal and open payloads
 // for the hand-rolled peers, keeping the additional data in one place.
@@ -518,6 +534,17 @@ func TestConnectURL(t *testing.T) {
 				t.Errorf("got %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// The client apps dial the project relay under this name, so the default has
+// to match theirs.
+func TestTheDefaultRelayIsTheProjectRelay(t *testing.T) {
+	if got := RelayHost(DefaultRelayURL); got != "parleyport.halleluja.design" {
+		t.Errorf("the default relay is %s, want parleyport.halleluja.design", got)
+	}
+	if got, err := connectURL(DefaultRelayURL); err != nil || got != DefaultRelayURL {
+		t.Errorf("connectURL(DefaultRelayURL) = %q, %v; the default should already be a full socket address", got, err)
 	}
 }
 

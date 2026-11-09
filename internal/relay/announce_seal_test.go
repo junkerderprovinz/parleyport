@@ -185,32 +185,30 @@ func TestTwoRealClientsStillSeeEachOthersNames(t *testing.T) {
 	waitFor(t, "bravo to see alpha by name", named(bravo, "alpha"))
 }
 
-// TestOpensAnIdentitySealedByTheMobilePort checks this package against the
-// phone's TypeScript port (mobile/src/api/relayFrame.ts); the extension's
-// port (extension/src/relay.js) speaks the same frame. A change to the domain,
+// TestOpensAnIdentitySealedByATypeScriptClient checks this package against a
+// client's TypeScript implementation of the announce. A change to the domain,
 // separator, field names or nonce framing would pass every Go-only test.
 //
-// The vector was sealed with @noble/ciphers through relayFrame.ts's
-// announceAAD and JSON shape, with a fixed nonce of 0x07 bytes so it is
-// reproducible.
-func TestOpensAnIdentitySealedByTheMobilePort(t *testing.T) {
-	key := DeriveFrameKey([]byte("cross-implementation vector"))
+// The vector was sealed with @noble/ciphers through that implementation's
+// announce additional data and JSON shape, with a fixed nonce of 0x07 bytes so
+// it is reproducible.
+func TestOpensAnIdentitySealedByATypeScriptClient(t *testing.T) {
 	sealed, err := base64.StdEncoding.DecodeString(
 		"BwcHBwcHBwcHBwcHKowzi1tX9hS/RbpFD36F1jz5pHjOvE8p9pXq7oULX/Xf0cCMQxbXtTdsUR7tCWHualBstwHbZzUY0vpg/urebU1me215Eg==")
 	if err != nil {
 		t.Fatalf("the vector itself is not valid base64: %v", err)
 	}
 
-	id, err := OpenIdentity(key, "phone", sealed)
+	id, err := OpenIdentity(crossImplementationKey, "phone", sealed)
 	if err != nil {
-		t.Fatalf("could not open an identity the mobile port sealed: %v", err)
+		t.Fatalf("could not open an identity the TypeScript client sealed: %v", err)
 	}
 	if id.Name != "Pixel 8" || id.Deployment != "mobile" || !id.Client {
-		t.Errorf("opened %+v, want the phone's own announce", id)
+		t.Errorf("opened %+v, want the phone's announce as the client sealed it", id)
 	}
 
-	if _, err := OpenIdentity(key, "nas", sealed); err == nil {
-		t.Error("a mobile-sealed identity opened under an id it was not bound to")
+	if _, err := OpenIdentity(crossImplementationKey, "nas", sealed); err == nil {
+		t.Error("an identity sealed in TypeScript opened under an id it was not bound to")
 	}
 }
 

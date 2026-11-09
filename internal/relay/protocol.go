@@ -40,15 +40,8 @@ const (
 	TypeProxyResponse = "proxy-response"
 )
 
-// AccountService is the service id the relay key is sealed under in the
-// credential store (internal/accounts). Both the API route that writes the key
-// and the client that reads it import this package, so the id is spelled once.
-// It is not in accounts.Catalogue because the relay is not a hoster the
-// Accounts page should list.
-const AccountService = "relay"
-
 // Envelope is every frame on this socket: a type discriminator plus that
-// type's payload, the same {type,data} shape internal/hub sends to the web UI.
+// type's payload.
 type Envelope struct {
 	Type string          `json:"type"`
 	Data json.RawMessage `json:"data,omitempty"`
@@ -68,8 +61,8 @@ type Challenge struct {
 type Hello struct {
 	Key      string   `json:"key"`
 	Announce Announce `json:"announce"`
-	// Proof shows the key the announced id is made from. BombVault and
-	// KnightLoader before 1.9 send none.
+	// Proof shows the key the announced id is made from. Clients that do not
+	// prove their id send none.
 	Proof *IDProof `json:"proof,omitempty"`
 }
 
@@ -246,9 +239,8 @@ type ProxyRequest struct {
 	Sender string `json:"sender,omitempty"`
 }
 
-// ProxyCall is what a ProxyRequest asks once opened: the same (method, path,
-// body) shape federation.Manager.Proxy sends over direct HTTP. It only ever
-// travels sealed.
+// ProxyCall is what a ProxyRequest asks once opened: a method, path and body,
+// the shape of a direct call between instances. It only ever travels sealed.
 type ProxyCall struct {
 	Method string `json:"method"`
 	Path   string `json:"path"`
