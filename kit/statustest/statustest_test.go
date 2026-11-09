@@ -124,7 +124,7 @@ func copyResponse(w http.ResponseWriter, rec *httptest.ResponseRecorder) {
 		w.Header()[k] = v
 	}
 	w.WriteHeader(rec.Code)
-	w.Write(rec.Body.Bytes())
+	_, _ = w.Write(rec.Body.Bytes())
 }
 
 func TestCheck_AcceptsAHandlerThatKeepsTheContract(t *testing.T) {

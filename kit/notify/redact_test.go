@@ -16,7 +16,7 @@ import (
 // quote what they refused.
 func echo(_ int, w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusBadRequest)
-	fmt.Fprintf(w, "refused %s %s auth=%q key=%q", r.Method, r.URL.String(), r.Header.Get("Authorization"), r.Header.Get("X-Gotify-Key"))
+	_, _ = fmt.Fprintf(w, "refused %s %s auth=%q key=%q", r.Method, r.URL.String(), r.Header.Get("Authorization"), r.Header.Get("X-Gotify-Key"))
 }
 
 func TestResult_ErrCarriesNoSecret(t *testing.T) {

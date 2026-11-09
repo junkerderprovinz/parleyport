@@ -56,7 +56,7 @@ func newMailServer(t *testing.T, mode string, replies map[string]string) (*mailS
 }
 
 func (m *mailServer) serve(conn net.Conn) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	tp := textproto.NewConn(conn)
 	_ = tp.PrintfLine("220 mail.example ready")
 	for {
@@ -208,13 +208,13 @@ func TestSMTP_TimesOutOnAServerThatNeverGreets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	go func() {
 		conn, err := ln.Accept()
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		_, _ = bufio.NewReader(conn).ReadString('\n')
 	}()
 	port := ln.Addr().(*net.TCPAddr).Port
