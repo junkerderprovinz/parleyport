@@ -381,3 +381,26 @@ func TestTheLargestClientHelloFitsTheLimit(t *testing.T) {
 		t.Fatalf("the largest client hello is %d bytes, over the %d the relay reads", len(frame), helloLimit)
 	}
 }
+
+// TestAHelloIsReadAsTheAppWritesIt decodes the hello of the vectors as a phone
+// writes it, by hand rather than through Encode, so a renamed tag on Hello or
+// Proof cannot slip past both sides of a round trip.
+func TestAHelloIsReadAsTheAppWritesIt(t *testing.T) {
+	v := loadVectors(t)
+	h := v.Member.Hello
+	id := v.Member.IDs[h.Kind]
+	frame := `{"type":"hello","data":{"key":"` + h.RelayKey + `","proof":{"kind":"` + h.Kind + `","relay":"` + h.RelayHost +
+		`","key":"` + v.Member.PublicKey + `","sig":"` + h.Signature +
+		`"},"announce":{"instanceId":"` + id + `","sealed":"AAAA"}}}`
+	env, err := Decode([]byte(frame))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hello Hello
+	if err := env.Into(&hello); err != nil {
+		t.Fatal(err)
+	}
+	if !hello.proves(decoded(t, h.Challenge), []string{h.RelayHost}) {
+		t.Fatal("the app's hello does not prove its id")
+	}
+}
