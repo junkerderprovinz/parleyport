@@ -144,8 +144,8 @@ func (g *Group) saveLocked() error {
 }
 
 // kindOfID is the kind of member whose ids have id's shape, "" for none. The
-// shapes never overlap, so no phone can be listed or removed under an
-// instance's id, nor an instance under a phone's.
+// shapes never overlap, so no phone or viewer can be listed or removed under
+// an instance's id, nor an instance under theirs.
 func kindOfID(id string) member.Kind {
 	switch {
 	case relay.ValidInstanceID(id):
@@ -154,6 +154,8 @@ func kindOfID(id string) member.Kind {
 		return member.KindMobile
 	case hashAfter(id, "browser-"):
 		return member.KindExtension
+	case hashAfter(id, "viewer-"):
+		return member.KindViewer
 	}
 	return ""
 }

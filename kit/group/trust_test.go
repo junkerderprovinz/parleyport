@@ -432,3 +432,30 @@ func TestAnApprovedPhoneDoesNotDecideForTheGroup(t *testing.T) {
 		t.Errorf("alpha lists %+v after the phone's word, want bravo still approved", m)
 	}
 }
+
+func TestAViewerIsPinnedApprovedAndRemovedLikeAnyMember(t *testing.T) {
+	a := open(t, "alpha", setup{})
+	viewer, err := member.FromSeed(member.KindViewer, make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ask := func(id string) relay.ProxyCall {
+		return relay.SignCall(testDomain.Signing(), &viewer, id, a.id, relay.ProxyCall{Method: http.MethodGet, Path: "/api/whoami"})
+	}
+	_, _ = a.g.handle(context.Background(), ask("v1"))
+	if m, _ := memberOf(a.g, viewer.ID()); m.Kind != member.KindViewer || m.State != StatePending {
+		t.Fatalf("alpha lists %+v, want the viewer waiting", m)
+	}
+	if err := a.g.Approve(viewer.ID()); err != nil {
+		t.Fatal(err)
+	}
+	if status, body := a.g.handle(context.Background(), ask("v2")); status != http.StatusOK || !strings.Contains(string(body), "viewer") {
+		t.Errorf("the approved viewer reads = %d %s", status, body)
+	}
+	if err := a.g.Remove(viewer.ID()); err != nil {
+		t.Fatalf("removing the viewer: %v", err)
+	}
+	if status, _ := a.g.handle(context.Background(), ask("v3")); status != http.StatusGone {
+		t.Errorf("the removed viewer reads = %d, want 410", status)
+	}
+}
