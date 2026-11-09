@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -218,6 +220,87 @@ func TestANewPhraseStartsTheGroupOver(t *testing.T) {
 	b.g = openGroup(t, b, setup{store: b.store, secret: []byte("another phrase..")})
 	if _, listed := memberOf(b.g, a.id); listed {
 		t.Error("bravo still lists alpha under a phrase alpha never entered")
+	}
+}
+
+func TestAMovedGroupKeepsItsApprovals(t *testing.T) {
+	n := onRelay(t, "alpha", "bravo", "charlie")
+	a, b, c := n[0], n[1], n[2]
+	meet(t, a, b)
+	_, _, _ = call(t, c, a, http.MethodGet, "/api/whoami", nil)
+	if err := a.g.Remove(c.id); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.g.Close(); err != nil {
+		t.Fatal(err)
+	}
+	moved := []byte("the fortress one")
+	a.g = openGroup(t, a, setup{store: a.store, secret: moved, previous: testSecret})
+	if m, _ := memberOf(a.g, b.id); m.State != StateApproved {
+		t.Errorf("alpha lists bravo as %q after the move, want approved", m.State)
+	}
+	if _, listed := memberOf(a.g, c.id); listed {
+		t.Error("alpha lists charlie again, whom it took out before the move")
+	}
+
+	// The move is kept: opened once more under the new phrase alone, alpha
+	// still knows bravo.
+	if err := a.g.Close(); err != nil {
+		t.Fatal(err)
+	}
+	a.g = openGroup(t, a, setup{store: a.store, secret: moved})
+	if m, _ := memberOf(a.g, b.id); m.State != StateApproved {
+		t.Errorf("alpha lists bravo as %q on the next start, want approved", m.State)
+	}
+}
+
+func TestAPreviousPhraseThatDoesNotMatchStartsOver(t *testing.T) {
+	n := onRelay(t, "alpha", "bravo")
+	a, b := n[0], n[1]
+	meet(t, a, b)
+	if err := a.g.Close(); err != nil {
+		t.Fatal(err)
+	}
+	a.g = openGroup(t, a, setup{store: a.store, secret: []byte("the fortress one"), previous: []byte("not the old one.")})
+	if _, listed := memberOf(a.g, b.id); listed {
+		t.Error("alpha kept bravo, approved under a phrase that was not the previous one")
+	}
+}
+
+func TestOthersTakenOutAreReported(t *testing.T) {
+	url := relayServer(t)
+	var mu sync.Mutex
+	heard := map[string][]string{}
+	report := func(who string) func(string) {
+		return func(id string) {
+			mu.Lock()
+			defer mu.Unlock()
+			heard[who] = append(heard[who], id)
+		}
+	}
+	a := open(t, "alpha", setup{relay: url, onRemove: report("alpha")})
+	b := open(t, "bravo", setup{relay: url, onRemove: report("bravo")})
+	c := open(t, "charlie", setup{relay: url, onRemove: report("charlie")})
+	waitFor(t, "everybody on the relay", func() bool { return len(a.g.Members()) == 2 && len(b.g.Members()) == 2 })
+	meet(t, a, b)
+	meet(t, a, c)
+	meet(t, b, c)
+
+	if err := a.g.Remove(c.id); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.g.Remove(c.id); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "bravo to take charlie out", func() bool { _, listed := memberOf(b.g, c.id); return !listed })
+	waitFor(t, "charlie to hear it", func() bool { return c.removed.Load() > 0 })
+
+	mu.Lock()
+	defer mu.Unlock()
+	for who, want := range map[string][]string{"alpha": {c.id}, "bravo": {c.id}, "charlie": nil} {
+		if got := heard[who]; !slices.Equal(got, want) {
+			t.Errorf("%s heard of %v, want %v", who, got, want)
+		}
 	}
 }
 

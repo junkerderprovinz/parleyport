@@ -105,21 +105,30 @@ func (r *record) seenAs(m *Member, now time.Time) bool {
 	return changed
 }
 
-func loadState(raw []byte, groupKey string) (state, error) {
+// loadState reads the store written under groupKey, or under previous, the
+// group key of the phrase the group moves away from, and reports whether it
+// was the latter.
+func loadState(raw []byte, groupKey, previous string) (state, bool, error) {
 	fresh := state{Group: groupKey}
 	if len(bytes.TrimSpace(raw)) == 0 {
-		return fresh, nil
+		return fresh, false, nil
 	}
 	var st state
 	// A store that is there but does not read is an error rather than an
 	// empty group, which would let in again whoever was removed.
 	if err := json.Unmarshal(raw, &st); err != nil {
-		return state{}, fmt.Errorf("group: the store is damaged: %w", err)
+		return state{}, false, fmt.Errorf("group: the store is damaged: %w", err)
 	}
-	if st.Group != groupKey {
-		return fresh, nil
+	switch st.Group {
+	case groupKey:
+		return st, false, nil
+	case previous:
+		if previous != "" {
+			st.Group = groupKey
+			return st, true, nil
+		}
 	}
-	return st, nil
+	return fresh, false, nil
 }
 
 func (g *Group) saveLocked() error {
@@ -433,13 +442,21 @@ func (g *Group) Remove(id string) error {
 	return nil
 }
 
-// forget removes id here only.
+// forget removes id here only and tells the app, the first time.
 func (g *Group) forget(id string, now time.Time) error {
+	newly, err := g.forgetLocally(id, now)
+	if newly && g.onRemove != nil {
+		g.onRemove(id)
+	}
+	return err
+}
+
+func (g *Group) forgetLocally(id string, now time.Time) (bool, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	st := &g.st
 	if _, done := st.Removed[id]; done {
-		return nil
+		return false, nil
 	}
 	rec, known := st.Members[id]
 	delete(st.Members, id)
@@ -456,7 +473,7 @@ func (g *Group) forget(id string, now time.Time) error {
 		st.Revoked[hex.EncodeToString(rec.Key)] = now
 	}
 	delete(g.addrs, id)
-	return g.saveLocked()
+	return true, g.saveLocked()
 }
 
 // bounded makes room for one more entry by dropping the oldest.

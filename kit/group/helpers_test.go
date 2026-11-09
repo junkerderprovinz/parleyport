@@ -78,10 +78,12 @@ type node struct {
 }
 
 type setup struct {
-	relay  string
-	lan    *lan.Service
-	store  *memStore
-	secret []byte
+	relay    string
+	lan      *lan.Service
+	store    *memStore
+	secret   []byte
+	previous []byte
+	onRemove func(id string)
 }
 
 // open starts an instance called name. Its app answers GET /api/whoami with
@@ -125,7 +127,9 @@ func openGroup(t *testing.T, n *node, s setup) *Group {
 		RelayURL:  url,
 		LAN:       s.lan,
 		Store:     n.store,
+		Previous:  s.previous,
 		OnRemoved: func() { n.removed.Add(1) },
+		OnRemove:  s.onRemove,
 	}, appRoutes())
 	if err != nil {
 		t.Fatalf("open %s: %v", n.name, err)

@@ -12,9 +12,9 @@
 // The approval, and a removal, are passed on to the other instances, which
 // take them only from an instance they approved themselves.
 //
-// A fortress builds on a Group without changing it: it opens one under its
-// own domain, wraps the handler with its permissions, which it looks up by
-// CallerOf, and reads Members for the instances of every app.
+// A fortress opens a second Group under its own domain with the same phrase,
+// next to the app's own. Previous carries an app's pairing over to that
+// phrase, and OnRemove keeps a removal in step between the two.
 package group
 
 import (
@@ -82,6 +82,10 @@ type Config struct {
 	Signing keys.Signing
 	// Secret is what the phrase encodes.
 	Secret []byte
+	// Previous is the secret the group was paired under before, when it moves
+	// to a new phrase. Who was approved or taken out under it stays so under
+	// Secret; a store written under any other phrase starts over.
+	Previous []byte
 	// Identity is this instance's member key, of kind member.KindInstance.
 	Identity member.Identity
 	Self     Self
@@ -95,6 +99,9 @@ type Config struct {
 	// OnRemoved runs, at most once and on its own goroutine, when an approved
 	// instance says this one was taken out of the group. The app leaves it.
 	OnRemoved func()
+	// OnRemove runs once for every other member taken out here, whether by
+	// Remove or as another instance passed it on.
+	OnRemove func(id string)
 }
 
 // State is where a member stands with this instance.
@@ -157,6 +164,7 @@ type Group struct {
 	lan       *lan.Service
 	client    *relay.Client
 	onRemoved func()
+	onRemove  func(id string)
 
 	replay  *relay.ReplayGuard
 	limits  *memberLimits
@@ -208,7 +216,11 @@ func Open(cfg Config, serve http.Handler) (*Group, error) {
 	if err != nil {
 		return nil, fmt.Errorf("group: reading the store: %w", err)
 	}
-	st, err := loadState(raw, groupKey)
+	previous := ""
+	if len(cfg.Previous) > 0 {
+		previous = cfg.Domain.GroupKey(cfg.Previous)
+	}
+	st, moved, err := loadState(raw, groupKey, previous)
 	if err != nil {
 		return nil, err
 	}
@@ -228,6 +240,7 @@ func Open(cfg Config, serve http.Handler) (*Group, error) {
 		store:     cfg.Store,
 		lan:       cfg.LAN,
 		onRemoved: cfg.OnRemoved,
+		onRemove:  cfg.OnRemove,
 		replay:    relay.NewReplayGuard(),
 		limits:    newMemberLimits(),
 		hc:        directClient(),
@@ -235,6 +248,7 @@ func Open(cfg Config, serve http.Handler) (*Group, error) {
 		probing:   make(chan struct{}, maxProbeBacks),
 		kick:      make(chan struct{}, 1),
 		st:        st,
+		dirty:     moved,
 		addrs:     map[string]*remoteAddr{},
 		failed:    map[string]time.Time{},
 		awaiting:  map[string]time.Time{},
