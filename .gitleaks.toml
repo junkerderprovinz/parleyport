@@ -3,13 +3,10 @@
 # where they come from. They are matched as literals, so a real key in the same
 # test is still caught.
 #
-# relay-key-of-the-vector-0123456789 is the made-up relay key KnightLoader's
-# hello vector is signed for (internal/relay/member_test.go), copied from
-# KnightLoader's own tests.
-#
-# c1d52cbd... is BombVault's relay key for the all-zero group secret, pinned
-# in BombVault's key tests and used here to speak to the relay as BombVault
-# does (internal/relay/bombvault_test.go).
+# relay-key-of-the-vector-0123456789 is the made-up relay key the hello vector
+# is signed for, and c1d52cbd... the group key BombVault derives from the
+# all-zero secret. Both are in kit/testdata/vectors.json, copied from the apps'
+# own tests.
 
 [extend]
 useDefault = true

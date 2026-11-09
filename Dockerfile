@@ -5,6 +5,7 @@ FROM golang:1.27-alpine@sha256:fa3d596898d9f126af7c01d14ee7597bab3f39cccf392ef36
 WORKDIR /src
 
 COPY go.mod go.sum ./
+COPY kit/go.mod kit/go.sum ./kit/
 RUN go mod download
 
 COPY . .

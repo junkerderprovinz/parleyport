@@ -55,7 +55,7 @@ import (
 	"golang.org/x/crypto/acme/autocert"
 
 	"github.com/junkerderprovinz/parleyport/internal/buildinfo"
-	"github.com/junkerderprovinz/parleyport/internal/relay"
+	"github.com/junkerderprovinz/parleyport/kit/relay"
 )
 
 // shutdownGrace bounds how long a graceful stop waits for connections. Nothing
@@ -91,12 +91,10 @@ func main() {
 	// on one host.
 	addr := setting("ADDR", ":8760")
 
-	r := relay.New()
 	trusted, err := trustedProxies(setting("TRUSTED_PROXIES", ""))
 	if err != nil {
 		log.Fatalf("PARLEYPORT_TRUSTED_PROXIES: %v", err)
 	}
-	r.TrustedProxies = func() []netip.Prefix { return trusted }
 
 	// PARLEYPORT_DOMAIN is a comma-separated list because the relay address is
 	// compiled into released builds, so after a move the old name still needs
@@ -106,11 +104,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("PARLEYPORT_PUBLIC_URL: %v", err)
 	}
-	if len(names) > 0 {
-		r.Names = func(*http.Request) []string { return names }
-	} else {
+	if len(names) == 0 {
 		log.Printf("neither PARLEYPORT_PUBLIC_URL nor PARLEYPORT_DOMAIN is set, so a hello is checked against the Host header it arrives with")
 	}
+	r := newRelay(names, trusted)
 	// The request path sweeps too, but only while traffic arrives. The timer
 	// keeps the 61 minute retention the privacy notes promise on a
 	// quiet relay.
@@ -119,13 +116,7 @@ func main() {
 			r.SweepLimiter()
 		}
 	}()
-	mux := http.NewServeMux()
-	// Same shape as the app's GET /api/health, so one health check fits both.
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "version": buildinfo.Version})
-	})
-	mux.Handle("GET /relay/connect", r)
+	mux := routes(r)
 
 	domain := ""
 	if len(domains) > 0 {
@@ -192,6 +183,30 @@ func main() {
 		log.Printf("shutdown: not every connection closed within %s: %v", shutdownGrace, err)
 	}
 	cancel()
+}
+
+// newRelay is the relay server for a relay that goes by names, or by the Host
+// header of each connection when there are none, behind the proxies in
+// trusted.
+func newRelay(names []string, trusted []netip.Prefix) *relay.Server {
+	r := relay.New()
+	r.TrustedProxies = func() []netip.Prefix { return trusted }
+	if len(names) > 0 {
+		r.Names = func(*http.Request) []string { return names }
+	}
+	return r
+}
+
+// routes mounts the relay at /relay/connect beside the health check.
+func routes(r *relay.Server) *http.ServeMux {
+	mux := http.NewServeMux()
+	// Same shape as the app's GET /api/health, so one health check fits both.
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "version": buildinfo.Version})
+	})
+	mux.Handle("GET /relay/connect", r)
+	return mux
 }
 
 // parseArgs reads the command line and reports whether it only asked for the

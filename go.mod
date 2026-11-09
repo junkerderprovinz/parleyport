@@ -6,6 +6,7 @@ toolchain go1.27.3
 
 require (
 	github.com/coder/websocket v1.8.15
+	github.com/junkerderprovinz/parleyport/kit v0.0.0-00010101000000-000000000000
 	golang.org/x/crypto v0.58.0
 )
 
@@ -13,3 +14,5 @@ require (
 	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 )
+
+replace github.com/junkerderprovinz/parleyport/kit => ./kit
