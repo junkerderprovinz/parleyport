@@ -70,6 +70,23 @@ func TestLimiterBlockExpires(t *testing.T) {
 	}
 }
 
+func TestLimiterReportsOnlyTheFailureThatStartsABlock(t *testing.T) {
+	l, advance := testLimiter()
+	for i := 1; i < failsBeforeBlock; i++ {
+		if d := l.fail("198.51.100.7"); d != 0 {
+			t.Fatalf("failure %d reported a block of %s", i, d)
+		}
+	}
+	if d := l.fail("198.51.100.7"); d != baseBlock {
+		t.Fatalf("the failure that crossed the threshold reported %s, want %s", d, baseBlock)
+	}
+
+	advance(baseBlock + time.Second)
+	if d := l.fail("198.51.100.7"); d != 2*baseBlock {
+		t.Fatalf("a failure after the block reported %s, want %s", d, 2*baseBlock)
+	}
+}
+
 // Each further failure over the threshold costs more than the last, or a
 // caller could wait out a fixed penalty forever.
 func TestLimiterBackoffGrows(t *testing.T) {

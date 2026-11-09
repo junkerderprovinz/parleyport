@@ -1,7 +1,9 @@
 package relay
 
 import (
+	"bytes"
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +12,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/coder/websocket"
+
+	"github.com/junkerderprovinz/parleyport/kit/member"
 )
 
 func TestAnOversizedFrameBeforeTheHelloIsRefused(t *testing.T) {
@@ -387,5 +391,50 @@ func TestAHelloSignedForAnotherRelayTakesNoPlace(t *testing.T) {
 			writeFrame(t, bravo, TypeProxyRequest, ProxyRequest{RequestID: "r1", Target: alphaID})
 			readFrame(t, next, TypeProxyRequest)
 		})
+	}
+}
+
+// TestAViewerKeepsItsPlaceWithItsProof: a viewer, such as a tile that only
+// reads, proves its id like any other member, so a connection that only
+// announces that id cannot push it off the relay.
+func TestAViewerKeepsItsPlaceWithItsProof(t *testing.T) {
+	relaySrv := New()
+	srv := httptest.NewServer(relaySrv)
+	t.Cleanup(srv.Close)
+	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/relay/connect"
+	const key = "shared-relay-test-key-0123456789ab"
+	viewer := identityOf(member.KindViewer, bytes.Repeat([]byte{'v'}, ed25519.SeedSize))
+	dial := func(proven bool) *websocket.Conn {
+		ctx, cancel := context.WithTimeout(context.Background(), wsTimeout)
+		defer cancel()
+		c, _, err := websocket.Dial(ctx, url, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = c.CloseNow() })
+		var ch Challenge
+		if err := readFrame(t, c, TypeChallenge).Into(&ch); err != nil {
+			t.Fatal(err)
+		}
+		hello := Hello{Key: key, Announce: Announce{InstanceID: viewer.ID(), Client: true}}
+		if proven {
+			hello.Proof = viewer.ProveHello(key, RelayHost(url), ch.Nonce)
+		}
+		writeFrame(t, c, TypeHello, hello)
+		return c
+	}
+
+	dial(true)
+	alpha := dialInstance(t, url, key, alphaID)
+	readFrame(t, alpha, TypeAnnounce)
+
+	impostor := dial(false)
+	ctx, cancel := context.WithTimeout(context.Background(), wsTimeout)
+	defer cancel()
+	if _, _, err := impostor.Read(ctx); websocket.CloseStatus(err) != websocket.StatusPolicyViolation {
+		t.Fatalf("a connection announcing the viewer's id without its key got %v, want it turned away", err)
+	}
+	if relaySrv.Len() != 2 {
+		t.Errorf("%d connections registered, want the viewer and alpha", relaySrv.Len())
 	}
 }
