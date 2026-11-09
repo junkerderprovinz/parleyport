@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-ParleyPort is the relay for <b><a href="https://github.com/junkerderprovinz/knightloader">KnightLoader</a></b> and <b><a href="https://github.com/junkerderprovinz/bombvault">BombVault</a></b>. When two of your instances sit on different networks and neither can reach the other, both dial out to ParleyPort and meet there. It passes their messages on without being able to read them, and it runs as one small container that keeps no accounts and stores nothing.
+ParleyPort is a relay for apps that pair their instances. When two of your instances sit on different networks and neither can reach the other, both dial out to ParleyPort and meet there. It passes their messages on without being able to read them, and it runs as one small container that keeps no accounts and stores nothing.
 </p>
 
 <br>
@@ -79,8 +79,8 @@ If it has earned a place on your server or computer, toss a coin to your knight:
 ParleyPort has no web page of its own. What you see of it is the relay setting in your apps and the container's log.
 
 <p align="center">
-  <img src=".github/assets/screenshots/parleyport-1.png" alt="BombVault's relay settings with Own relay selected and the address of a ParleyPort relay filled in" width="100%">
-  <br><em>BombVault's relay card pointing at your own ParleyPort; KnightLoader has the same card</em>
+  <img src=".github/assets/screenshots/parleyport-1.png" alt="An app's relay settings with Own relay selected and the address of a ParleyPort relay filled in" width="100%">
+  <br><em>An app's relay card pointing at your own ParleyPort</em>
 </p>
 
 <p align="center">
@@ -92,14 +92,14 @@ ParleyPort has no web page of its own. What you see of it is the relay setting i
 
 <p><a id="4-what-it-does" href="#4-what-it-does"><picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/sections/4-what-it-does-dark.svg"><img src=".github/assets/sections/4-what-it-does.svg" alt="4. What it does" width="100%"></picture></a></p>
 
-KnightLoader and BombVault pair their instances with twelve words. Instances on the same network talk directly. Instances on different networks, behind NAT or a firewall that lets nothing in, need a third point both can dial out to, and that point is a relay. ParleyPort groups the connections that present the same relay key, a hash of your twelve words, and passes their messages between them.
+Apps that use ParleyPort pair their instances with twelve words. Instances on the same network talk directly. Instances on different networks, behind NAT or a firewall that lets nothing in, need a third point both can dial out to, and that point is a relay. ParleyPort groups the connections that present the same relay key, a hash of your twelve words, and passes their messages between them.
 
 - **It cannot read what it carries.** Every message is sealed with AES-256-GCM under a key derived from the twelve words, and the routing fields are bound into the seal, so a relay can neither open a message nor send it to another instance.
 - **It keeps nothing.** No accounts, no database and no record of who connects. Client addresses are left out of its log. What any relay can still see is which instances talk and when, which is the reason to run your own.
 - **It brings its own certificate.** Give it a domain and it fetches and renews a Let's Encrypt certificate on port 443, with port 80 left closed. Without a domain it serves plain HTTP on port 8760 for a reverse proxy in front.
 - **It is small.** A few megabytes for amd64 and arm64, fine on a small VPS while your instances stay at home.
 
-You probably do not need it: the project relay is the default in both apps, and an instance that is already reachable from outside can serve as the relay itself under **Serve as relay**. ParleyPort is for your own relay without putting a download manager or a backup tool on the open internet.
+You probably do not need it: these apps use a project relay by default, and an instance that is already reachable from outside can often serve as the relay itself. ParleyPort is for your own relay without putting the app itself on the open internet.
 
 <br>
 
