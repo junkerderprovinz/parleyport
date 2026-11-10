@@ -122,8 +122,8 @@ type Config struct {
 	// neither listed nor pinned, and its calls are refused.
 	Kinds []member.Kind
 	// Ports are where the app's instances take direct calls, besides the port
-	// of Self.DirectURL. An address that is named rather than announced is
-	// dialed only on these ports.
+	// of Self.DirectURL. An address the group learned rather than one the
+	// owner typed in is dialed only on these ports.
 	Ports []int
 	// MaxAnswerBytes is the most the app may answer a direct call with, and
 	// what this instance reads of a direct answer, 4 MiB when zero. Over the
@@ -311,7 +311,8 @@ func Open(cfg Config, serve http.Handler) (*Group, error) {
 	}
 	now := time.Now()
 	for id, rec := range st.Members {
-		if rec.Direct != "" {
+		// The ports may have changed since the address was kept.
+		if _, ok := g.nearby(rec.Direct); ok {
 			g.addrs[id] = &remoteAddr{url: rec.Direct, name: rec.Name, deployment: rec.Deployment, noted: now}
 		}
 	}

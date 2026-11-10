@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/junkerderprovinz/parleyport/kit/lan"
@@ -15,7 +16,7 @@ func TestProbeSaysWhoAnswersAtAnAddress(t *testing.T) {
 	b := open(t, "bravo", setup{})
 	c := open(t, "charlie", setup{secret: []byte("another phrase..")})
 	dead := httpDeadAddress(t)
-	a := open(t, "alpha", setup{noListener: true, ports: []int{testPort(t, b.srv.URL), testPort(t, c.srv.URL), testPort(t, dead)}})
+	a := open(t, "alpha", setup{noListener: true})
 	ctx := context.Background()
 
 	m, err := a.g.Probe(ctx, b.srv.URL+"/some/page")
@@ -30,7 +31,10 @@ func TestProbeSaysWhoAnswersAtAnAddress(t *testing.T) {
 		{"another group", c.srv.URL, ErrStranger},
 		{"a public address", "http://203.0.113.7:" + strconv.Itoa(testPort(t, b.srv.URL)), ErrNotNearby},
 		{"a name", "http://localhost:" + strconv.Itoa(testPort(t, b.srv.URL)), ErrNotNearby},
-		{"another port", "http://127.0.0.1:1", ErrNotNearby},
+		{"no port", "http://127.0.0.1:0", ErrNotNearby},
+		{"a port out of range", "http://127.0.0.1:65536", ErrNotNearby},
+		{"a login", "http://user@" + strings.TrimPrefix(b.srv.URL, "http://"), ErrNotNearby},
+		{"another scheme", "ftp://" + strings.TrimPrefix(b.srv.URL, "http://"), ErrNotNearby},
 	} {
 		if _, err := a.g.Probe(ctx, c.addr); !errors.Is(err, c.want) {
 			t.Errorf("probing %s = %v, want %v", c.name, err, c.want)
@@ -87,10 +91,44 @@ func TestOnlyANearbyAddressIsKeptForAMember(t *testing.T) {
 	}
 }
 
+func TestATypedAddressOffTheGroupPortsIsNotKeptAsWhereAMemberAnswered(t *testing.T) {
+	b := open(t, "bravo", setup{})
+	a := open(t, "alpha", setup{noListener: true})
+	if _, err := a.g.Probe(context.Background(), b.srv.URL); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.g.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(a.store.data, []byte(b.srv.URL)) {
+		t.Error("alpha kept where bravo answered off the group's ports, which the next start would dial unasked")
+	}
+}
+
+func TestAStoredAddressOffTheGroupPortsIsNotDialed(t *testing.T) {
+	b := open(t, "bravo", setup{})
+	a := open(t, "alpha", setup{noListener: true, ports: []int{testPort(t, b.srv.URL)}})
+	if _, err := a.g.Probe(context.Background(), b.srv.URL); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.g.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(a.store.data, []byte(b.srv.URL)) {
+		t.Fatal("alpha did not keep where bravo answered on a port of the group")
+	}
+	a.g = openGroup(t, a, setup{noListener: true, store: a.store})
+	a.g.mu.Lock()
+	kept := a.g.addrs[b.id]
+	a.g.mu.Unlock()
+	if kept != nil {
+		t.Errorf("alpha dials %s, where bravo answered on a port the group no longer has", kept.url)
+	}
+}
+
 func TestKnownAddressesAreKeptAndProbed(t *testing.T) {
 	b := open(t, "bravo", setup{})
-	ports := []int{testPort(t, b.srv.URL)}
-	a := open(t, "alpha", setup{noListener: true, ports: ports})
+	a := open(t, "alpha", setup{noListener: true})
 	if err := a.g.SetAddresses([]string{b.srv.URL + "/"}); err != nil {
 		t.Fatal(err)
 	}
@@ -98,8 +136,10 @@ func TestKnownAddressesAreKeptAndProbed(t *testing.T) {
 	if got := a.g.Addresses(); len(got) != 1 || got[0] != b.srv.URL {
 		t.Errorf("addresses = %v, want bravo's", got)
 	}
-	if err := a.g.SetAddresses([]string{b.srv.URL, "http://203.0.113.7:80"}); !errors.Is(err, ErrNotNearby) {
-		t.Errorf("setting a public address = %v, want ErrNotNearby", err)
+	for _, refused := range []string{"http://203.0.113.7:80", "http://localhost:8080", "http://127.0.0.1:0", "http://user@127.0.0.1:8080"} {
+		if err := a.g.SetAddresses([]string{b.srv.URL, refused}); !errors.Is(err, ErrNotNearby) {
+			t.Errorf("setting %s = %v, want ErrNotNearby", refused, err)
+		}
 	}
 	if got := a.g.Addresses(); len(got) != 1 {
 		t.Errorf("addresses = %v after a refused change, want them as they were", got)
@@ -108,8 +148,9 @@ func TestKnownAddressesAreKeptAndProbed(t *testing.T) {
 	if err := a.g.Close(); err != nil {
 		t.Fatal(err)
 	}
-	a.g = openGroup(t, a, setup{noListener: true, store: a.store, ports: ports})
+	a.g = openGroup(t, a, setup{noListener: true, store: a.store})
 	if got := a.g.Addresses(); len(got) != 1 || got[0] != b.srv.URL {
 		t.Errorf("addresses after a restart = %v, want bravo's", got)
 	}
+	waitFor(t, "alpha to probe bravo's address after a restart", func() bool { m, _ := memberOf(a.g, b.id); return m.Direct })
 }
