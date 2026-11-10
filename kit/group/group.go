@@ -14,8 +14,7 @@
 //
 // Roster says what an instance keeps of its group, and Import takes a group an
 // app kept in a format of its own, or a decision an instance on that format
-// passes on. An instance that takes no direct calls finds the others with
-// Probe and the addresses the app keeps with SetAddresses.
+// passes on.
 //
 // A fortress opens a second Group under its own domain with the same phrase,
 // next to the app's own. Previous carries an app's pairing over to that
@@ -122,8 +121,8 @@ type Config struct {
 	// neither listed nor pinned, and its calls are refused.
 	Kinds []member.Kind
 	// Ports are where the app's instances take direct calls, besides the port
-	// of Self.DirectURL. An address the group learned rather than one the
-	// owner typed in is dialed only on these ports.
+	// of Self.DirectURL. An address that is named rather than announced is
+	// dialed only on these ports.
 	Ports []int
 	// MaxAnswerBytes is the most the app may answer a direct call with, and
 	// what this instance reads of a direct answer, 4 MiB when zero.
@@ -186,6 +185,9 @@ var (
 	ErrTooLarge     = errors.New("group: the call carries more than MaxCallBytes")
 	ErrNoSuchMember = errors.New("group: no member with that id signed a call here")
 	ErrRemoved      = errors.New("group: that member was taken out of the group")
+	// ErrStranger is what answers at a member's address when it is no member
+	// of the group, such as an instance paired under another phrase.
+	ErrStranger = errors.New("group: what answers there is no member of this group")
 )
 
 // Group is this instance's side of its group.

@@ -173,8 +173,8 @@ func (g *Group) confirm(id, url, name, deployment string, now time.Time) {
 	if id == g.self {
 		return
 	}
-	// The next start dials a kept address unasked, so it has to pass as a
-	// learned one, even when the owner typed it in.
+	// Only an address the group would dial when it is named is kept for the
+	// next start, which dials it unasked.
 	_, keep := g.nearby(url)
 	defer g.stir()
 	g.mu.Lock()

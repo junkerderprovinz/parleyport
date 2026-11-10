@@ -353,7 +353,7 @@ func (g *Group) probe(ctx context.Context, base string) (hello, error) {
 		return hello{}, fmt.Errorf("%w: %s answered a probe unreadably", ErrStranger, base)
 	}
 	if h.ID == g.self {
-		return hello{}, ErrSelf
+		return hello{}, fmt.Errorf("group: %s is this instance's own address", base)
 	}
 	g.mu.Lock()
 	if _, pinned := g.st.Members[h.ID]; !pinned {

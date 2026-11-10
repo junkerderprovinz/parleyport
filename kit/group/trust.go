@@ -69,8 +69,6 @@ type state struct {
 	Revoked map[string]time.Time `json:"revoked,omitempty"`
 	// Address is this instance's direct address as NoteAddress learned it.
 	Address string `json:"address,omitempty"`
-	// Known are the addresses SetAddresses keeps.
-	Known []string `json:"known,omitempty"`
 }
 
 // record is a member whose key is pinned here.

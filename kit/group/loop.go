@@ -97,14 +97,13 @@ func (g *Group) greet(ctx context.Context, now time.Time) {
 	wg.Wait()
 }
 
-// refresh probes every address on record and every address the app keeps
-// that has not answered for a while, which keeps a member reached by address
-// alone in the list and puts an address that failed back to use once it
-// answers again.
+// refresh probes every address on record that has not answered for a while,
+// which keeps a member reached by address alone in the list and puts an
+// address that failed back to use once it answers again.
 func (g *Group) refresh(ctx context.Context, now time.Time) {
 	g.mu.Lock()
 	fresh := map[string]bool{}
-	urls := slices.Clone(g.st.Known)
+	var urls []string
 	for _, a := range g.addrs {
 		if a.url == "" {
 			continue
