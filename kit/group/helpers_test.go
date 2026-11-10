@@ -84,6 +84,9 @@ type setup struct {
 	secret   []byte
 	previous []byte
 	onRemove func(id string)
+	// keysOnly opens the group on the keys derived from the secret instead.
+	keysOnly bool
+	byPhrase bool
 }
 
 // open starts an instance called name. Its app answers GET /api/whoami with
@@ -118,18 +121,24 @@ func openGroup(t *testing.T, n *node, s setup) *Group {
 	if s.relay != "" {
 		mode, url = RelayOwn, s.relay
 	}
+	var set keys.Set
+	if s.keysOnly {
+		secret, set = nil, testDomain.Keys(secret)
+	}
 	g, err := Open(Config{
-		Domain:    testDomain,
-		Secret:    secret,
-		Identity:  identity(t, n.name),
-		Self:      Self{Name: n.name, Deployment: "container", DirectURL: n.srv.URL},
-		Relay:     mode,
-		RelayURL:  url,
-		LAN:       s.lan,
-		Store:     n.store,
-		Previous:  s.previous,
-		OnRemoved: func() { n.removed.Add(1) },
-		OnRemove:  s.onRemove,
+		Domain:       testDomain,
+		Secret:       secret,
+		Keys:         set,
+		Identity:     identity(t, n.name),
+		Self:         Self{Name: n.name, Deployment: "container", DirectURL: n.srv.URL},
+		Relay:        mode,
+		RelayURL:     url,
+		LAN:          s.lan,
+		Store:        n.store,
+		Previous:     s.previous,
+		JoinByPhrase: s.byPhrase,
+		OnRemoved:    func() { n.removed.Add(1) },
+		OnRemove:     s.onRemove,
 	}, appRoutes())
 	if err != nil {
 		t.Fatalf("open %s: %v", n.name, err)

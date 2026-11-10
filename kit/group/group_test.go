@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/junkerderprovinz/parleyport/kit/keys"
 	"github.com/junkerderprovinz/parleyport/kit/lan"
 	"github.com/junkerderprovinz/parleyport/kit/member"
 	"github.com/junkerderprovinz/parleyport/kit/relay"
@@ -24,6 +25,7 @@ func TestOpenRefusesAnIncompleteConfig(t *testing.T) {
 	for name, change := range map[string]func(*Config){
 		"no domain":      func(c *Config) { c.Domain = "" },
 		"no secret":      func(c *Config) { c.Secret = nil },
+		"half the keys":  func(c *Config) { c.Secret, c.Keys = nil, keys.Set{Group: testDomain.GroupKey(testSecret)} },
 		"no identity":    func(c *Config) { c.Identity = member.Identity{} },
 		"a phone":        func(c *Config) { c.Identity = phone },
 		"no store":       func(c *Config) { c.Store = nil },
@@ -200,5 +202,20 @@ func TestAnAnswerFromAMemberNotApprovedHereDoesNotCount(t *testing.T) {
 	var untrusted *relay.UntrustedAnswer
 	if !errors.As(err, &untrusted) || untrusted.Status != http.StatusOK {
 		t.Errorf("err = %v, want an UntrustedAnswer carrying bravo's 200", err)
+	}
+}
+
+func TestAGroupOpensOnItsKeysAlone(t *testing.T) {
+	url := relayServer(t)
+	a := open(t, "alpha", setup{relay: url})
+	b := open(t, "bravo", setup{relay: url, keysOnly: true})
+	waitFor(t, "both on the relay", func() bool {
+		_, okA := memberOf(a.g, b.id)
+		_, okB := memberOf(b.g, a.id)
+		return okA && okB
+	})
+	meet(t, a, b)
+	if id := whoami(t, b, a); id != b.id {
+		t.Errorf("alpha's app saw caller %q, want bravo", id)
 	}
 }

@@ -312,7 +312,7 @@ func (g *Group) admit(call relay.ProxyCall, source string, now time.Time) (Calle
 			st.Members[call.From] = rec
 			g.dirty = true
 		}
-		if !rec.Approved {
+		if !rec.Approved && !g.byPhrase {
 			return Caller{}, pendingRefusal
 		}
 		return Caller{ID: call.From, Kind: rec.Kind, Key: rec.Key}, nil
@@ -334,10 +334,13 @@ func (g *Group) admit(call relay.ProxyCall, source string, now time.Time) (Calle
 	if !g.limits.mayPin(source, now) {
 		return Caller{}, refuse(http.StatusTooManyRequests, "groupJoinsBusy", "too many new devices joined this group within the hour")
 	}
-	if err := g.pinLocked(call.From, record{Kind: call.Kind, Key: bytes.Clone(call.Key), Used: now}, idle); err != nil {
+	if err := g.pinLocked(call.From, record{Kind: call.Kind, Key: bytes.Clone(call.Key), Approved: g.byPhrase, Used: now}, idle); err != nil {
 		return Caller{}, refuse(http.StatusInternalServerError, "memberNotPinned", "this instance could not record the device's key")
 	}
 	g.replay.Admit(call)
+	if g.byPhrase {
+		return Caller{ID: call.From, Kind: call.Kind, Key: bytes.Clone(call.Key)}, nil
+	}
 	return Caller{}, pendingRefusal
 }
 
@@ -387,12 +390,27 @@ func waitingLocked(st *state) int {
 }
 
 // trustsAnswer reports whether an answer signed by key may count as instance
-// target's: target is approved here as an instance, under that key.
+// target's: target is approved here as an instance, under that key. Where the
+// phrase is enough, an instance not pinned yet is pinned by its answer, as
+// long as its id and key were not taken out.
 func (g *Group) trustsAnswer(target string, key ed25519.PublicKey) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	rec, ok := g.st.Members[target]
-	return ok && rec.Approved && rec.Kind == member.KindInstance && bytes.Equal(rec.Key, key)
+	if ok || !g.byPhrase {
+		return ok && rec.Approved && rec.Kind == member.KindInstance && bytes.Equal(rec.Key, key)
+	}
+	_, removed := g.st.Removed[target]
+	_, revoked := g.st.Revoked[hex.EncodeToString(key)]
+	if removed || revoked || !claimFits(target, member.KindInstance, key) || len(g.st.Members) >= maxPinned {
+		return false
+	}
+	for _, rec := range g.st.Members {
+		if bytes.Equal(rec.Key, key) {
+			return false
+		}
+	}
+	return g.pinLocked(target, record{Kind: member.KindInstance, Key: bytes.Clone(key), Approved: true, Used: time.Now()}, "") == nil
 }
 
 // Approve lets member id in, here and, passed on, on every other instance of

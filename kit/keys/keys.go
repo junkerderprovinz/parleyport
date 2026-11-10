@@ -46,6 +46,26 @@ func (d Domain) ManualFrameKey(groupKey string) []byte {
 	return d.derive("/relay/frame-key-manual/v1", []byte(groupKey))
 }
 
+// Set is what a member of one domain needs to take part, without the secret
+// behind it. Nothing in it leads back to the secret or to another domain's
+// keys, so a device that keeps only its set can lose no more than its own
+// place in the group.
+type Set struct {
+	Group    string
+	Frame    []byte
+	PeerAuth []byte
+}
+
+// Keys derives d's set from secret.
+func (d Domain) Keys(secret []byte) Set {
+	return Set{Group: d.GroupKey(secret), Frame: d.FrameKey(secret), PeerAuth: d.PeerAuthKey(secret)}
+}
+
+// Complete reports whether s holds a key of the right length in every field.
+func (s Set) Complete() bool {
+	return len(s.Group) == 2*sha256.Size && len(s.Frame) == sha256.Size && len(s.PeerAuth) == sha256.Size
+}
+
 // Signing returns the labels d's members sign calls and answers under.
 func (d Domain) Signing() Signing {
 	return Signing{

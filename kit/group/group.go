@@ -18,6 +18,7 @@
 package group
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/tls"
@@ -73,8 +74,8 @@ type Store interface {
 	Save([]byte) error
 }
 
-// Config is what a Group runs on. Domain, Secret, Identity and Store are
-// required.
+// Config is what a Group runs on. Domain, Secret or Keys, Identity and Store
+// are required.
 type Config struct {
 	Domain keys.Domain
 	// Signing names the labels calls and answers are signed under; the zero
@@ -82,6 +83,12 @@ type Config struct {
 	Signing keys.Signing
 	// Secret is what the phrase encodes.
 	Secret []byte
+	// Keys stand in for Secret on a device that keeps only the keys derived
+	// from it under Domain.
+	Keys keys.Set
+	// JoinByPhrase makes a device that holds the phrase a member at once,
+	// with nobody approving it. Remove still shuts its key out for good.
+	JoinByPhrase bool
 	// Previous is the secret the group was paired under before, when it moves
 	// to a new phrase. Who was approved or taken out under it stays so under
 	// Secret; a store written under any other phrase starts over.
@@ -165,6 +172,7 @@ type Group struct {
 	client    *relay.Client
 	onRemoved func()
 	onRemove  func(id string)
+	byPhrase  bool
 
 	replay  *relay.ReplayGuard
 	limits  *memberLimits
@@ -200,8 +208,8 @@ func Open(cfg Config, serve http.Handler) (*Group, error) {
 	switch {
 	case cfg.Domain == "":
 		return nil, errors.New("group: no domain")
-	case len(cfg.Secret) == 0:
-		return nil, errors.New("group: no secret")
+	case len(cfg.Secret) == 0 && !cfg.Keys.Complete():
+		return nil, errors.New("group: no secret and no complete keys")
 	case cfg.Identity.Kind() != member.KindInstance:
 		return nil, errors.New("group: the identity has to be an instance's")
 	case cfg.Store == nil:
@@ -211,7 +219,11 @@ func Open(cfg Config, serve http.Handler) (*Group, error) {
 	if signing == (keys.Signing{}) {
 		signing = cfg.Domain.Signing()
 	}
-	groupKey := cfg.Domain.GroupKey(cfg.Secret)
+	set := cfg.Keys
+	if len(cfg.Secret) > 0 {
+		set = cfg.Domain.Keys(cfg.Secret)
+	}
+	groupKey := set.Group
 	raw, err := cfg.Store.Load()
 	if err != nil {
 		return nil, fmt.Errorf("group: reading the store: %w", err)
@@ -233,14 +245,15 @@ func Open(cfg Config, serve http.Handler) (*Group, error) {
 		self:      cfg.Identity.ID(),
 		identity:  cfg.Identity,
 		signing:   signing,
-		frameKey:  cfg.Domain.FrameKey(cfg.Secret),
-		peerAuth:  cfg.Domain.PeerAuthKey(cfg.Secret),
+		frameKey:  bytes.Clone(set.Frame),
+		peerAuth:  bytes.Clone(set.PeerAuth),
 		headers:   headersFor(cfg.Domain),
 		info:      cfg.Self,
 		store:     cfg.Store,
 		lan:       cfg.LAN,
 		onRemoved: cfg.OnRemoved,
 		onRemove:  cfg.OnRemove,
+		byPhrase:  cfg.JoinByPhrase,
 		replay:    relay.NewReplayGuard(),
 		limits:    newMemberLimits(),
 		hc:        directClient(),

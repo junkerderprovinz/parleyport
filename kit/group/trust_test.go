@@ -459,3 +459,38 @@ func TestAViewerIsPinnedApprovedAndRemovedLikeAnyMember(t *testing.T) {
 		t.Errorf("the removed viewer reads = %d, want 410", status)
 	}
 }
+
+func TestThePhraseAloneLetsAMemberIn(t *testing.T) {
+	url := relayServer(t)
+	a := open(t, "alpha", setup{relay: url, byPhrase: true})
+	b := open(t, "bravo", setup{relay: url, byPhrase: true})
+	waitFor(t, "both on the relay", func() bool { return len(a.g.Members()) == 1 && len(b.g.Members()) == 1 })
+
+	if id := whoami(t, b, a); id != b.id {
+		t.Errorf("alpha's app saw caller %q, want bravo", id)
+	}
+	if id := whoami(t, a, b); id != a.id {
+		t.Errorf("bravo's app saw caller %q, want alpha", id)
+	}
+	if m, _ := memberOf(a.g, b.id); m.State != StateApproved {
+		t.Errorf("alpha lists bravo as %q, want a member", m.State)
+	}
+}
+
+func TestARemovedKeyStaysOutWhenThePhraseIsEnough(t *testing.T) {
+	url := relayServer(t)
+	a := open(t, "alpha", setup{relay: url, byPhrase: true})
+	b := open(t, "bravo", setup{relay: url, byPhrase: true})
+	waitFor(t, "both on the relay", func() bool { return len(a.g.Members()) == 1 && len(b.g.Members()) == 1 })
+	whoami(t, b, a)
+	if err := a.g.Remove(b.id); err != nil {
+		t.Fatal(err)
+	}
+	status, body, err := call(t, b, a, http.MethodGet, "/api/whoami", nil)
+	if status != http.StatusGone {
+		t.Errorf("bravo calls after its removal: %d %s %v, want 410", status, body, err)
+	}
+	if _, _, err := call(t, a, b, http.MethodGet, "/api/whoami", nil); err == nil {
+		t.Error("alpha took an answer from the key it removed")
+	}
+}

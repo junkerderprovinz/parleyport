@@ -109,3 +109,25 @@ func TestSigningLabelsStartAtTheFirstVersion(t *testing.T) {
 		t.Errorf("Signing() = %+v, want %+v", got, want)
 	}
 }
+
+func TestASetHoldsTheKeysOfItsDomain(t *testing.T) {
+	secret := []byte("0123456789abcdef")
+	d := Domain("alpha")
+	s := d.Keys(secret)
+	if s.Group != d.GroupKey(secret) || !bytes.Equal(s.Frame, d.FrameKey(secret)) || !bytes.Equal(s.PeerAuth, d.PeerAuthKey(secret)) {
+		t.Errorf("the set of alpha is %+v", s)
+	}
+	if !s.Complete() {
+		t.Error("a derived set is not complete")
+	}
+	for name, broken := range map[string]Set{
+		"empty":         {},
+		"no frame key":  {Group: s.Group, PeerAuth: s.PeerAuth},
+		"short group":   {Group: s.Group[:10], Frame: s.Frame, PeerAuth: s.PeerAuth},
+		"long peer key": {Group: s.Group, Frame: s.Frame, PeerAuth: append(bytes.Clone(s.PeerAuth), 0)},
+	} {
+		if broken.Complete() {
+			t.Errorf("%s counts as complete", name)
+		}
+	}
+}
