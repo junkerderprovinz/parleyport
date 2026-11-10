@@ -100,6 +100,9 @@ func TestTheLargestHelloFitsTheLimit(t *testing.T) {
 }
 
 func TestTheLargestAnswerFitsAFrame(t *testing.T) {
+	if MaxAnswerBytes < 8<<20 {
+		t.Fatalf("a relay frame carries an answer of %d bytes, want at least 8 MiB", MaxAnswerBytes)
+	}
 	id := strings.Repeat("f", 32)
 	res := SignResult(testSigning, &alphaKey, id, []byte("call"), ProxyResult{Status: http.StatusOK, Body: make([]byte, MaxAnswerBytes)})
 	frame, err := Encode(TypeProxyResponse, ProxyResponse{RequestID: id, Sealed: sealResultFor(t, id, res)})

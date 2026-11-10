@@ -48,10 +48,11 @@ const challengeSize = 32
 // nobody.
 const helloLimit = 4 << 10
 
-// readLimit caps one inbound frame once the hello has passed. The default 32 KiB is too small for a task
-// list from a busy instance; a few megabytes still keeps one client from
-// pinning unbounded memory.
-const readLimit = 8 << 20
+// readLimit caps one inbound frame once the hello has passed: room for an
+// answer of 8 MiB with its seal and coding, and still no way for one client to
+// pin unbounded memory. A frame is read into a buffer that grows with it, so
+// the cap costs nothing until a frame that large arrives.
+const readLimit = 16 << 20
 
 // pendingTTL bounds how long the relay remembers an unanswered request, so a
 // target that accepts a request and dies does not grow the table forever. The

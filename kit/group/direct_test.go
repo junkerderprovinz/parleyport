@@ -127,8 +127,11 @@ func TestARelayedAnswerMayBeAsLargeAsTheAppAllows(t *testing.T) {
 	t.Run("set larger", func(t *testing.T) {
 		sizes(t, setup{maxRelay: 4<<20 + 256<<10}, 4<<20+256<<10)
 	})
+	t.Run("set to 8 MiB", func(t *testing.T) {
+		sizes(t, setup{maxRelay: 8 << 20}, 8<<20)
+	})
 	t.Run("set past what a frame carries", func(t *testing.T) {
-		sizes(t, setup{maxRelay: 8 << 20}, relay.MaxAnswerBytes)
+		sizes(t, setup{maxRelay: 32 << 20}, relay.MaxAnswerBytes)
 	})
 }
 

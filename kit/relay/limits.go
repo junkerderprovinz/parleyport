@@ -12,10 +12,11 @@ const helloTimeout = 10 * time.Second
 // challengeSize is how many random bytes the challenge a hello signs has.
 const challengeSize = 32
 
-// readLimit caps one frame once the hello has passed: room for a busy
-// instance's list of jobs, and still no way for one peer to pin unbounded
-// memory.
-const readLimit = 8 << 20
+// readLimit caps one frame once the hello has passed: room for an answer of
+// 8 MiB with its seal and coding, and still no way for one peer to pin
+// unbounded memory. A frame is read into a buffer that grows with it, so the
+// cap costs nothing until a frame that large arrives.
+const readLimit = 16 << 20
 
 // MaxAnswerBytes is the largest answer a relay frame carries. On the wire the
 // body is coded as base64 twice, once in the result and once around the seal,

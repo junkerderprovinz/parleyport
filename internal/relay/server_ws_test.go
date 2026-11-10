@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -68,11 +69,13 @@ func TestFramesAfterTheHelloMayBeLarge(t *testing.T) {
 	readFrame(t, alpha, TypeAnnounce)
 	readFrame(t, bravo, TypeAnnounce)
 
-	big := ProxyRequest{RequestID: "r1", Target: bravoID, Sealed: make([]byte, 64<<10)}
+	// An answer of 8 MiB is coded as base64 inside the seal, which the frame
+	// codes once more.
+	big := ProxyRequest{RequestID: "r1", Target: bravoID, Sealed: make([]byte, base64.StdEncoding.EncodedLen(8<<20)+1<<10)}
 	writeFrame(t, alpha, TypeProxyRequest, big)
 	var got ProxyRequest
 	if err := readFrame(t, bravo, TypeProxyRequest).Into(&got); err != nil || len(got.Sealed) != len(big.Sealed) {
-		t.Fatalf("bravo got %d sealed bytes (%v), want the whole 64 KiB call", len(got.Sealed), err)
+		t.Fatalf("bravo got %d sealed bytes (%v), want all %d that a sealed 8 MiB answer takes", len(got.Sealed), err, len(big.Sealed))
 	}
 }
 

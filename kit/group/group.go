@@ -129,7 +129,7 @@ type Config struct {
 	MaxAnswerBytes int
 	// MaxRelayAnswerBytes is the most the app may answer a call over the
 	// relay with, 4 MiB when zero. A relay frame carries no more than
-	// relay.MaxAnswerBytes, about 4.5 MiB, so a larger value counts as that
+	// relay.MaxAnswerBytes, about 9 MiB, so a larger value counts as that
 	// and a larger answer is refused with answerTooLarge rather than cost the
 	// relay connection.
 	MaxRelayAnswerBytes int
