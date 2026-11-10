@@ -2,10 +2,13 @@ package notify_test
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -134,7 +137,7 @@ func TestRedacted(t *testing.T) {
 	if out[0].Webhook.Headers["Authorization"] != notify.RedactedValue || out[0].Webhook.Headers["X-Empty"] != "" {
 		t.Errorf("headers = %v", out[0].Webhook.Headers)
 	}
-	if out[1].Gotify.Token != notify.RedactedValue || out[2].Ntfy.Token != notify.RedactedValue || out[3].Matrix.Token != notify.RedactedValue || out[4].SMTP.Password != notify.RedactedValue || out[5].Apprise.URLs[0] != "tgram://bot/chat" {
+	if out[1].Gotify.Token != notify.RedactedValue || out[2].Ntfy.Token != notify.RedactedValue || out[3].Matrix.Token != notify.RedactedValue || out[4].SMTP.Password != notify.RedactedValue || out[5].Apprise.URLs[0] != "tgram://"+notify.RedactedValue+"/chat" {
 		t.Errorf("redacted = %+v", out)
 	}
 	if chs[0].Webhook.Headers["Authorization"] != "Bearer x" || chs[1].Gotify.Token != "tok" || chs[5].Apprise.URLs[0] != "tgram://bot/chat" {
@@ -186,5 +189,84 @@ func TestMerge(t *testing.T) {
 			got := notify.Merge(next, prev)
 			tt.check(t, got)
 		})
+	}
+}
+
+// addressed is a channel of every kind whose addresses carry a key.
+var addressed = []notify.Channel{
+	{ID: "w", Kind: notify.KindWebhook, Webhook: &notify.Webhook{URL: "https://alpha:hunter22@maker.example/trigger/run/with/key/dK3jx9Qm2LpZ?m=%%title%%"}},
+	{ID: "d", Kind: notify.KindDiscord, Discord: &notify.Discord{URL: "https://discord.com/api/webhooks/123456789012345678/AbCd-EfGh_IjKlMnOpQrStUv"}},
+	{ID: "s", Kind: notify.KindSlack, Slack: &notify.Slack{URL: "https://hooks.slack.com/services/T0001/B0002/XxXxXxXxXxXxXxXxXxXxXxXx"}},
+	{ID: "g", Kind: notify.KindGotify, Gotify: &notify.Gotify{URL: "https://gotify.example/message?token=AqZ7wLx"}},
+	{ID: "n", Kind: notify.KindNtfy, Ntfy: &notify.Ntfy{URL: "https://ntfy.example/tr7alerts?auth=QmFzaWM"}},
+	{ID: "m", Kind: notify.KindMatrix, Matrix: &notify.Matrix{Homeserver: "https://bot:s3cr3tpw@matrix.example", Room: "!r", Token: "tok"}},
+	{ID: "a", Kind: notify.KindApprise, Apprise: &notify.Apprise{URL: "http://apprise.example:8000/notify/tollroll"}},
+	{ID: "as", Kind: notify.KindApprise, Apprise: &notify.Apprise{URL: "http://apprise.example:8000/notify", URLs: []string{"tgram://123456:ABCdef/4711", "pover://ukey9@apptoken9"}}},
+	{ID: "h", Kind: notify.KindHealthchecks, Healthchecks: &notify.Healthchecks{
+		URL:   "https://hc.example/ping/11112222-3333-4444-5555-666677778888",
+		ByKey: map[string]string{"flash": "https://hc.example/ping/Kq8vX2mN4pR7sT1wY3zB5c/flash"},
+	}},
+}
+
+func TestRedactedMasksKeysInAddresses(t *testing.T) {
+	secrets := []string{
+		"alpha", "hunter22", "dK3jx9Qm2LpZ", "AbCd-EfGh_IjKlMnOpQrStUv", "XxXxXxXxXxXxXxXxXxXxXxXx",
+		"AqZ7wLx", "tr7alerts", "QmFzaWM", "s3cr3tpw", "tollroll", "123456:ABCdef", "ukey9", "apptoken9",
+		"11112222-3333-4444-5555-666677778888", "Kq8vX2mN4pR7sT1wY3zB5c",
+	}
+	kept := []string{
+		"maker.example/trigger/run/with/key/", "m=%%title%%", "discord.com/api/webhooks/", "hooks.slack.com/services/",
+		"gotify.example/message?token=", "ntfy.example/", "matrix.example", "apprise.example:8000/notify/",
+		"tgram://", "pover://", "hc.example/ping/", "/flash",
+	}
+
+	out, err := json.Marshal(notify.Redacted(addressed))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, s := range secrets {
+		if strings.Contains(string(out), s) {
+			t.Errorf("Redacted left %q", s)
+		}
+	}
+	for _, s := range kept {
+		if !strings.Contains(string(out), s) {
+			t.Errorf("Redacted took out %q", s)
+		}
+	}
+}
+
+func TestRedactedMasksTokenInQuery(t *testing.T) {
+	ch := notify.Channel{ID: "g", Kind: notify.KindGotify, Gotify: &notify.Gotify{URL: "https://gotify.example/message?token=AqZ7wLx"}}
+
+	got := notify.Redacted([]notify.Channel{ch})[0].Gotify.URL
+
+	if got != "https://gotify.example/message?token="+notify.RedactedValue {
+		t.Errorf("url = %q", got)
+	}
+}
+
+func TestMergeRestoresMaskedAddresses(t *testing.T) {
+	got := notify.Merge(notify.Redacted(addressed), addressed)
+
+	if !reflect.DeepEqual(got, addressed) {
+		t.Errorf("merged = %+v", got)
+	}
+}
+
+func TestMergeDropsAMaskedAddressThatMoved(t *testing.T) {
+	next := notify.Redacted(addressed)
+	next[4].Ntfy.URL = strings.Replace(next[4].Ntfy.URL, "ntfy.example", "attacker.example", 1)
+	next[7].Apprise.URL = "http://attacker.example:8000/notify"
+	next[8].Healthchecks.ByKey["flash"] = strings.Replace(next[8].Healthchecks.ByKey["flash"], "hc.example", "attacker.example", 1)
+
+	got := notify.Merge(next, addressed)
+
+	if got[4].Ntfy.URL != "" || got[8].Healthchecks.ByKey["flash"] != "" {
+		t.Errorf("a masked address came back at a new host: %q %q", got[4].Ntfy.URL, got[8].Healthchecks.ByKey["flash"])
+	}
+	if got[7].Apprise.URL != "http://attacker.example:8000/notify" || !slices.Equal(got[7].Apprise.URLs, []string{"", ""}) {
+		t.Errorf("the service addresses followed a new Apprise server: %+v", got[7].Apprise)
 	}
 }

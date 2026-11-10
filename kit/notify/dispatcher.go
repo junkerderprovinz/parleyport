@@ -19,7 +19,8 @@ import (
 )
 
 // UnraidNotifyScript is Unraid's notification helper. The webGui path that
-// some plugins call is a symlink to this one.
+// some plugins call is a symlink to this one. A process runs it at most once
+// a second.
 const UnraidNotifyScript = "/usr/local/emhttp/plugins/dynamix/scripts/notify"
 
 // Runner runs a program to the end. An app that reaches the Unraid host over
