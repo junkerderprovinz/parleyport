@@ -2,6 +2,7 @@ package group
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
@@ -112,6 +113,23 @@ func TestInstancesMeetOverTheRelay(t *testing.T) {
 	meet(t, a, b)
 	if id := whoami(t, a, b); id != a.id {
 		t.Errorf("bravo's app saw caller %q, want alpha", id)
+	}
+}
+
+func TestARenamedInstanceIsSeenUnderItsNewName(t *testing.T) {
+	n := onRelay(t, "alpha", "bravo")
+	a, b := n[0], n[1]
+	meet(t, a, b)
+
+	a.g.SetSelf(Self{Name: "Cellar", Deployment: "server", DirectURL: a.srv.URL})
+	waitFor(t, "bravo to list alpha under its new name", func() bool {
+		m, _ := memberOf(b.g, a.id)
+		return m.Name == "Cellar" && m.Deployment == "server" && m.Relay
+	})
+	status, body, err := call(t, b, a, http.MethodGet, helloPath, nil)
+	var h hello
+	if err != nil || status != http.StatusOK || json.Unmarshal(body, &h) != nil || h.Name != "Cellar" {
+		t.Errorf("alpha's hello = %d %s %v, want the new name", status, body, err)
 	}
 }
 

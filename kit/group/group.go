@@ -452,6 +452,29 @@ func (g *Group) digest() string {
 	return b.String()
 }
 
+// SetSelf changes what the other members see of this instance, such as when
+// its owner renames it. It goes out on the network at once, and the relay
+// connection is made again with it, so members there see it leave and come
+// back.
+func (g *Group) SetSelf(s Self) {
+	s.Name = relay.ClipName(s.Name)
+	s.Address = relay.FitAddress(s.Address)
+	g.mu.Lock()
+	g.info = s
+	g.mu.Unlock()
+	g.announce()
+	if g.client != nil {
+		g.client.SetSelf(relay.Announce{Name: s.Name, Deployment: s.Deployment, Address: s.Address})
+	}
+}
+
+// selfInfo is what this instance goes by now.
+func (g *Group) selfInfo() Self {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.info
+}
+
 // RelayConnected reports whether the relay socket is up, which an empty member
 // list cannot tell.
 func (g *Group) RelayConnected() bool {
@@ -603,6 +626,7 @@ type hello struct {
 }
 
 func (g *Group) hello() []byte {
-	b, _ := json.Marshal(hello{ID: g.self, Name: g.info.Name, Deployment: g.info.Deployment, URL: g.directURL(), Address: g.info.Address})
+	info := g.selfInfo()
+	b, _ := json.Marshal(hello{ID: g.self, Name: info.Name, Deployment: info.Deployment, URL: g.directURL(), Address: info.Address})
 	return b
 }

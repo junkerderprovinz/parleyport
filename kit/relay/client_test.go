@@ -49,6 +49,20 @@ func TestClientAnnouncesItselfAndTracksSiblings(t *testing.T) {
 	waitFor(t, "alpha to see bravo go", func() bool { return len(alpha.Siblings()) == 0 })
 }
 
+func TestARenamedClientIsSeenUnderItsNewName(t *testing.T) {
+	addr, _ := relayOn(t, "127.0.0.1:0")
+	alpha := startClient(t, addr, "shared-relay-test-key-0123456789ab", alphaID, nil)
+	bravo := startClient(t, addr, "shared-relay-test-key-0123456789ab", bravoID, nil)
+	waitFor(t, "bravo to see alpha", func() bool { return len(bravo.Siblings()) == 1 })
+
+	alpha.SetSelf(Announce{InstanceID: "someone else", Name: "Cellar", Deployment: "container", Address: "https://cellar.lan"})
+	waitFor(t, "bravo to see alpha's new name", func() bool {
+		sibs := bravo.Siblings()
+		return len(sibs) == 1 && sibs[0].InstanceID == alphaID && sibs[0].Name == "Cellar" &&
+			sibs[0].Deployment == "container" && sibs[0].Address == "https://cellar.lan"
+	})
+}
+
 func TestClientProxiesToASibling(t *testing.T) {
 	addr, _ := relayOn(t, "127.0.0.1:0")
 	alpha := startClient(t, addr, "shared-relay-test-key-0123456789ab", alphaID, nil)

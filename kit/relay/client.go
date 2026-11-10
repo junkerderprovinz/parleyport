@@ -102,7 +102,7 @@ type Client struct {
 	key       string
 	frameKey  []byte
 	signing   keys.Signing
-	self      Announce
+	id        string
 	identity  *member.Identity
 	trusts    func(target string, key ed25519.PublicKey) bool
 	serve     ProxyHandler
@@ -112,6 +112,7 @@ type Client struct {
 	maxBackoff time.Duration
 
 	mu       sync.Mutex
+	self     Announce
 	conn     *websocket.Conn
 	siblings map[string]Announce
 	pending  map[string]chan ProxyResponse
@@ -158,6 +159,7 @@ func NewClient(opts ClientOptions) (*Client, error) {
 		key:        opts.Key,
 		frameKey:   opts.FrameKey,
 		signing:    opts.Signing,
+		id:         self.InstanceID,
 		self:       self,
 		identity:   opts.Identity,
 		trusts:     opts.Trusts,
@@ -203,6 +205,20 @@ func (c *Client) Close() error {
 		<-c.done
 	}
 	return nil
+}
+
+// SetSelf changes what siblings see of this instance, all but its id. The
+// relay takes an announce only with the hello, so the client says hello again
+// on a new connection, and siblings see it leave and come back.
+func (c *Client) SetSelf(self Announce) {
+	c.mu.Lock()
+	self.InstanceID = c.id
+	c.self = self
+	conn := c.conn
+	c.mu.Unlock()
+	if conn != nil {
+		_ = conn.CloseNow()
+	}
 }
 
 // Connected reports whether the relay connection is up, which an empty
@@ -363,7 +379,10 @@ func (c *Client) session() {
 
 	// The announce is always sealed. NewClient checked the frame key, so a
 	// failure here is the cipher itself and never a reason to send plaintext.
-	self, err := sealAnnounce(c.frameKey, c.self)
+	c.mu.Lock()
+	announce := c.self
+	c.mu.Unlock()
+	self, err := sealAnnounce(c.frameKey, announce)
 	if err != nil {
 		log.Printf("relay: this instance's announce could not be sealed, not connecting: %v", err)
 		return
@@ -497,7 +516,7 @@ func (c *Client) handle(ctx context.Context, conn *websocket.Conn, frame []byte)
 // call Serve drops. A call that opens with a broken signature is answered with
 // the reason, since only a member can seal one.
 func (c *Client) answer(ctx context.Context, conn *websocket.Conn, req ProxyRequest) {
-	call, err := OpenCall(c.frameKey, c.signing, req.RequestID, c.self.InstanceID, req.Sealed)
+	call, err := OpenCall(c.frameKey, c.signing, req.RequestID, c.id, req.Sealed)
 	result := ProxyResult{Status: http.StatusNotImplemented}
 	switch {
 	case errors.Is(err, ErrSignature):

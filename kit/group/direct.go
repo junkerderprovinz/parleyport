@@ -116,7 +116,8 @@ func (g *Group) announce() {
 	if g.lan == nil {
 		return
 	}
-	g.lan.SetSelf(lan.Peer{ID: g.self, Name: g.info.Name, URL: g.directURL(), Deployment: g.info.Deployment, Address: g.info.Address},
+	info := g.selfInfo()
+	g.lan.SetSelf(lan.Peer{ID: g.self, Name: info.Name, URL: g.directURL(), Deployment: info.Deployment, Address: info.Address},
 		func(p lan.Peer) string { return announceTag(g.peerAuth, p) })
 }
 
