@@ -230,20 +230,36 @@ func (g *Group) serveDirect(w http.ResponseWriter, r *http.Request) {
 		if host, _, err := net.SplitHostPort(source); err == nil {
 			source = host
 		}
-		status, out = g.handle(relay.WithSource(r.Context(), directSource+source), call)
+		ctx := relay.WithSource(r.Context(), directSource+source)
+		if strings.HasPrefix(call.Path, streamPrefix) {
+			g.serveStream(ctx, w, req, call)
+			return
+		}
+		status, out = g.handle(ctx, call)
 		if status == relay.StatusDrop {
 			forbid(w)
 			return
 		}
 	}
-	result := relay.SignResult(g.signing, &g.identity, req.RequestID, req.Sealed, relay.ProxyResult{Status: status, Body: out})
-	sealed, err := relay.SealResult(g.frameKey, req.RequestID, result)
+	g.answer(w, req, status, out)
+}
+
+// answer sends status and body as this instance's signed answer to req.
+func (g *Group) answer(w http.ResponseWriter, req relay.ProxyRequest, status int, body []byte) {
+	resp, err := g.response(req, status, body)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(relay.ProxyResponse{RequestID: req.RequestID, Sealed: sealed})
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// response is status and body sealed and signed as the answer to req.
+func (g *Group) response(req relay.ProxyRequest, status int, body []byte) (relay.ProxyResponse, error) {
+	result := relay.SignResult(g.signing, &g.identity, req.RequestID, req.Sealed, relay.ProxyResult{Status: status, Body: body})
+	sealed, err := relay.SealResult(g.frameKey, req.RequestID, result)
+	return relay.ProxyResponse{RequestID: req.RequestID, Sealed: sealed}, err
 }
 
 func requestID() (string, error) {
@@ -305,15 +321,25 @@ func (g *Group) exchange(ctx context.Context, base, target string, call relay.Pr
 	case resp.StatusCode != http.StatusOK:
 		return relay.ProxyResult{}, nil, "", fmt.Errorf("%w: %s refused the direct call with HTTP %d", ErrStranger, base, resp.StatusCode)
 	}
+	res, err := g.openResponse(raw, id, base)
+	if err != nil {
+		return relay.ProxyResult{}, nil, "", err
+	}
+	return res, sealed, id, nil
+}
+
+// openResponse opens raw as the answer to request id from base, without
+// asking yet whose key signed it.
+func (g *Group) openResponse(raw []byte, id, base string) (relay.ProxyResult, error) {
 	var out relay.ProxyResponse
 	if err := json.Unmarshal(raw, &out); err != nil || out.RequestID != id {
-		return relay.ProxyResult{}, nil, "", fmt.Errorf("%w: %s answered unreadably", ErrStranger, base)
+		return relay.ProxyResult{}, fmt.Errorf("%w: %s answered unreadably", ErrStranger, base)
 	}
 	res, err := relay.OpenResult(g.frameKey, id, out.Sealed)
 	if err != nil {
-		return relay.ProxyResult{}, nil, "", fmt.Errorf("%w: %s answered unreadably: %w", ErrStranger, base, err)
+		return relay.ProxyResult{}, fmt.Errorf("%w: %s answered unreadably: %w", ErrStranger, base, err)
 	}
-	return res, sealed, id, nil
+	return res, nil
 }
 
 // callDirect calls target at base and returns its answer once the key target's

@@ -581,6 +581,8 @@ func (g *Group) internal(caller Caller, call relay.ProxyCall) (int, []byte) {
 	case call.Path == rosterPath && call.Method == http.MethodGet && instance:
 		b, _ := json.Marshal(g.roster())
 		return http.StatusOK, b
+	case strings.HasPrefix(call.Path, streamPrefix):
+		return http.StatusMisdirectedRequest, relay.RefusalBody("streamDirectOnly", "a stream goes only directly on the local network, never through the relay")
 	}
 	return http.StatusNotFound, nil
 }

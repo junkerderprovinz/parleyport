@@ -139,6 +139,11 @@ type Config struct {
 	// reports it. It runs on a goroutine of its own, never twice at once, a
 	// burst of changes coming as one call, and must not call Close.
 	OnChange func()
+	// Stream answers the members' calls to Stream, which come on the direct
+	// route alone, and sees each caller through CallerOf. It answers a 200
+	// with a Content-Length and then the body, of any size; any other status
+	// is a refusal, no larger than 64 KiB. nil sends no streams.
+	Stream http.Handler
 }
 
 // State is where a member stands with this instance.
@@ -193,6 +198,7 @@ var (
 // Group is this instance's side of its group.
 type Group struct {
 	serve     http.Handler
+	stream    http.Handler
 	self      string
 	identity  member.Identity
 	signing   keys.Signing
@@ -212,14 +218,16 @@ type Group struct {
 	maxAnswer int
 	maxRelay  int
 
-	replay  *relay.ReplayGuard
-	limits  *memberLimits
-	hc      *http.Client
-	slots   chan struct{}
-	probing chan struct{}
-	kick    chan struct{}
-	stirred chan struct{}
-	removed sync.Once
+	replay   *relay.ReplayGuard
+	limits   *memberLimits
+	hc       *http.Client
+	streamer *http.Client
+	slots    chan struct{}
+	streams  chan struct{}
+	probing  chan struct{}
+	kick     chan struct{}
+	stirred  chan struct{}
+	removed  sync.Once
 
 	mu       sync.Mutex
 	st       state
@@ -282,6 +290,7 @@ func Open(cfg Config, serve http.Handler) (*Group, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	g := &Group{
 		serve:     serve,
+		stream:    cfg.Stream,
 		self:      cfg.Identity.ID(),
 		identity:  cfg.Identity,
 		signing:   signing,
@@ -303,6 +312,7 @@ func Open(cfg Config, serve http.Handler) (*Group, error) {
 		limits:    newMemberLimits(),
 		hc:        directClient(),
 		slots:     make(chan struct{}, maxDirectCalls),
+		streams:   make(chan struct{}, maxStreams),
 		probing:   make(chan struct{}, maxProbeBacks),
 		kick:      make(chan struct{}, 1),
 		stirred:   make(chan struct{}, 1),
@@ -318,6 +328,8 @@ func Open(cfg Config, serve http.Handler) (*Group, error) {
 		ctx:       ctx,
 		cancel:    cancel,
 	}
+	// A stream takes as long as it takes; its context bounds it.
+	g.streamer = &http.Client{Transport: g.hc.Transport, CheckRedirect: g.hc.CheckRedirect}
 	now := time.Now()
 	for id, rec := range st.Members {
 		// The ports may have changed since the address was kept.

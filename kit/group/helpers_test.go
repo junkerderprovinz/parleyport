@@ -106,6 +106,7 @@ type setup struct {
 	maxRelay  int
 	kinds     []member.Kind
 	ports     []int
+	stream    http.Handler
 	// noListener opens the instance the way a desktop app runs: it calls
 	// others directly but takes no direct calls itself.
 	noListener bool
@@ -170,6 +171,7 @@ func openGroup(t *testing.T, n *node, s setup) *Group {
 		OnRemoved:           func() { n.removed.Add(1) },
 		OnRemove:            s.onRemove,
 		OnChange:            s.onChange,
+		Stream:              s.stream,
 	}, appRoutes())
 	if err != nil {
 		t.Fatalf("open %s: %v", n.name, err)
