@@ -45,8 +45,9 @@ const (
 	// store is written again, so an open page does not rewrite it on every
 	// poll.
 	lastSeenStep = time.Minute
-	// maxAnswerBytes bounds what the app answers a call with. Sealed and coded
-	// for the wire it still fits a relay frame.
+	// maxAnswerBytes bounds what the app answers a call over the relay with,
+	// and a direct one unless the app allows more. Sealed and coded for the
+	// wire it still fits a relay frame.
 	maxAnswerBytes = 4 << 20
 )
 
@@ -590,7 +591,10 @@ func (g *Group) serveApp(ctx context.Context, call relay.ProxyCall) (status int,
 	if len(call.Body) > 0 {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	rec := &recorder{header: http.Header{}}
+	rec := &recorder{header: http.Header{}, limit: maxAnswerBytes}
+	if strings.HasPrefix(relay.SourceOf(ctx), directSource) {
+		rec.limit = g.maxAnswer
+	}
 	// The relay client runs this on a goroutine of its own, where no
 	// net/http server would recover a panicking handler.
 	defer func() {
@@ -616,6 +620,7 @@ type recorder struct {
 	header   http.Header
 	status   int
 	body     bytes.Buffer
+	limit    int
 	tooLarge bool
 }
 
@@ -629,7 +634,7 @@ func (r *recorder) WriteHeader(status int) {
 
 func (r *recorder) Write(p []byte) (int, error) {
 	r.WriteHeader(http.StatusOK)
-	if r.tooLarge || r.body.Len()+len(p) > maxAnswerBytes {
+	if r.tooLarge || r.body.Len()+len(p) > r.limit {
 		r.tooLarge = true
 		return 0, errAnswerTooLarge
 	}

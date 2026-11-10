@@ -41,25 +41,66 @@ func TestTheDirectFormatMatchesTheReference(t *testing.T) {
 
 // onOneNetwork opens two instances whose multicast announces are handed over
 // by the test, with no relay between them.
-func onOneNetwork(t *testing.T) (a, b *node) {
+func onOneNetwork(t *testing.T, s setup) (a, b *node) {
 	t.Helper()
 	la, lb := lan.New(lan.Config{}), lan.New(lan.Config{})
 	t.Cleanup(func() { _ = la.Close(); _ = lb.Close() })
-	a = open(t, "alpha", setup{lan: la})
-	b = open(t, "bravo", setup{lan: lb})
+	sa, sb := s, s
+	sa.lan, sb.lan = la, lb
+	a = open(t, "alpha", sa)
+	b = open(t, "bravo", sb)
 	la.Observe(tagged(a.g, lan.Peer{ID: b.id, Name: "bravo", URL: b.srv.URL, Deployment: "container"}))
 	lb.Observe(tagged(b.g, lan.Peer{ID: a.id, Name: "alpha", URL: a.srv.URL, Deployment: "container"}))
 	return a, b
 }
 
 func TestAMemberOnTheNetworkIsCalledDirectly(t *testing.T) {
-	a, b := onOneNetwork(t)
+	a, b := onOneNetwork(t, setup{})
 	meet(t, a, b)
 	if id := whoami(t, a, b); id != a.id {
 		t.Errorf("bravo's app saw %q, want alpha", id)
 	}
 	if m, _ := memberOf(a.g, b.id); !m.Direct || m.Relay || m.State != StateApproved {
 		t.Errorf("alpha lists %+v", m)
+	}
+}
+
+func TestADirectAnswerMayBeAsLargeAsTheAppAllows(t *testing.T) {
+	sizes := func(t *testing.T, a, b *node, fits, tooLarge int) {
+		t.Helper()
+		status, body, err := call(t, a, b, http.MethodGet, "/api/size/"+strconv.Itoa(fits), nil)
+		if err != nil || status != http.StatusOK || len(body) != fits {
+			t.Errorf("an answer of %d bytes = %d, %d bytes, %v", fits, status, len(body), err)
+		}
+		status, body, err = call(t, a, b, http.MethodGet, "/api/size/"+strconv.Itoa(tooLarge), nil)
+		if err != nil || status != http.StatusInternalServerError || !bytes.Contains(body, []byte("answerTooLarge")) {
+			t.Errorf("an answer of %d bytes = %d %.80q %v, want answerTooLarge", tooLarge, status, body, err)
+		}
+	}
+	t.Run("by default", func(t *testing.T) {
+		a, b := onOneNetwork(t, setup{})
+		meet(t, a, b)
+		sizes(t, a, b, maxAnswerBytes, maxAnswerBytes+1)
+	})
+	t.Run("set larger", func(t *testing.T) {
+		a, b := onOneNetwork(t, setup{maxAnswer: 6 << 20})
+		meet(t, a, b)
+		sizes(t, a, b, 6<<20, 6<<20+1)
+	})
+}
+
+func TestARelayedAnswerStaysWithinARelayFrame(t *testing.T) {
+	url := relayServer(t)
+	a := open(t, "alpha", setup{relay: url, maxAnswer: 6 << 20})
+	b := open(t, "bravo", setup{relay: url, maxAnswer: 6 << 20})
+	waitFor(t, "alpha to see bravo", func() bool { _, ok := memberOf(a.g, b.id); return ok })
+	meet(t, a, b)
+	status, body, err := call(t, a, b, http.MethodGet, "/api/size/"+strconv.Itoa(maxAnswerBytes+1), nil)
+	if err != nil || status != http.StatusInternalServerError || !bytes.Contains(body, []byte("answerTooLarge")) {
+		t.Errorf("a relayed answer past a frame = %d %.80q %v, want answerTooLarge", status, body, err)
+	}
+	if !a.g.RelayConnected() || !b.g.RelayConnected() {
+		t.Error("the large answer cost an instance its relay connection")
 	}
 }
 
@@ -105,7 +146,7 @@ func serveDirect(g *Group, req *http.Request, body []byte) *httptest.ResponseRec
 }
 
 func TestTheDirectRouteRefusesWhatNoMemberSends(t *testing.T) {
-	a, b := onOneNetwork(t)
+	a, b := onOneNetwork(t, setup{})
 	h := headersFor(testDomain)
 	cases := map[string]func(r *http.Request, body []byte) []byte{
 		"wrong target": func(r *http.Request, body []byte) []byte { r.Header.Set(h.target, a.id); return body },
@@ -167,7 +208,7 @@ func signedBody(from *node, r *http.Request, body []byte) []byte {
 }
 
 func TestAClosedGroupAnswersLikeNoGroup(t *testing.T) {
-	a, b := onOneNetwork(t)
+	a, b := onOneNetwork(t, setup{})
 	req, body := direct(t, a, b, "/api/whoami")
 	_ = b.g.Close()
 	if w := serveDirect(b.g, req, body); w.Code != http.StatusNotFound {
@@ -195,7 +236,7 @@ func TestTheSweepFindsAMemberMulticastMisses(t *testing.T) {
 }
 
 func TestAProbeOnlyReachesTheHello(t *testing.T) {
-	a, b := onOneNetwork(t)
+	a, b := onOneNetwork(t, setup{})
 	req, _, _, err := a.g.newDirectRequest(context.Background(), b.srv.URL, probeTarget, relay.ProxyCall{Method: http.MethodGet, Path: "/api/whoami"})
 	if err != nil {
 		t.Fatal(err)

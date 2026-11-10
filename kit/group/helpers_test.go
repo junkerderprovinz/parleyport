@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -98,8 +99,9 @@ type setup struct {
 	onRemove func(id string)
 	onChange func()
 	// keysOnly opens the group on the keys derived from the secret instead.
-	keysOnly bool
-	byPhrase bool
+	keysOnly  bool
+	byPhrase  bool
+	maxAnswer int
 }
 
 // open starts an instance called name. Its app answers GET /api/whoami with
@@ -139,20 +141,21 @@ func openGroup(t *testing.T, n *node, s setup) *Group {
 		secret, set = nil, testDomain.Keys(secret)
 	}
 	g, err := Open(Config{
-		Domain:       testDomain,
-		Secret:       secret,
-		Keys:         set,
-		Identity:     identity(t, n.name),
-		Self:         Self{Name: n.name, Deployment: "container", DirectURL: n.srv.URL},
-		Relay:        mode,
-		RelayURL:     url,
-		LAN:          s.lan,
-		Store:        n.store,
-		Previous:     s.previous,
-		JoinByPhrase: s.byPhrase,
-		OnRemoved:    func() { n.removed.Add(1) },
-		OnRemove:     s.onRemove,
-		OnChange:     s.onChange,
+		Domain:         testDomain,
+		Secret:         secret,
+		Keys:           set,
+		Identity:       identity(t, n.name),
+		Self:           Self{Name: n.name, Deployment: "container", DirectURL: n.srv.URL},
+		Relay:          mode,
+		RelayURL:       url,
+		LAN:            s.lan,
+		Store:          n.store,
+		Previous:       s.previous,
+		JoinByPhrase:   s.byPhrase,
+		MaxAnswerBytes: s.maxAnswer,
+		OnRemoved:      func() { n.removed.Add(1) },
+		OnRemove:       s.onRemove,
+		OnChange:       s.onChange,
 	}, appRoutes())
 	if err != nil {
 		t.Fatalf("open %s: %v", n.name, err)
@@ -177,6 +180,14 @@ func appRoutes() http.Handler {
 	mux.HandleFunc("GET /api/panic", func(http.ResponseWriter, *http.Request) { panic("boom") })
 	mux.HandleFunc("GET /api/big", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(make([]byte, maxAnswerBytes+1))
+	})
+	mux.HandleFunc("GET /api/size/{n}", func(w http.ResponseWriter, r *http.Request) {
+		n, err := strconv.Atoi(r.PathValue("n"))
+		if err != nil {
+			http.Error(w, "no size", http.StatusBadRequest)
+			return
+		}
+		_, _ = w.Write(bytes.Repeat([]byte("x"), n))
 	})
 	return mux
 }

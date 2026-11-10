@@ -34,9 +34,9 @@ const (
 	// maxDirectRequest caps a direct call as it arrives: MaxCallBytes with
 	// the seal and two rounds of base64 around it.
 	maxDirectRequest = 2 << 20
-	// maxDirectAnswer caps the answer read back, which is maxAnswerBytes
-	// wrapped the same way.
-	maxDirectAnswer = 8 << 20
+	// directSource starts the source of a call that came directly, as
+	// relay.SourceOf tells it.
+	directSource = "direct\x00"
 	// maxDirectCalls is how many direct calls are served at once.
 	maxDirectCalls = 16
 	// maxProbeBacks is how many probes back to a prober run at once.
@@ -225,7 +225,7 @@ func (g *Group) serveDirect(w http.ResponseWriter, r *http.Request) {
 		if host, _, err := net.SplitHostPort(source); err == nil {
 			source = host
 		}
-		status, out = g.handle(relay.WithSource(r.Context(), "direct\x00"+source), call)
+		status, out = g.handle(relay.WithSource(r.Context(), directSource+source), call)
 		if status == relay.StatusDrop {
 			forbid(w)
 			return
@@ -289,7 +289,9 @@ func (g *Group) exchange(ctx context.Context, base, target string, call relay.Pr
 		return relay.ProxyResult{}, nil, "", fmt.Errorf("group: %s is not reachable directly: %w", target, err)
 	}
 	defer resp.Body.Close() //nolint:errcheck // nothing to do about a failed close of a read body
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxDirectAnswer))
+	// The answer comes sealed, with two rounds of base64 around it, which
+	// make it 16/9 as large.
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, int64(2*g.maxAnswer+64<<10)))
 	if err != nil {
 		return relay.ProxyResult{}, nil, "", err
 	}

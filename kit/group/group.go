@@ -19,6 +19,7 @@ package group
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/ed25519"
 	"crypto/tls"
@@ -110,6 +111,11 @@ type Config struct {
 	// OnRemove runs once for every other member taken out here, whether by
 	// Remove or as another instance passed it on.
 	OnRemove func(id string)
+	// MaxAnswerBytes is the most the app may answer a direct call with, and
+	// what this instance reads of a direct answer, 4 MiB when zero. Over the
+	// relay an answer stays within 4 MiB, which is what a relay frame carries
+	// sealed.
+	MaxAnswerBytes int
 	// OnChange runs whenever what Members lists changes: a member comes or
 	// goes, waits, is approved or taken out, or is reached another way. It
 	// runs on a goroutine of its own, never twice at once, a burst of changes
@@ -180,6 +186,7 @@ type Group struct {
 	onRemove  func(id string)
 	onChange  func()
 	byPhrase  bool
+	maxAnswer int
 
 	replay  *relay.ReplayGuard
 	limits  *memberLimits
@@ -264,6 +271,7 @@ func Open(cfg Config, serve http.Handler) (*Group, error) {
 		onRemove:  cfg.OnRemove,
 		onChange:  cfg.OnChange,
 		byPhrase:  cfg.JoinByPhrase,
+		maxAnswer: cmp.Or(cfg.MaxAnswerBytes, maxAnswerBytes),
 		replay:    relay.NewReplayGuard(),
 		limits:    newMemberLimits(),
 		hc:        directClient(),
