@@ -25,7 +25,13 @@
     {"domain": "arrowloop", "purpose": "group", "input": "00070e151c232a31383f464d545b6269", "output": "5b912531c4534a7aae2cee37a97681296878a7d937fd60e3ed7bc576583ae0e9"},
     {"domain": "arrowloop", "purpose": "frame", "input": "", "output": "5fbc791f76a83e89cc7fe704c1d81000dea174d1fc117e12e6b95186cb13be13"},
     {"domain": "arrowloop", "purpose": "frame", "input": "6172726f776c6f6f70", "output": "a47d63041359189155a2476bea0fa65796b9feeb9d97e79035719b615a31bfd5"},
-    {"domain": "arrowloop", "purpose": "frame", "input": "00000000000000000000000000000000", "output": "c862c36d882b43167a55b0e778ac146a518a2c91c912230bfb1b546dd358f965"}
+    {"domain": "arrowloop", "purpose": "frame", "input": "00000000000000000000000000000000", "output": "c862c36d882b43167a55b0e778ac146a518a2c91c912230bfb1b546dd358f965"},
+    {"domain": "fortress", "purpose": "group", "input": "00000000000000000000000000000000", "output": "60ffb51fad2d4de316a715bee92059e06224b98e28170d92e7e8674f9f56a823"},
+    {"domain": "fortress", "purpose": "frame", "input": "00000000000000000000000000000000", "output": "abe36cf6dbdc96636ef7cb3c0de3ffb13bd9344d231cb533d59f729c19cb9307"},
+    {"domain": "fortress", "purpose": "peer-auth", "input": "00000000000000000000000000000000", "output": "93b1936dc5c121cab78adfc95b767e74f3d58041279e5eaa13747568e482e738"},
+    {"domain": "fortress", "purpose": "group", "input": "00070e151c232a31383f464d545b6269", "output": "ca9ac1eda104ed912edf572ab44deed24fadfdf63ae6a579ca64e67fe6465a48"},
+    {"domain": "fortress", "purpose": "frame", "input": "00070e151c232a31383f464d545b6269", "output": "cac07e45f35f7b2136276816748032223b72454040ebd52137c7e9fabbf5bf53"},
+    {"domain": "fortress", "purpose": "peer-auth", "input": "00070e151c232a31383f464d545b6269", "output": "2071ec81a0dbbfe137641343695ec120e2d41bf5e0a0c9488bd5899ed3e48c6a"}
   ],
   "member": {
     "seed": "2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a",

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
@@ -246,7 +245,7 @@ func inRelay(t *testing.T, apps ...string) []*node {
 	t.Helper()
 	url := relayServer(t)
 	var nodes []*node
-	for i := 0; i < len(apps); i += 2 {
+	for i := 0; i+1 < len(apps); i += 2 {
 		nodes = append(nodes, open(t, apps[i], apps[i+1], setup{relay: url}))
 	}
 	for _, n := range nodes {
@@ -284,15 +283,6 @@ func refusalCode(err error) string {
 		return r.Code
 	}
 	return ""
-}
-
-func decode[T any](t *testing.T, raw []byte) T {
-	t.Helper()
-	var v T
-	if err := json.Unmarshal(raw, &v); err != nil {
-		t.Fatalf("%s: %v", raw, err)
-	}
-	return v
 }
 
 // multicast skips a test on a host that cannot join a multicast group.

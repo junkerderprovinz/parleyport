@@ -3,6 +3,7 @@ package fortress
 import (
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/junkerderprovinz/parleyport/kit/group"
 )
@@ -76,4 +77,34 @@ func TestRemovingFromThePairingTakesItOutOfTheFortress(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, "bravo to take alpha-2 out", func() bool { _, ok := memberOf(b.f, a2.id); return !ok })
+}
+
+func TestAMemberKeepsTheAppItNamedFirst(t *testing.T) {
+	url := relayServer(t)
+	a := open(t, "alpha", "alpha-1", setup{relay: url})
+	b := open(t, "bravo", "bravo-1", setup{relay: url})
+	waitFor(t, "both on the relay", func() bool { return len(a.f.Members()) == 1 && len(b.f.Members()) == 1 })
+	meet(t, a, b)
+
+	// bravo-1 comes back claiming to run alpha, which would let it into
+	// alpha's pairing and under alpha's permissions.
+	if err := b.f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	b.app = "alpha"
+	b.f = reopen(t, b, setup{relay: url})
+	a.f.mu.Lock()
+	a.f.described[b.id] = time.Time{}
+	a.f.mu.Unlock()
+	waitFor(t, "alpha to ask bravo again", func() bool {
+		a.f.mu.Lock()
+		defer a.f.mu.Unlock()
+		return a.f.described[b.id].After(time.Now())
+	})
+	if m, _ := memberOf(a.f, b.id); m.App.ID != "bravo" {
+		t.Errorf("alpha lists bravo-1 as %q, want the app it named first", m.App.ID)
+	}
+	if p, ok := pairedWith(a.f.Pairing(), b.id); ok && p.State == group.StateApproved {
+		t.Error("alpha approved bravo-1 in its own pairing")
+	}
 }

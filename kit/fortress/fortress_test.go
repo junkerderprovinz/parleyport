@@ -1,12 +1,14 @@
 package fortress
 
 import (
+	"encoding/hex"
 	"net/http"
 	"net/netip"
 	"slices"
 	"testing"
 
 	"github.com/junkerderprovinz/parleyport/kit/group"
+	"github.com/junkerderprovinz/parleyport/kit/internal/vectors"
 	"github.com/junkerderprovinz/parleyport/kit/keys"
 	"github.com/junkerderprovinz/parleyport/kit/lan"
 )
@@ -188,5 +190,29 @@ func TestANewPhraseStartsTheFortressOver(t *testing.T) {
 	}
 	if len(a.f.permissionList()) != 0 {
 		t.Error("alpha kept the permissions of the fortress it left")
+	}
+}
+
+func TestTheFortressKeysMatchTheVectors(t *testing.T) {
+	v, err := vectors.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := 0
+	for _, d := range v.Derivations {
+		if d.Domain != string(Domain) || d.Purpose != "group" {
+			continue
+		}
+		secret, err := hex.DecodeString(d.Input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := Domain.GroupKey(secret); got != d.Output {
+			t.Errorf("group key of %s = %s, want %s", d.Input, got, d.Output)
+		}
+		found++
+	}
+	if found == 0 {
+		t.Error("the vectors pin no key of the fortress")
 	}
 }

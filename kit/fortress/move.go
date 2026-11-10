@@ -22,7 +22,7 @@ type moveBody struct {
 // instance that was away keeps the app's own phrase until the fortress phrase
 // is entered there.
 func Move(ctx context.Context, old *group.Group, secret []byte) []string {
-	body, err := json.Marshal(moveBody{Secret: secret})
+	body, err := json.Marshal(moveBody{Secret: secret}) //nolint:gosec // G117: it travels sealed to approved siblings only
 	if err != nil {
 		return nil
 	}

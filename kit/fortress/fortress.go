@@ -36,6 +36,7 @@ import (
 	"github.com/junkerderprovinz/parleyport/kit/keys"
 	"github.com/junkerderprovinz/parleyport/kit/lan"
 	"github.com/junkerderprovinz/parleyport/kit/member"
+	"github.com/junkerderprovinz/parleyport/kit/relay"
 	"github.com/junkerderprovinz/parleyport/kit/status"
 )
 
@@ -61,13 +62,13 @@ const (
 	// what the new ones are, keeps the pairing in step and fetches the
 	// permissions of the instances it has not asked for a while.
 	tickEvery = time.Second
-	// describeEvery and syncEvery are how often a member is asked again for
-	// what it is and for its permissions; retryAfter is how soon after a call
-	// that got no good answer.
+	// describeEvery, syncEvery and greetEvery are how often a member is asked
+	// again what it is, for its permissions and, as a sibling, in the
+	// pairing; retryAfter is how soon after a call that got no good answer.
 	describeEvery = 10 * time.Minute
 	syncEvery     = 2 * time.Minute
+	greetEvery    = 10 * time.Minute
 	retryAfter    = 2 * time.Second
-	greetEvery    = 30 * time.Second
 	callTimeout   = 15 * time.Second
 	// maxNames bounds the actions an app offers or uses, and maxText each
 	// name and version, so a member cannot make the others keep much.
@@ -362,7 +363,7 @@ func (f *Fortress) NoteAddress(r *http.Request) {
 // which arrive on the same path. The app mounts it at group.DirectPath.
 func (f *Fortress) DirectHandler() http.Handler {
 	own := f.group.DirectHandler()
-	var paired http.Handler = http.NotFoundHandler()
+	paired := http.NotFoundHandler()
 	if f.pairing != nil {
 		paired = f.pairing.DirectHandler()
 	}
@@ -481,8 +482,8 @@ func (f *Fortress) pairingRemoved(id string) {
 // follow approves in each group the instances of this app that are approved
 // in the other under the same key. Into the pairing goes only a member that
 // said it runs this app; into the fortress any instance the pairing approved,
-// since only this app's instances pair here. A sibling the pairing sees but
-// never heard from is greeted there, so it asks and can be approved.
+// since only this app's instances pair here. Every sibling is greeted in the
+// pairing, so that each knows the other's key there and can approve it.
 func (f *Fortress) follow(now time.Time) {
 	if f.pairing == nil {
 		return
@@ -499,10 +500,11 @@ func (f *Fortress) follow(now time.Time) {
 			continue
 		}
 		sibling := m.State == group.StateApproved && f.appOf(m.ID) == f.app.ID
-		switch {
-		case p.State == group.StateUnknown && sibling && p.Online() && f.due(f.greeted, m.ID, now):
+		if sibling && p.Online() && f.due(f.greeted, m.ID, now) {
 			f.again(f.greeted, m.ID, now.Add(greetEvery))
 			f.greet(m.ID)
+		}
+		switch {
 		case !bytes.Equal(p.Key, m.Key) || len(m.Key) == 0:
 		case p.State == group.StateApproved && m.State == group.StatePending:
 			_ = f.group.Approve(m.ID)
@@ -513,7 +515,7 @@ func (f *Fortress) follow(now time.Time) {
 }
 
 // greet calls sibling id in the pairing. Any signed call pins this instance's
-// key there, and the answer does not matter.
+// key there, so any answer will do; without one it tries again soon.
 func (f *Fortress) greet(id string) {
 	if !f.enter() {
 		return
@@ -522,7 +524,11 @@ func (f *Fortress) greet(id string) {
 		defer f.wg.Done()
 		ctx, cancel := context.WithTimeout(f.ctx, callTimeout)
 		defer cancel()
-		_, _, _ = f.pairing.Call(ctx, id, http.MethodGet, aboutPath, nil)
+		_, _, err := f.pairing.Call(ctx, id, http.MethodGet, aboutPath, nil)
+		var untrusted *relay.UntrustedAnswer
+		if err != nil && !errors.As(err, &untrusted) {
+			f.again(f.greeted, id, time.Now().Add(retryAfter))
+		}
 	}()
 }
 
