@@ -4,14 +4,16 @@
 //
 //	fortress join -dir DIR -app ID -name DEVICE [-relay URL|off] [-lan] [-uses a.b,c.d] < phrase
 //	fortress members -dir DIR [-json] [-wait 5s]
-//	fortress approve -dir DIR [-wait 5s] MEMBER
 //	fortress status -dir DIR [-json] [-lang de] [-wait 5s]
 //	fortress act -dir DIR [-wait 5s] MEMBER ACTION [BODY]
 //
-// MEMBER is a member's id or the id of an app with one instance in reach. DIR
-// holds the secret behind the phrase, readable by its owner alone. Every
-// command but join joins the fortress for as long as it runs, waits up to
-// -wait for the members to show, and leaves.
+// MEMBER is a member's id or the id of an app with one instance in reach.
+// join keeps no phrase: DIR holds the plugin's member key and the keys the
+// fortress derives for itself, readable by its owner alone, which open no
+// app's pairing and lead back to no phrase. Whoever takes DIR is this one
+// member at most, until somebody removes it. After the phrase changes, the
+// plugin joins again with the new one. Every command but join takes part for
+// as long as it runs, waits up to -wait for the members to show, and leaves.
 package main
 
 import (
@@ -32,6 +34,7 @@ import (
 
 	"github.com/junkerderprovinz/parleyport/kit/fortress"
 	"github.com/junkerderprovinz/parleyport/kit/group"
+	"github.com/junkerderprovinz/parleyport/kit/keys"
 	"github.com/junkerderprovinz/parleyport/kit/lan"
 	"github.com/junkerderprovinz/parleyport/kit/member"
 	"github.com/junkerderprovinz/parleyport/kit/phrase"
@@ -72,7 +75,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 
 func dispatch(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("%w: fortress join|members|approve|status|act -dir DIR", errUsage)
+		return fmt.Errorf("%w: fortress join|members|status|act -dir DIR", errUsage)
 	}
 	verb, args := args[0], args[1:]
 	fs := flag.NewFlagSet(verb, flag.ContinueOnError)
@@ -105,11 +108,6 @@ func dispatch(ctx context.Context, args []string, stdin io.Reader, stdout io.Wri
 		return join(*dir, settings{App: *app, Name: *name, Relay: *relayURL, LAN: *useLAN, Uses: list}, stdin)
 	case "members":
 		return withFortress(ctx, *dir, *wait, func(f *fortress.Fortress) error { return members(f, stdout, *asJSON) })
-	case "approve":
-		if len(rest) != 1 {
-			return fmt.Errorf("%w: approve MEMBER", errUsage)
-		}
-		return withFortress(ctx, *dir, *wait, func(f *fortress.Fortress) error { return approve(ctx, f, rest[0], *wait) })
 	case "status":
 		return withFortress(ctx, *dir, *wait, func(f *fortress.Fortress) error { return statuses(ctx, f, stdout, *lang, *asJSON) })
 	case "act":
@@ -125,16 +123,34 @@ func dispatch(ctx context.Context, args []string, stdin io.Reader, stdout io.Wri
 	return fmt.Errorf("%w: unknown command %q", errUsage, verb)
 }
 
-// settings is what join keeps in DIR. Seed and Secret are the member key and
-// what the phrase encodes.
+// settings is what join keeps in DIR: the plugin's member key and the keys of
+// the fortress's own domain, never the phrase.
 type settings struct {
-	App    string   `json:"app"`
-	Name   string   `json:"name"`
-	Relay  string   `json:"relay,omitempty"`
-	LAN    bool     `json:"lan,omitempty"`
-	Uses   []string `json:"uses,omitempty"`
-	Seed   string   `json:"seed"`
-	Secret string   `json:"secret"`
+	App      string   `json:"app"`
+	Name     string   `json:"name"`
+	Relay    string   `json:"relay,omitempty"`
+	LAN      bool     `json:"lan,omitempty"`
+	Uses     []string `json:"uses,omitempty"`
+	Seed     string   `json:"seed"`
+	Group    string   `json:"group"`
+	Frame    string   `json:"frame"`
+	PeerAuth string   `json:"peerAuth"`
+}
+
+func (s settings) keys() (keys.Set, error) {
+	frame, err := hex.DecodeString(s.Frame)
+	if err != nil {
+		return keys.Set{}, err
+	}
+	peerAuth, err := hex.DecodeString(s.PeerAuth)
+	if err != nil {
+		return keys.Set{}, err
+	}
+	set := keys.Set{Group: s.Group, Frame: frame, PeerAuth: peerAuth}
+	if !set.Complete() {
+		return keys.Set{}, errors.New("the keys are incomplete")
+	}
+	return set, nil
 }
 
 func join(dir string, s settings, stdin io.Reader) error {
@@ -146,11 +162,14 @@ func join(dir string, s settings, stdin io.Reader) error {
 	if err != nil {
 		return err
 	}
+	set := fortress.Domain.Keys(secret)
+	clear(secret)
 	id, err := member.NewIdentity(member.KindInstance)
 	if err != nil {
 		return err
 	}
-	s.Seed, s.Secret = hex.EncodeToString(id.Seed()), hex.EncodeToString(secret)
+	s.Seed = hex.EncodeToString(id.Seed())
+	s.Group, s.Frame, s.PeerAuth = set.Group, hex.EncodeToString(set.Frame), hex.EncodeToString(set.PeerAuth)
 	// Opening it once, off the network, checks the app id and the actions
 	// before anything is written.
 	offline := s
@@ -165,25 +184,22 @@ func join(dir string, s settings, stdin io.Reader) error {
 	if err := leave(); err != nil {
 		return err
 	}
-	raw, err := json.MarshalIndent(s, "", "  ") //nolint:gosec // G117: the file is where the secret is kept
+	raw, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return err
 	}
 	return writeFile(filepath.Join(dir, configFile), raw)
 }
 
-// writeFile replaces path with raw, readable by its owner alone, so that a
-// crash leaves the old file or the new one and never half of either.
+// writeFile replaces path with raw, so that a crash leaves the old file or the
+// new one and never half of either. CreateTemp makes the file readable by its
+// owner alone; on a FAT stick the mount decides.
 func writeFile(path string, raw []byte) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".fortress-*")
 	if err != nil {
 		return err
 	}
 	defer func() { _ = os.Remove(tmp.Name()) }() //nolint:gosec // G703: a file CreateTemp just made
-	if err := tmp.Chmod(0o600); err != nil && !errors.Is(err, errors.ErrUnsupported) {
-		_ = tmp.Close()
-		return err
-	}
 	if _, err := tmp.Write(raw); err != nil {
 		_ = tmp.Close()
 		return err
@@ -218,7 +234,7 @@ func open(dir string, s settings, state string) (*fortress.Fortress, func() erro
 	if err != nil {
 		return nil, nil, fmt.Errorf("%s is damaged: %w", filepath.Join(dir, configFile), err)
 	}
-	secret, err := hex.DecodeString(s.Secret)
+	set, err := s.keys()
 	if err != nil {
 		return nil, nil, fmt.Errorf("%s is damaged: %w", filepath.Join(dir, configFile), err)
 	}
@@ -228,7 +244,7 @@ func open(dir string, s settings, state string) (*fortress.Fortress, func() erro
 	}
 	cfg := fortress.Config{
 		App:      fortress.App{ID: s.App, Name: s.App},
-		Secret:   secret,
+		Keys:     set,
 		Identity: id,
 		Self:     group.Self{Name: s.Name, Deployment: "plugin"},
 		Store:    fileStore(state),
@@ -281,8 +297,8 @@ func withFortress(ctx context.Context, dir string, wait time.Duration, do func(*
 	return errors.Join(do(f), leave())
 }
 
-// settled waits until the relay lists the members and every approved member
-// in reach said what it is, or until wait ran out.
+// settled waits until the relay lists the members and every instance in reach
+// said what it is, or until wait ran out.
 func settled(ctx context.Context, f *fortress.Fortress, relayed bool, wait time.Duration) {
 	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
@@ -307,7 +323,7 @@ func settled(ctx context.Context, f *fortress.Fortress, relayed bool, wait time.
 
 func described(f *fortress.Fortress) bool {
 	for _, m := range f.Members() {
-		if m.Kind == member.KindInstance && m.State == group.StateApproved && m.Online() && m.App.ID == "" {
+		if m.Kind == member.KindInstance && m.Online() && m.App.ID == "" {
 			return false
 		}
 	}
@@ -356,36 +372,17 @@ func members(f *fortress.Fortress, w io.Writer, asJSON bool) error {
 	return tw.Flush()
 }
 
-// approve approves member id once it asked here, waiting for that up to
-// wait.
-func approve(ctx context.Context, f *fortress.Fortress, id string, wait time.Duration) error {
-	ctx, cancel := context.WithTimeout(ctx, wait)
-	defer cancel()
-	for {
-		for _, m := range f.Members() {
-			if m.ID == id && m.State != group.StateUnknown {
-				return f.Approve(id)
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("%s did not ask to be approved here", id)
-		case <-time.After(100 * time.Millisecond):
-		}
-	}
-}
-
 type statusOut struct {
 	memberOut
 	Report *status.Report `json:"report,omitempty"`
 	Error  string         `json:"error,omitempty"`
 }
 
-// statuses reads the status of every approved instance in reach.
+// statuses reads the status of every instance in reach.
 func statuses(ctx context.Context, f *fortress.Fortress, w io.Writer, lang string, asJSON bool) error {
 	out := []statusOut{}
 	for _, m := range f.Members() {
-		if m.Kind != member.KindInstance || m.State != group.StateApproved || !m.Online() {
+		if m.Kind != member.KindInstance || !m.Online() {
 			continue
 		}
 		s := statusOut{memberOut: outOf(m)}
@@ -431,20 +428,20 @@ func act(ctx context.Context, f *fortress.Fortress, w io.Writer, target, action 
 }
 
 // resolve finds the member target names: its id, or an app with exactly one
-// approved instance in reach.
+// instance in reach.
 func resolve(f *fortress.Fortress, target string) (string, error) {
 	var found []string
 	for _, m := range f.Members() {
 		if m.ID == target {
 			return m.ID, nil
 		}
-		if m.App.ID == target && m.State == group.StateApproved && m.Online() {
+		if m.App.ID == target && m.Online() {
 			found = append(found, m.ID)
 		}
 	}
 	switch len(found) {
 	case 0:
-		return "", fmt.Errorf("no approved member %s is in reach", target)
+		return "", fmt.Errorf("no member %s is in reach", target)
 	case 1:
 		return found[0], nil
 	}

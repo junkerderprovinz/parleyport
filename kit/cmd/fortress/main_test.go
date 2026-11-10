@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -13,12 +15,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"go.uber.org/goleak"
 
 	"github.com/junkerderprovinz/parleyport/kit/fortress"
 	"github.com/junkerderprovinz/parleyport/kit/group"
+	"github.com/junkerderprovinz/parleyport/kit/keys"
 	"github.com/junkerderprovinz/parleyport/kit/member"
 	"github.com/junkerderprovinz/parleyport/kit/phrase"
 	"github.com/junkerderprovinz/parleyport/kit/relay"
@@ -127,18 +129,6 @@ func cli(t *testing.T, stdin string, args ...string) (int, string, string) {
 	return code, out.String(), errOut.String()
 }
 
-func waitFor(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %s", what)
-}
-
 func TestAPluginJoinsReadsAndActs(t *testing.T) {
 	url := relayServer(t)
 	a := openApp(t, url)
@@ -151,15 +141,7 @@ func TestAPluginJoinsReadsAndActs(t *testing.T) {
 	if code, _, stderr := cli(t, words+"\n", "join", "-dir", dir, "-app", "watcher", "-name", "tower", "-relay", url, "-uses", "files.drop"); code != 0 {
 		t.Fatalf("join: %d %s", code, stderr)
 	}
-	if runtime.GOOS != "windows" {
-		info, err := os.Stat(filepath.Join(dir, configFile))
-		if err != nil || info.Mode().Perm() != 0o600 {
-			t.Errorf("the file with the secret is %v %v, want 0600", info.Mode(), err)
-		}
-	}
-
-	// The plugin shows up at the app, which approves it, and the plugin
-	// approves the app.
+	// The phrase is all the plugin needs: it is a member at once.
 	code, out, stderr := cli(t, "", "members", "-dir", dir, "-json", "-wait", "3s")
 	if code != 0 {
 		t.Fatalf("members: %d %s", code, stderr)
@@ -167,21 +149,6 @@ func TestAPluginJoinsReadsAndActs(t *testing.T) {
 	var listed []memberOut
 	if err := json.Unmarshal([]byte(out), &listed); err != nil || len(listed) != 1 || listed[0].ID != a.id {
 		t.Fatalf("members lists %s %v, want alpha-1", out, err)
-	}
-	var plugin string
-	waitFor(t, "the plugin to ask the app", func() bool {
-		for _, m := range a.f.Members() {
-			if m.State == group.StatePending {
-				plugin = m.ID
-			}
-		}
-		return plugin != ""
-	})
-	if err := a.f.Approve(plugin); err != nil {
-		t.Fatal(err)
-	}
-	if code, _, stderr := cli(t, "", "approve", "-dir", dir, "-wait", "10s", a.id); code != 0 {
-		t.Fatalf("approve: %d %s", code, stderr)
 	}
 
 	code, out, stderr = cli(t, "", "status", "-dir", dir, "-json", "-wait", "10s")
@@ -209,6 +176,75 @@ func TestAPluginJoinsReadsAndActs(t *testing.T) {
 	if code != 1 || !strings.Contains(stderr, "switched off") {
 		t.Errorf("act with the permission off: %d %s", code, stderr)
 	}
+}
+
+func TestTheJoinedPluginKeepsNoPhrase(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "plugin")
+	words, err := phrase.Encode(secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, _, stderr := cli(t, words+"\n", "join", "-dir", dir, "-app", "watcher", "-name", "tower", "-relay", "off"); code != 0 {
+		t.Fatalf("join: %d %s", code, stderr)
+	}
+	if code, _, stderr := cli(t, "", "members", "-dir", dir, "-wait", "1s"); code != 0 {
+		t.Fatalf("members: %d %s", code, stderr)
+	}
+
+	var kept []string
+	for _, name := range []string{configFile, stateFile} {
+		raw, err := os.ReadFile(filepath.Join(dir, name)) //nolint:gosec // G304: the test's own directory
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+		kept = append(kept, string(raw))
+	}
+	all := strings.ToLower(strings.Join(kept, "\n"))
+	fortressKeys := fortress.Domain.Keys(secret)
+	if !strings.Contains(all, hex.EncodeToString(fortressKeys.Frame)) {
+		t.Error("the plugin did not keep the fortress's frame key, which it needs")
+	}
+	if strings.Contains(all, hex.EncodeToString(secret)) || strings.Contains(all, strings.Fields(words)[0]+" "+strings.Fields(words)[1]) {
+		t.Error("the plugin kept the phrase")
+	}
+
+	// No other app's keys are among what is kept, nor follow from it: every
+	// value taken as a secret derives other keys than the phrase does.
+	app := keys.Domain("alpha")
+	theirs := app.Keys(secret)
+	for _, k := range [][]byte{[]byte(theirs.Group), theirs.Frame, theirs.PeerAuth} {
+		if strings.Contains(all, hex.EncodeToString(k)) || strings.Contains(all, string(k)) {
+			t.Errorf("the plugin kept a key of another app: %x", k)
+		}
+	}
+	for _, v := range hexValues(all) {
+		raw, _ := hex.DecodeString(v)
+		for _, candidate := range [][]byte{raw, []byte(v)} {
+			if got := app.Keys(candidate); got.Group == theirs.Group || bytes.Equal(got.Frame, theirs.Frame) {
+				t.Errorf("another app's keys follow from the kept value %s", v)
+			}
+		}
+	}
+
+	if runtime.GOOS != "windows" {
+		for name, want := range map[string]os.FileMode{dir: 0o700, filepath.Join(dir, configFile): 0o600} {
+			info, err := os.Stat(name)
+			if err != nil || info.Mode().Perm() != want {
+				t.Errorf("%s is %v %v, want %v", name, info.Mode().Perm(), err, want)
+			}
+		}
+	}
+}
+
+// hexValues are the runs of hex digits in s long enough to be a key.
+func hexValues(s string) []string {
+	var out []string
+	for _, f := range strings.FieldsFunc(s, func(r rune) bool { return !strings.ContainsRune("0123456789abcdef", r) }) {
+		if len(f) >= 32 {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 func TestUsage(t *testing.T) {
