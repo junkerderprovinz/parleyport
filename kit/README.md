@@ -10,4 +10,6 @@ Apps that pair their instances import it for the pieces they would otherwise eac
 
 `cmd/fortress` is a small command for apps without Go code, such as a plugin written in shell: it joins a fortress with the phrase, lists the members, reads their status and asks one of them to run an action.
 
+`cmd/notify` does the same for messages: it sends an event to the channels in a file, tries one channel, and shows and saves the channels for a settings page with every secret masked. Both are attached to each ParleyPort release for linux/amd64 and arm64.
+
 It is versioned apart from the server, with tags of the form `kit/vX.Y.Z`. Until the first apps run on it, the version stays at 0.x and the API may still change.
