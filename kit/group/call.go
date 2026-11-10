@@ -190,6 +190,11 @@ func (g *Group) confirm(id, url, name, deployment string, now time.Time) {
 	}
 	a.confirmed, a.noted = now, now
 	delete(g.failed, url)
+	if rec, ok := g.st.Members[id]; ok && rec.Direct != url {
+		rec.Direct = url
+		g.st.Members[id] = rec
+		g.dirty = true
+	}
 }
 
 // directFailed records that a call to url got no answer. A call whose caller

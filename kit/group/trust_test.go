@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/junkerderprovinz/parleyport/kit/lan"
 	"github.com/junkerderprovinz/parleyport/kit/member"
 	"github.com/junkerderprovinz/parleyport/kit/relay"
 )
@@ -550,5 +551,24 @@ func TestARemovedKeyStaysOutWhenThePhraseIsEnough(t *testing.T) {
 	}
 	if _, _, err := call(t, a, b, http.MethodGet, "/api/whoami", nil); err == nil {
 		t.Error("alpha took an answer from the key it removed")
+	}
+}
+func TestAnAnswerPinsTheInstanceThatSignedIt(t *testing.T) {
+	la := lan.New(lan.Config{})
+	t.Cleanup(func() { _ = la.Close() })
+	a := open(t, "alpha", setup{lan: la, noListener: true})
+	b := open(t, "bravo", setup{})
+	la.Observe(tagged(a.g, lan.Peer{ID: b.id, Name: "bravo", URL: b.srv.URL, Deployment: "container"}))
+
+	_, _, _ = call(t, a, b, http.MethodGet, "/api/whoami", nil)
+	if m, _ := memberOf(a.g, b.id); m.State != StatePending || !bytes.Equal(m.Key, identity(t, "bravo").Public()) {
+		t.Errorf("alpha lists %+v, want bravo waiting under the key its answer was signed with", m)
+	}
+	if err := a.g.Remove(b.id); err != nil {
+		t.Fatal(err)
+	}
+	_, _, _ = call(t, a, b, http.MethodGet, "/api/whoami", nil)
+	if _, listed := memberOf(a.g, b.id); listed {
+		t.Error("an answer brought back an instance alpha took out")
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -103,6 +104,10 @@ type setup struct {
 	byPhrase  bool
 	maxAnswer int
 	kinds     []member.Kind
+	ports     []int
+	// noListener opens the instance the way a desktop app runs: it calls
+	// others directly but takes no direct calls itself.
+	noListener bool
 }
 
 // open starts an instance called name. Its app answers GET /api/whoami with
@@ -141,12 +146,16 @@ func openGroup(t *testing.T, n *node, s setup) *Group {
 	if s.keysOnly {
 		secret, set = nil, testDomain.Keys(secret)
 	}
+	direct := n.srv.URL
+	if s.noListener {
+		direct = ""
+	}
 	g, err := Open(Config{
 		Domain:         testDomain,
 		Secret:         secret,
 		Keys:           set,
 		Identity:       identity(t, n.name),
-		Self:           Self{Name: n.name, Deployment: "container", DirectURL: n.srv.URL},
+		Self:           Self{Name: n.name, Deployment: "container", DirectURL: direct},
 		Relay:          mode,
 		RelayURL:       url,
 		LAN:            s.lan,
@@ -155,6 +164,7 @@ func openGroup(t *testing.T, n *node, s setup) *Group {
 		JoinByPhrase:   s.byPhrase,
 		MaxAnswerBytes: s.maxAnswer,
 		Kinds:          s.kinds,
+		Ports:          s.ports,
 		OnRemoved:      func() { n.removed.Add(1) },
 		OnRemove:       s.onRemove,
 		OnChange:       s.onChange,
@@ -269,6 +279,20 @@ func tagged(g *Group, p lan.Peer) lan.Peer {
 	p.Sent = time.Now().Unix()
 	p.Tag = announceTag(g.peerAuth, p)
 	return p
+}
+
+// testPort is the port of a test server's address.
+func testPort(t *testing.T, addr string) int {
+	t.Helper()
+	_, port, err := net.SplitHostPort(strings.TrimPrefix(addr, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
 }
 
 // httpDeadAddress is an address on the loopback that nothing answers on.

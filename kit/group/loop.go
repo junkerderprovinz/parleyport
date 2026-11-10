@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
@@ -93,19 +94,29 @@ func (g *Group) greet(ctx context.Context, now time.Time) {
 	wg.Wait()
 }
 
-// refresh probes every address on record that has not answered for a while,
-// which keeps a member reached by address alone in the list and puts an
-// address that failed back to use once it answers again.
+// refresh probes every address on record and every address the app keeps
+// that has not answered for a while, which keeps a member reached by address
+// alone in the list and puts an address that failed back to use once it
+// answers again.
 func (g *Group) refresh(ctx context.Context, now time.Time) {
-	var due []string
 	g.mu.Lock()
+	fresh := map[string]bool{}
+	urls := slices.Clone(g.st.Known)
 	for _, a := range g.addrs {
-		if a.url != "" && now.Sub(a.confirmed) >= addrTTL/2 {
-			due = append(due, a.url)
+		if a.url == "" {
+			continue
+		}
+		urls = append(urls, a.url)
+		if now.Sub(a.confirmed) < addrTTL/2 {
+			fresh[a.url] = true
 		}
 	}
 	g.mu.Unlock()
-	for _, url := range due {
+	slices.Sort(urls)
+	for _, url := range slices.Compact(urls) {
+		if fresh[url] {
+			continue
+		}
 		pctx, cancel := context.WithTimeout(ctx, sweepTimeout)
 		if _, err := g.probe(pctx, url); err != nil {
 			g.directFailed(pctx, url)

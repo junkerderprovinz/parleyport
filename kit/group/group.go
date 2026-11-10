@@ -116,6 +116,10 @@ type Config struct {
 	// whatever it says; empty takes every kind. A member of another kind is
 	// neither listed nor pinned, and its calls are refused.
 	Kinds []member.Kind
+	// Ports are where the app's instances take direct calls, besides the port
+	// of Self.DirectURL. An address that is named rather than announced is
+	// dialed only on these ports.
+	Ports []int
 	// MaxAnswerBytes is the most the app may answer a direct call with, and
 	// what this instance reads of a direct answer, 4 MiB when zero. Over the
 	// relay an answer stays within 4 MiB, which is what a relay frame carries
@@ -192,6 +196,7 @@ type Group struct {
 	onChange  func()
 	byPhrase  bool
 	kinds     []member.Kind
+	ports     []string
 	maxAnswer int
 
 	replay  *relay.ReplayGuard
@@ -278,6 +283,7 @@ func Open(cfg Config, serve http.Handler) (*Group, error) {
 		onChange:  cfg.OnChange,
 		byPhrase:  cfg.JoinByPhrase,
 		kinds:     slices.Clone(cfg.Kinds),
+		ports:     portNames(cfg.Ports),
 		maxAnswer: cmp.Or(cfg.MaxAnswerBytes, maxAnswerBytes),
 		replay:    relay.NewReplayGuard(),
 		limits:    newMemberLimits(),
@@ -297,6 +303,12 @@ func Open(cfg Config, serve http.Handler) (*Group, error) {
 		arrived:   map[string]time.Time{},
 		ctx:       ctx,
 		cancel:    cancel,
+	}
+	now := time.Now()
+	for id, rec := range st.Members {
+		if rec.Direct != "" {
+			g.addrs[id] = &remoteAddr{url: rec.Direct, name: rec.Name, deployment: rec.Deployment, noted: now}
+		}
 	}
 	url, err := relayURL(cfg)
 	if err == nil && url != "" {

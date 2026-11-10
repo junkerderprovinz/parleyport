@@ -70,6 +70,8 @@ type state struct {
 	Revoked map[string]time.Time `json:"revoked,omitempty"`
 	// Address is this instance's direct address as NoteAddress learned it.
 	Address string `json:"address,omitempty"`
+	// Known are the addresses SetAddresses keeps.
+	Known []string `json:"known,omitempty"`
 }
 
 // record is a member whose key is pinned here.
@@ -84,6 +86,9 @@ type record struct {
 	Name       string    `json:"name,omitempty"`
 	Deployment string    `json:"deployment,omitempty"`
 	Address    string    `json:"address,omitempty"`
+	// Direct is where the member last answered a direct call, tried first
+	// when the group opens again.
+	Direct string `json:"direct,omitempty"`
 }
 
 // seenAs records what m says of the member it is for and reports whether the
@@ -398,27 +403,41 @@ func waitingLocked(st *state) int {
 }
 
 // trustsAnswer reports whether an answer signed by key may count as instance
-// target's: target is approved here as an instance, under that key. Where the
-// phrase is enough, an instance not pinned yet is pinned by its answer, as
-// long as its id and key were not taken out.
+// target's: target is approved here as an instance, under that key. An
+// instance not pinned yet is pinned by its answer.
 func (g *Group) trustsAnswer(target string, key ed25519.PublicKey) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	rec, ok := g.st.Members[target]
-	if ok || !g.byPhrase {
-		return ok && rec.Approved && rec.Kind == member.KindInstance && bytes.Equal(rec.Key, key)
+	if !ok {
+		rec, ok = g.pinAnswerLocked(target, key)
 	}
-	_, removed := g.st.Removed[target]
-	_, revoked := g.st.Revoked[hex.EncodeToString(key)]
-	if removed || revoked || !claimFits(target, member.KindInstance, key) || len(g.st.Members) >= maxPinned {
-		return false
+	return ok && rec.Approved && rec.Kind == member.KindInstance && bytes.Equal(rec.Key, key)
+}
+
+// pinAnswerLocked pins key for instance id, as an answer id signed with it
+// shows, so an instance that cannot be called back still learns of the other:
+// approved where the phrase is enough, else waiting for approval. It pins
+// nothing that was taken out, a key that speaks for another member, or past
+// the room there is.
+func (g *Group) pinAnswerLocked(id string, key []byte) (record, bool) {
+	st := &g.st
+	_, removed := st.Removed[id]
+	_, revoked := st.Revoked[hex.EncodeToString(key)]
+	if removed || revoked || !claimFits(id, member.KindInstance, key) || len(st.Members) >= maxPinned ||
+		(!g.byPhrase && waitingLocked(st) >= maxWaiting) {
+		return record{}, false
 	}
-	for _, rec := range g.st.Members {
+	for _, rec := range st.Members {
 		if bytes.Equal(rec.Key, key) {
-			return false
+			return record{}, false
 		}
 	}
-	return g.pinLocked(target, record{Kind: member.KindInstance, Key: bytes.Clone(key), Approved: true, Used: time.Now()}, "") == nil
+	rec := record{Kind: member.KindInstance, Key: bytes.Clone(key), Approved: g.byPhrase, Used: time.Now()}
+	if g.pinLocked(id, rec, "") != nil {
+		return record{}, false
+	}
+	return rec, true
 }
 
 // Approve lets member id in, here and, passed on, on every other instance of

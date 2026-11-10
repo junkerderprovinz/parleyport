@@ -13,7 +13,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -287,25 +286,27 @@ func (g *Group) exchange(ctx context.Context, base, target string, call relay.Pr
 	}
 	resp, err := g.hc.Do(req)
 	if err != nil {
-		return relay.ProxyResult{}, nil, "", fmt.Errorf("group: %s is not reachable directly: %w", target, err)
+		return relay.ProxyResult{}, nil, "", fmt.Errorf("%w directly at %s: %w", ErrUnreachable, base, err)
 	}
 	defer resp.Body.Close() //nolint:errcheck // nothing to do about a failed close of a read body
 	// The answer comes sealed, with two rounds of base64 around it, which
 	// make it 16/9 as large.
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, int64(2*g.maxAnswer+64<<10)))
-	if err != nil {
-		return relay.ProxyResult{}, nil, "", err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return relay.ProxyResult{}, nil, "", fmt.Errorf("group: %s refused the direct call with HTTP %d", target, resp.StatusCode)
+	switch {
+	case err != nil:
+		return relay.ProxyResult{}, nil, "", fmt.Errorf("%w directly at %s: %w", ErrUnreachable, base, err)
+	case resp.StatusCode == http.StatusServiceUnavailable:
+		return relay.ProxyResult{}, nil, "", fmt.Errorf("%w directly at %s: it is busy", ErrUnreachable, base)
+	case resp.StatusCode != http.StatusOK:
+		return relay.ProxyResult{}, nil, "", fmt.Errorf("%w: %s refused the direct call with HTTP %d", ErrStranger, base, resp.StatusCode)
 	}
 	var out relay.ProxyResponse
 	if err := json.Unmarshal(raw, &out); err != nil || out.RequestID != id {
-		return relay.ProxyResult{}, nil, "", fmt.Errorf("group: %s answered unreadably", target)
+		return relay.ProxyResult{}, nil, "", fmt.Errorf("%w: %s answered unreadably", ErrStranger, base)
 	}
 	res, err := relay.OpenResult(g.frameKey, id, out.Sealed)
 	if err != nil {
-		return relay.ProxyResult{}, nil, "", fmt.Errorf("group: %s answered unreadably: %w", target, err)
+		return relay.ProxyResult{}, nil, "", fmt.Errorf("%w: %s answered unreadably: %w", ErrStranger, base, err)
 	}
 	return res, sealed, id, nil
 }
@@ -329,8 +330,9 @@ type probeIntro struct {
 	URL string `json:"url,omitempty"`
 }
 
-// probe asks whoever answers at base who it is, and records it as reachable
-// there when a member of the group answered under its own key.
+// probe asks whoever answers at base who it is. A member of the group that
+// answers under its own key is pinned by that answer and recorded as
+// reachable there.
 func (g *Group) probe(ctx context.Context, base string) (hello, error) {
 	intro, err := json.Marshal(probeIntro{URL: g.directURL()})
 	if err != nil {
@@ -341,27 +343,35 @@ func (g *Group) probe(ctx context.Context, base string) (hello, error) {
 		return hello{}, err
 	}
 	var h hello
-	if res.Status != http.StatusOK || json.Unmarshal(res.Body, &h) != nil || !relay.ValidInstanceID(h.ID) || h.ID == g.self ||
+	if res.Status != http.StatusOK || json.Unmarshal(res.Body, &h) != nil || !relay.ValidInstanceID(h.ID) ||
 		!relay.VerifyResult(g.signing, id, h.ID, sealed, res) {
-		return hello{}, fmt.Errorf("group: %s answered a probe unreadably", base)
+		return hello{}, fmt.Errorf("%w: %s answered a probe unreadably", ErrStranger, base)
 	}
+	if h.ID == g.self {
+		return hello{}, ErrSelf
+	}
+	g.mu.Lock()
+	if _, pinned := g.st.Members[h.ID]; !pinned {
+		g.pinAnswerLocked(h.ID, res.Key)
+	}
+	g.mu.Unlock()
 	g.confirm(h.ID, base, h.Name, h.Deployment, time.Now())
 	return h, nil
 }
 
-// probeBack probes a prober at the address it named. Only a member not yet
-// reachable is probed back, so two instances stop after one round instead of
-// probing each other for ever.
+// probeBack probes a prober at the address it named, if that address is
+// nearby. Only a member not yet reachable is probed back, so two instances
+// stop after one round instead of probing each other for ever.
 func (g *Group) probeBack(call relay.ProxyCall) {
 	var in probeIntro
 	if call.Kind != member.KindInstance || !claimFits(call.From, call.Kind, call.Key) || json.Unmarshal(call.Body, &in) != nil {
 		return
 	}
-	u, err := url.Parse(strings.TrimSpace(in.URL))
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || g.confirmedDirect(call.From, time.Now()) {
+	base, ok := g.nearby(in.URL)
+	if !ok || g.confirmedDirect(call.From, time.Now()) {
 		return
 	}
-	g.noteAddress(call.From, u.String())
+	g.noteAddress(call.From, base)
 	if !g.enter() {
 		return
 	}
@@ -376,6 +386,6 @@ func (g *Group) probeBack(call relay.ProxyCall) {
 		defer func() { <-g.probing }()
 		ctx, cancel := context.WithTimeout(g.ctx, 2*sweepTimeout)
 		defer cancel()
-		_, _ = g.probe(ctx, u.String())
+		_, _ = g.probe(ctx, base)
 	}()
 }

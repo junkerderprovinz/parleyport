@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -220,7 +221,7 @@ func TestTheSweepFindsAMemberMulticastMisses(t *testing.T) {
 	la, lb := lan.New(lan.Config{}), lan.New(lan.Config{})
 	t.Cleanup(func() { _ = la.Close(); _ = lb.Close() })
 	a := open(t, "alpha", setup{lan: la})
-	b := open(t, "bravo", setup{lan: lb})
+	b := open(t, "bravo", setup{lan: lb, ports: []int{testPort(t, a.srv.URL)}})
 
 	a.g.sweepWith(context.Background(), []string{httpDeadAddress(t), b.srv.URL})
 	if m, _ := memberOf(a.g, b.id); !m.Direct || m.Name != "bravo" {
@@ -233,6 +234,42 @@ func TestTheSweepFindsAMemberMulticastMisses(t *testing.T) {
 	if id := whoami(t, b, a); id != b.id {
 		t.Errorf("alpha's app saw %q, want bravo", id)
 	}
+}
+
+func TestAProberIsProbedBackOnlyOnANearbyAddress(t *testing.T) {
+	la := lan.New(lan.Config{})
+	t.Cleanup(func() { _ = la.Close() })
+	a := open(t, "alpha", setup{})
+	b := open(t, "bravo", setup{lan: la, ports: []int{testPort(t, a.srv.URL)}})
+	port := strconv.Itoa(testPort(t, a.srv.URL))
+	for _, named := range []string{
+		"http://203.0.113.7:" + port,
+		"http://localhost:" + port,
+		"http://127.0.0.1:1",
+		"ftp://127.0.0.1:" + port,
+		"http://user@127.0.0.1:" + port,
+	} {
+		intro, _ := json.Marshal(probeIntro{URL: named})
+		req, _, _, err := a.g.newDirectRequest(context.Background(), b.srv.URL, probeTarget, relay.ProxyCall{Method: http.MethodGet, Path: helloPath, Body: intro})
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(req.Body)
+		if w := serveDirect(b.g, req, body); w.Code != http.StatusOK {
+			t.Fatalf("a probe naming %s = %d, want the hello", named, w.Code)
+		}
+		b.g.mu.Lock()
+		kept := b.g.addrs[a.id]
+		b.g.mu.Unlock()
+		if kept != nil {
+			t.Errorf("bravo kept %s, which a prober named, as alpha's address", kept.url)
+		}
+	}
+	intro, _ := json.Marshal(probeIntro{URL: a.srv.URL})
+	req, _, _, _ := a.g.newDirectRequest(context.Background(), b.srv.URL, probeTarget, relay.ProxyCall{Method: http.MethodGet, Path: helloPath, Body: intro})
+	body, _ := io.ReadAll(req.Body)
+	serveDirect(b.g, req, body)
+	waitFor(t, "bravo to probe alpha back on its port", func() bool { m, _ := memberOf(b.g, a.id); return m.Direct })
 }
 
 func TestAProbeOnlyReachesTheHello(t *testing.T) {
