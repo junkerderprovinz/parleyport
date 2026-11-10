@@ -57,6 +57,23 @@ jobs:
           go vet ./...
           go test -race -count=1 ./...
 
+      # The same build release.yml attaches to every release.
+      - name: cmd/fortress builds for linux/amd64 and arm64
+        working-directory: kit
+        run: |
+          set -eu
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags="-s -w" \
+              -o "/tmp/fortress-linux-${arch}" ./cmd/fortress
+          done
+          file /tmp/fortress-linux-arm64 | grep -q "aarch64"
+          set +e
+          out="$(/tmp/fortress-linux-amd64 status -dir /tmp/no-fortress -json 2>&1)"
+          code=$?
+          set -e
+          echo "exit ${code}: ${out}"
+          [ "$code" -eq 1 ] && echo "$out" | grep -q "holds no fortress yet"
+
       - name: Native boot smoke
         run: |
           set -euo pipefail

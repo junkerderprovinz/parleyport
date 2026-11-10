@@ -2,8 +2,9 @@ name: Release
 
 # A vX.Y.Z tag builds the image for amd64 and arm64, boots both, pushes the
 # exact version to GHCR and Docker Hub, creates the GitHub release from
-# .github/release-notes/<tag>.md and only then moves latest, X.Y and X, so
-# `docker pull ...:latest` never names a version without a release.
+# .github/release-notes/<tag>.md with cmd/fortress for both arches attached,
+# and only then moves latest, X.Y and X, so `docker pull ...:latest` never
+# names a version without a release.
 
 on:
   push:
@@ -131,19 +132,73 @@ jobs:
           provenance: true
           sbom: true
 
+  # Plugins without Go code join a fortress through this helper and download
+  # it from the release, so it ships next to the image.
+  fortress:
+    needs: notes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: kit/go.mod
+          cache-dependency-path: kit/go.sum
+
+      - name: Build cmd/fortress for amd64 and arm64
+        working-directory: kit
+        run: |
+          set -eu
+          mkdir -p ../dist
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags="-s -w" \
+              -o "../dist/fortress-linux-${arch}" ./cmd/fortress
+          done
+          cd ../dist
+          file fortress-linux-amd64 | grep -q "x86-64"
+          file fortress-linux-arm64 | grep -q "aarch64"
+          sha256sum fortress-linux-* > fortress-sha256sums.txt
+          cat fortress-sha256sums.txt
+
+      # Without a joined directory the helper must say so and exit 1, which is
+      # what a plugin reads as "no fortress".
+      - name: The amd64 build runs
+        run: |
+          set +e
+          out="$(dist/fortress-linux-amd64 status -dir "$RUNNER_TEMP/none" -json 2>&1)"
+          code=$?
+          set -e
+          echo "exit ${code}: ${out}"
+          [ "$code" -eq 1 ]
+          echo "$out" | grep -q "holds no fortress yet"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: fortress
+          path: dist/*
+          if-no-files-found: error
+
   release:
-    needs: image
+    needs: [image, fortress]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: fortress
+          path: dist
       - uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3
         with:
           tag_name: ${{ github.ref_name }}
           body_path: .github/release-notes/${{ github.ref_name }}.md
           make_latest: true
+          files: |
+            dist/fortress-linux-amd64
+            dist/fortress-linux-arm64
+            dist/fortress-sha256sums.txt
 
   latest:
     needs: release
