@@ -78,8 +78,28 @@ func (tb *testBroker) close() {
 	defer tb.mu.Unlock()
 	if !tb.closed {
 		tb.closed = true
+		tb.settle()
 		_ = tb.srv.Close()
 	}
+}
+
+// settle waits for clients that are closing to leave the broker. mochi's
+// Close takes the client list's read lock twice, and a client deleted in
+// between deadlocks both.
+func (tb *testBroker) settle() {
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && tb.anyClosing() {
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func (tb *testBroker) anyClosing() bool {
+	for _, cl := range tb.srv.Clients.GetAll() {
+		if cl.Closed() {
+			return true
+		}
+	}
+	return false
 }
 
 // restart replaces the broker by a fresh one on the same port, which has
@@ -139,7 +159,10 @@ func (tb *testBroker) drop(clientID string) {
 	if !ok {
 		tb.t.Fatalf("no client %s on the broker", clientID)
 	}
-	cl.Stop(errors.New("dropped by the test"))
+	// cl.Stop would race the broker's read loop, which ends quietly and skips
+	// the will when it sees the client stopped first. A closed socket always
+	// fails the read, as a dead network does.
+	_ = cl.Net.Conn.Close()
 }
 
 // watch records every payload published to topic from now on.
