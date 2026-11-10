@@ -419,9 +419,10 @@ func (g *Group) trustsAnswer(target string, key ed25519.PublicKey) bool {
 // shows, so an instance that cannot be called back still learns of the other:
 // approved where the phrase is enough, else waiting for approval. It pins
 // nothing that was taken out, a key that speaks for another member, or past
-// the room there is.
+// the room there is and the new keys of the hour.
 func (g *Group) pinAnswerLocked(id string, key []byte) (record, bool) {
 	st := &g.st
+	now := time.Now()
 	_, removed := st.Removed[id]
 	_, revoked := st.Revoked[hex.EncodeToString(key)]
 	if removed || revoked || !claimFits(id, member.KindInstance, key) || len(st.Members) >= maxPinned ||
@@ -433,7 +434,10 @@ func (g *Group) pinAnswerLocked(id string, key []byte) (record, bool) {
 			return record{}, false
 		}
 	}
-	rec := record{Kind: member.KindInstance, Key: bytes.Clone(key), Approved: g.byPhrase, Used: time.Now()}
+	if !g.limits.mayPin("", now) {
+		return record{}, false
+	}
+	rec := record{Kind: member.KindInstance, Key: bytes.Clone(key), Approved: g.byPhrase, Used: now}
 	if g.pinLocked(id, rec, "") != nil {
 		return record{}, false
 	}

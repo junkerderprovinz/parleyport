@@ -1,6 +1,7 @@
 package group
 
 import (
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -89,6 +90,22 @@ func TestCallsThatChangeNothingAreNotReported(t *testing.T) {
 	case <-r:
 		t.Error("calls between two approved members were reported as a change")
 	default:
+	}
+}
+
+func TestArrivalsAreKeptWithinBounds(t *testing.T) {
+	la := lan.New(lan.Config{})
+	t.Cleanup(func() { _ = la.Close() })
+	a := open(t, "alpha", setup{lan: la})
+	for i := range 1000 {
+		id := fmt.Sprintf("%040x", i+1)
+		la.Observe(tagged(a.g, lan.Peer{ID: id, URL: "http://192.168.1.2:1"}))
+	}
+	a.g.mu.Lock()
+	n := len(a.g.arrived)
+	a.g.mu.Unlock()
+	if n > maxArrivals {
+		t.Errorf("alpha keeps %d arrivals, want at most %d", n, maxArrivals)
 	}
 }
 

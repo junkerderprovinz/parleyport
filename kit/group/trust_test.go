@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -516,6 +517,21 @@ func TestAGroupAlwaysTakesInstances(t *testing.T) {
 	served(a, identity(t, "bravo"), "b1")
 	if m, _ := memberOf(a.g, identity(t, "bravo").ID()); m.State != StatePending {
 		t.Errorf("alpha lists bravo as %+v, want it waiting", m)
+	}
+}
+
+func TestAnswersCountTowardsTheNewKeysOfTheHour(t *testing.T) {
+	la := lan.New(lan.Config{})
+	t.Cleanup(func() { _ = la.Close() })
+	a := open(t, "alpha", setup{lan: la, noListener: true})
+	b := open(t, "bravo", setup{})
+	for i := range maxNewPins {
+		a.g.limits.mayPin("relay\x00"+strconv.Itoa(i), time.Now())
+	}
+	la.Observe(tagged(a.g, lan.Peer{ID: b.id, Name: "bravo", URL: b.srv.URL}))
+	_, _, _ = call(t, a, b, http.MethodGet, "/api/whoami", nil)
+	if m, _ := memberOf(a.g, b.id); m.State != StateUnknown {
+		t.Errorf("alpha lists %+v, want bravo unpinned once the hour's new keys are used up", m)
 	}
 }
 

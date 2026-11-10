@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strconv"
 	"testing"
+
+	"github.com/junkerderprovinz/parleyport/kit/lan"
 )
 
 func TestProbeSaysWhoAnswersAtAnAddress(t *testing.T) {
@@ -64,6 +66,24 @@ func TestAnInstanceWithoutAListenerPairsByAddress(t *testing.T) {
 	waitFor(t, "alpha to find bravo again where it last answered", func() bool { m, _ := memberOf(a.g, b.id); return m.Direct })
 	if id := whoami(t, a, b); id != a.id {
 		t.Errorf("after a restart bravo's app saw %q, want alpha", id)
+	}
+}
+
+func TestOnlyANearbyAddressIsKeptForAMember(t *testing.T) {
+	la := lan.New(lan.Config{})
+	t.Cleanup(func() { _ = la.Close() })
+	a := open(t, "alpha", setup{lan: la, noListener: true})
+	b := open(t, "bravo", setup{})
+	la.Observe(tagged(a.g, lan.Peer{ID: b.id, Name: "bravo", URL: b.srv.URL}))
+	_, _, _ = call(t, a, b, http.MethodGet, "/api/whoami", nil)
+	if m, _ := memberOf(a.g, b.id); m.State != StatePending {
+		t.Fatalf("alpha lists %+v, want bravo pinned", m)
+	}
+	if err := a.g.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(a.store.data, []byte(b.srv.URL)) {
+		t.Error("alpha kept an address off the group's ports, which the next start would dial")
 	}
 }
 

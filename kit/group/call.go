@@ -173,6 +173,9 @@ func (g *Group) confirm(id, url, name, deployment string, now time.Time) {
 	if id == g.self {
 		return
 	}
+	// Only an address the group would dial when it is named is kept for the
+	// next start, which dials it unasked.
+	_, keep := g.nearby(url)
 	defer g.stir()
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -190,7 +193,7 @@ func (g *Group) confirm(id, url, name, deployment string, now time.Time) {
 	}
 	a.confirmed, a.noted = now, now
 	delete(g.failed, url)
-	if rec, ok := g.st.Members[id]; ok && rec.Direct != url {
+	if rec, ok := g.st.Members[id]; ok && keep && rec.Direct != url {
 		rec.Direct = url
 		g.st.Members[id] = rec
 		g.dirty = true

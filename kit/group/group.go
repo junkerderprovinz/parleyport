@@ -12,6 +12,11 @@
 // The approval, and a removal, are passed on to the other instances, which
 // take them only from an instance they approved themselves.
 //
+// Roster says what an instance keeps of its group, and Import takes a group an
+// app kept in a format of its own, or a decision an instance on that format
+// passes on. An instance that takes no direct calls finds the others with
+// Probe and the addresses the app keeps with SetAddresses.
+//
 // A fortress opens a second Group under its own domain with the same phrase,
 // next to the app's own. Previous carries an app's pairing over to that
 // phrase, and OnRemove keeps a removal in step between the two.

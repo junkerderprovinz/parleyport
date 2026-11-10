@@ -27,6 +27,9 @@ const (
 	sweepTimeout     = 1500 * time.Millisecond
 	sweepBudget      = 45 * time.Second
 	sweepMinInterval = 3 * time.Minute
+	// maxArrivals bounds the members on the network whose arrival is
+	// remembered; past it a new one is met on the next tick.
+	maxArrivals = 256
 )
 
 // run looks after the members until Close: on every tick, and whenever the

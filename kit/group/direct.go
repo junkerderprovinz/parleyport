@@ -102,9 +102,14 @@ func (g *Group) acceptAnnounce(p lan.Peer) bool {
 	now := time.Now()
 	g.mu.Lock()
 	last, known := g.arrived[p.ID]
-	g.arrived[p.ID] = now
+	arrives := !known || now.Sub(last) >= addrTTL
+	if known || len(g.arrived) < maxArrivals {
+		g.arrived[p.ID] = now
+	} else {
+		arrives = false
+	}
 	g.mu.Unlock()
-	if !known || now.Sub(last) >= addrTTL {
+	if arrives {
 		g.poke()
 	}
 	return true
