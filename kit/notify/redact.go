@@ -183,31 +183,110 @@ func scrubbed(e Event) Event {
 }
 
 // Redacted returns a copy of channels fit for a browser, with every token,
-// password and header value replaced by RedactedValue. Addresses stay, since
-// the user edits them.
+// password and header value replaced by RedactedValue. Addresses keep their
+// host and shape for the user who edits them, with every part that may be a
+// key masked.
 func Redacted(channels []Channel) []Channel {
 	out := clone(channels)
 	for i := range out {
 		c := &out[i]
 		if c.Webhook != nil {
+			c.Webhook.URL = maskURL(c.Webhook.URL)
 			for name, v := range c.Webhook.Headers {
 				c.Webhook.Headers[name] = mask(v)
 			}
 		}
+		if c.Discord != nil {
+			c.Discord.URL = maskURL(c.Discord.URL)
+		}
+		if c.Slack != nil {
+			c.Slack.URL = maskURL(c.Slack.URL)
+		}
 		if c.Gotify != nil {
+			c.Gotify.URL = maskURL(c.Gotify.URL)
 			c.Gotify.Token = mask(c.Gotify.Token)
 		}
 		if c.Ntfy != nil {
+			c.Ntfy.URL = maskNtfy(c.Ntfy.URL)
 			c.Ntfy.Token = mask(c.Ntfy.Token)
 		}
 		if c.Matrix != nil {
+			c.Matrix.Homeserver = maskURL(c.Matrix.Homeserver)
 			c.Matrix.Token = mask(c.Matrix.Token)
 		}
 		if c.SMTP != nil {
 			c.SMTP.Password = mask(c.SMTP.Password)
 		}
+		if c.Apprise != nil {
+			c.Apprise.URL = maskApprise(c.Apprise.URL)
+			for j, u := range c.Apprise.URLs {
+				c.Apprise.URLs[j] = maskURL(u)
+			}
+		}
+		if c.Healthchecks != nil {
+			c.Healthchecks.URL = maskURL(c.Healthchecks.URL)
+			for key, u := range c.Healthchecks.ByKey {
+				c.Healthchecks.ByKey[key] = maskURL(u)
+			}
+		}
 	}
 	return out
+}
+
+// maskAddress masks what may be a key in an address: the login, every query
+// value, path segments long enough to be a token, the segments isKey picks
+// and, outside http, the host, where a service address such as
+// tgram://<bot token>/<chat> keeps its key.
+func maskAddress(raw string, isKey func(segs []string, i int) bool) string {
+	scheme, rest, ok := strings.Cut(raw, "://")
+	if !ok {
+		return raw
+	}
+	rest, fragment, hasFragment := strings.Cut(rest, "#")
+	rest, query, hasQuery := strings.Cut(rest, "?")
+	authority, path, hasPath := strings.Cut(rest, "/")
+	if s := strings.ToLower(strings.TrimSpace(scheme)); s != "http" && s != "https" && authority != "" {
+		authority = RedactedValue
+	} else if at := strings.LastIndex(authority, "@"); at >= 0 {
+		authority = RedactedValue + authority[at:]
+	}
+	segs := strings.Split(path, "/")
+	for i, seg := range segs {
+		if seg != "" && !strings.Contains(seg, marker) && (len(seg) >= 12 || isKey != nil && isKey(segs, i)) {
+			segs[i] = RedactedValue
+		}
+	}
+	pairs := strings.Split(query, "&")
+	for i, pair := range pairs {
+		if name, v, ok := strings.Cut(pair, "="); ok && v != "" && !strings.Contains(v, marker) {
+			pairs[i] = name + "=" + RedactedValue
+		}
+	}
+	out := scheme + "://" + authority
+	if hasPath {
+		out += "/" + strings.Join(segs, "/")
+	}
+	if hasQuery {
+		out += "?" + strings.Join(pairs, "&")
+	}
+	if hasFragment {
+		out += "#" + fragment
+	}
+	return out
+}
+
+func maskURL(raw string) string { return maskAddress(raw, nil) }
+
+// maskNtfy also masks the topic, since on a public server whoever knows it
+// can read and post.
+func maskNtfy(raw string) string {
+	return maskAddress(raw, func(segs []string, i int) bool { return i == len(segs)-1 })
+}
+
+// maskApprise also masks the key of a /notify/<key> endpoint, which the user
+// picks and may keep short.
+func maskApprise(raw string) string {
+	return maskAddress(raw, func(segs []string, i int) bool { return i > 0 && segs[i-1] == "notify" })
 }
 
 func mask(v string) string {
@@ -220,8 +299,9 @@ func mask(v string) string {
 // Merge puts the secrets Redacted took out of next back from prev. A secret
 // comes back only to the channel with the same id and kind whose destination
 // is unchanged, so a client that never saw a token cannot point the channel
-// at its own server and have the token sent there. A RedactedValue that
-// cannot come back becomes empty.
+// at its own server and have the token sent there. A masked address comes
+// back only as Redacted left it. A RedactedValue that cannot come back
+// becomes empty.
 func Merge(next, prev []Channel) []Channel {
 	old := make(map[string]Channel, len(prev))
 	for _, c := range prev {
@@ -231,30 +311,109 @@ func Merge(next, prev []Channel) []Channel {
 	for i := range out {
 		c := &out[i]
 		p, ok := old[c.ID]
-		ok = ok && p.Kind == c.Kind
+		if !ok || p.Kind != c.Kind {
+			p = Channel{}
+		}
+		p = p.withEveryBlock()
 		if c.Webhook != nil {
-			same := ok && p.Webhook != nil && strings.TrimSpace(p.Webhook.URL) == strings.TrimSpace(c.Webhook.URL)
+			c.Webhook.URL = unmask(c.Webhook.URL, p.Webhook.URL, maskURL)
+			same := strings.TrimSpace(p.Webhook.URL) == strings.TrimSpace(c.Webhook.URL)
 			for name, v := range c.Webhook.Headers {
 				if v == RedactedValue {
 					c.Webhook.Headers[name] = keep(same, func() string { return p.Webhook.Headers[name] })
 				}
 			}
 		}
-		if c.Gotify != nil && c.Gotify.Token == RedactedValue {
-			c.Gotify.Token = keep(ok && p.Gotify != nil && p.Gotify.URL == c.Gotify.URL, func() string { return p.Gotify.Token })
+		if c.Discord != nil {
+			c.Discord.URL = unmask(c.Discord.URL, p.Discord.URL, maskURL)
 		}
-		if c.Ntfy != nil && c.Ntfy.Token == RedactedValue {
-			c.Ntfy.Token = keep(ok && p.Ntfy != nil && p.Ntfy.URL == c.Ntfy.URL, func() string { return p.Ntfy.Token })
+		if c.Slack != nil {
+			c.Slack.URL = unmask(c.Slack.URL, p.Slack.URL, maskURL)
 		}
-		if c.Matrix != nil && c.Matrix.Token == RedactedValue {
-			c.Matrix.Token = keep(ok && p.Matrix != nil && p.Matrix.Homeserver == c.Matrix.Homeserver, func() string { return p.Matrix.Token })
+		if c.Gotify != nil {
+			c.Gotify.URL = unmask(c.Gotify.URL, p.Gotify.URL, maskURL)
+			if c.Gotify.Token == RedactedValue {
+				c.Gotify.Token = keep(p.Gotify.URL == c.Gotify.URL, func() string { return p.Gotify.Token })
+			}
+		}
+		if c.Ntfy != nil {
+			c.Ntfy.URL = unmask(c.Ntfy.URL, p.Ntfy.URL, maskNtfy)
+			if c.Ntfy.Token == RedactedValue {
+				c.Ntfy.Token = keep(p.Ntfy.URL == c.Ntfy.URL, func() string { return p.Ntfy.Token })
+			}
+		}
+		if c.Matrix != nil {
+			c.Matrix.Homeserver = unmask(c.Matrix.Homeserver, p.Matrix.Homeserver, maskURL)
+			if c.Matrix.Token == RedactedValue {
+				c.Matrix.Token = keep(p.Matrix.Homeserver == c.Matrix.Homeserver, func() string { return p.Matrix.Token })
+			}
 		}
 		if c.SMTP != nil && c.SMTP.Password == RedactedValue {
-			same := ok && p.SMTP != nil && p.SMTP.Host == c.SMTP.Host && p.SMTP.port() == c.SMTP.port() && p.SMTP.Username == c.SMTP.Username
+			same := p.SMTP.Host == c.SMTP.Host && p.SMTP.port() == c.SMTP.port() && p.SMTP.Username == c.SMTP.Username
 			c.SMTP.Password = keep(same, func() string { return p.SMTP.Password })
+		}
+		if c.Apprise != nil {
+			c.Apprise.URL = unmask(c.Apprise.URL, p.Apprise.URL, maskApprise)
+			var stored []string
+			if p.Apprise.URL == c.Apprise.URL {
+				stored = p.Apprise.URLs
+			}
+			c.Apprise.URLs = unmaskAll(c.Apprise.URLs, stored)
+		}
+		if c.Healthchecks != nil {
+			c.Healthchecks.URL = unmask(c.Healthchecks.URL, p.Healthchecks.URL, maskURL)
+			for key, u := range c.Healthchecks.ByKey {
+				c.Healthchecks.ByKey[key] = unmask(u, p.Healthchecks.ByKey[key], maskURL)
+			}
 		}
 	}
 	return out
+}
+
+// withEveryBlock fills the settings blocks c lacks with empty ones, so Merge
+// can compare against a channel that had none.
+func (c Channel) withEveryBlock() Channel {
+	c.Webhook = cmp.Or(c.Webhook, &Webhook{})
+	c.Discord = cmp.Or(c.Discord, &Discord{})
+	c.Slack = cmp.Or(c.Slack, &Slack{})
+	c.Gotify = cmp.Or(c.Gotify, &Gotify{})
+	c.Ntfy = cmp.Or(c.Ntfy, &Ntfy{})
+	c.Matrix = cmp.Or(c.Matrix, &Matrix{})
+	c.SMTP = cmp.Or(c.SMTP, &SMTP{})
+	c.Apprise = cmp.Or(c.Apprise, &Apprise{})
+	c.Healthchecks = cmp.Or(c.Healthchecks, &Healthchecks{})
+	return c
+}
+
+// unmask returns stored when next is its masked form, and empty when next
+// carries a mask it cannot take back.
+func unmask(next, stored string, masked func(string) string) string {
+	switch {
+	case next == masked(stored):
+		return stored
+	case strings.Contains(next, RedactedValue):
+		return ""
+	default:
+		return next
+	}
+}
+
+// unmaskAll is unmask for a list. Stored addresses that mask alike come back
+// in their stored order.
+func unmaskAll(next, stored []string) []string {
+	byMask := make(map[string][]string, len(stored))
+	for _, u := range stored {
+		m := maskURL(u)
+		byMask[m] = append(byMask[m], u)
+	}
+	for i, u := range next {
+		if q := byMask[u]; len(q) > 0 {
+			next[i], byMask[u] = q[0], q[1:]
+		} else if strings.Contains(u, RedactedValue) {
+			next[i] = ""
+		}
+	}
+	return next
 }
 
 func keep(same bool, stored func() string) string {
