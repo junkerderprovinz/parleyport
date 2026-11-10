@@ -69,6 +69,11 @@ func TestIconFromSVG_RefusesWhatCouldRunOrLoadSomething(t *testing.T) {
 		"doctype":                `<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd"><svg ` + ns + `/>`,
 		"empty foreign object":   `<svg ` + ns + `><foreignObject width="8" height="8"/></svg>`,
 		"css url to elsewhere":   `<svg ` + ns + ` style="fill:url(https://example.org/x.svg#a)"/>`,
+		"css escape":             `<svg ` + ns + `><style>@\69mport "https://example.org/x.css";</style></svg>`,
+		"css escape in a url":    `<svg ` + ns + ` style="fill:u\72l(https://example.org/x.svg#a)"/>`,
+		"css image-set":          `<svg ` + ns + ` style="background:image-set('https://example.org/x.png' 1x)"/>`,
+		"animated href":          `<svg ` + ns + `><a><animate attributeName="href" values="https://example.org/"/></a></svg>`,
+		"set xlink:href":         `<svg ` + ns + `><a><set attributeName="xlink:href" to="data:text/html,x"/></a></svg>`,
 		"stylesheet instruction": `<?xml-stylesheet href="https://example.org/x.css"?><svg ` + ns + `/>`,
 	} {
 		t.Run(name, func(t *testing.T) {

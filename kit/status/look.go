@@ -121,6 +121,9 @@ func checkElement(e xml.StartElement) error {
 		if name == "href" && !strings.HasPrefix(a.Value, "#") {
 			return errors.New("status: icon refers to something outside itself")
 		}
+		if name == "attributename" && strings.HasSuffix(strings.ToLower(a.Value), "href") {
+			return errors.New("status: icon animates a reference")
+		}
 		if err := checkText(a.Value); err != nil {
 			return err
 		}
@@ -133,13 +136,22 @@ var cssURL = regexp.MustCompile(`(?i)url\(\s*['"]?\s*(.?)`)
 
 // checkText refuses text and attribute values that name a script URL or make
 // CSS load something from elsewhere; url(#id) for gradients and masks stays.
+// A backslash is refused outright, since CSS escapes would hide the rest.
 func checkText(s string) error {
+	if strings.Contains(s, `\`) {
+		return errors.New("status: icon has a backslash")
+	}
 	lower := strings.ToLower(s)
 	if strings.Contains(strings.Join(strings.Fields(lower), ""), "javascript:") {
 		return errors.New("status: icon has a javascript: URL")
 	}
 	if strings.Contains(lower, "@import") {
 		return errors.New("status: icon imports CSS")
+	}
+	for _, fn := range []string{"image-set(", "image(", "src("} {
+		if strings.Contains(lower, fn) {
+			return errors.New("status: icon refers to something outside itself")
+		}
 	}
 	for _, m := range cssURL.FindAllStringSubmatch(s, -1) {
 		if m[1] != "#" {
