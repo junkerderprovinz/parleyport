@@ -44,13 +44,17 @@ type Report struct {
 }
 
 // App names the app. ID is a lower-case slug that stays the same across
-// versions and instances.
+// versions and instances. Color and Icon are optional and let readers show the
+// app in its own colour and with its logo: Color is #rrggbb, Icon an SVG data
+// URI written by IconFromSVG.
 type App struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`
 	Version string `json:"version"`
 	Commit  string `json:"commit,omitempty"`
 	UI      string `json:"ui,omitempty"`
+	Color   string `json:"color,omitempty"`
+	Icon    string `json:"icon,omitempty"`
 }
 
 // Instance names the running copy of the app. Container and Mounts let other

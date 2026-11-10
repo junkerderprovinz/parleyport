@@ -41,7 +41,7 @@ type Options struct {
 // error on t. The handler must serve test data with at least one item in
 // needsYou and two log entries, all with texts in English and German, so the
 // ids, the cursor and the languages can be compared. A report may be at most
-// 64 KiB.
+// 64 KiB, and an icon in it must pass status.CheckIcon.
 func Run(t testing.TB, h http.Handler, opt Options) {
 	t.Helper()
 	for _, d := range check(h, opt) {
@@ -165,6 +165,11 @@ func (c *checker) report(query url.Values, header http.Header) (status.Report, b
 	if err := json.Unmarshal(body, &r); err != nil {
 		c.addf("report does not decode: %v", err)
 		return r, false
+	}
+	if r.App.Icon != "" {
+		if err := status.CheckIcon(r.App.Icon); err != nil {
+			c.addf("app.icon: %v", err)
+		}
 	}
 	return r, true
 }
