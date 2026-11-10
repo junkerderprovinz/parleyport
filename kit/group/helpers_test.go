@@ -103,6 +103,7 @@ type setup struct {
 	keysOnly  bool
 	byPhrase  bool
 	maxAnswer int
+	maxRelay  int
 	kinds     []member.Kind
 	ports     []int
 	// noListener opens the instance the way a desktop app runs: it calls
@@ -151,23 +152,24 @@ func openGroup(t *testing.T, n *node, s setup) *Group {
 		direct = ""
 	}
 	g, err := Open(Config{
-		Domain:         testDomain,
-		Secret:         secret,
-		Keys:           set,
-		Identity:       identity(t, n.name),
-		Self:           Self{Name: n.name, Deployment: "container", DirectURL: direct},
-		Relay:          mode,
-		RelayURL:       url,
-		LAN:            s.lan,
-		Store:          n.store,
-		Previous:       s.previous,
-		JoinByPhrase:   s.byPhrase,
-		MaxAnswerBytes: s.maxAnswer,
-		Kinds:          s.kinds,
-		Ports:          s.ports,
-		OnRemoved:      func() { n.removed.Add(1) },
-		OnRemove:       s.onRemove,
-		OnChange:       s.onChange,
+		Domain:              testDomain,
+		Secret:              secret,
+		Keys:                set,
+		Identity:            identity(t, n.name),
+		Self:                Self{Name: n.name, Deployment: "container", DirectURL: direct},
+		Relay:               mode,
+		RelayURL:            url,
+		LAN:                 s.lan,
+		Store:               n.store,
+		Previous:            s.previous,
+		JoinByPhrase:        s.byPhrase,
+		MaxAnswerBytes:      s.maxAnswer,
+		MaxRelayAnswerBytes: s.maxRelay,
+		Kinds:               s.kinds,
+		Ports:               s.ports,
+		OnRemoved:           func() { n.removed.Add(1) },
+		OnRemove:            s.onRemove,
+		OnChange:            s.onChange,
 	}, appRoutes())
 	if err != nil {
 		t.Fatalf("open %s: %v", n.name, err)

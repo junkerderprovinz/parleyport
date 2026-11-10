@@ -45,9 +45,8 @@ const (
 	// store is written again, so an open page does not rewrite it on every
 	// poll.
 	lastSeenStep = time.Minute
-	// maxAnswerBytes bounds what the app answers a call over the relay with,
-	// and a direct one unless the app allows more. Sealed and coded for the
-	// wire it still fits a relay frame.
+	// maxAnswerBytes bounds what the app answers a call with, unless it
+	// allows more.
 	maxAnswerBytes = 4 << 20
 )
 
@@ -620,7 +619,7 @@ func (g *Group) serveApp(ctx context.Context, call relay.ProxyCall) (status int,
 	if len(call.Body) > 0 {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	rec := &recorder{header: http.Header{}, limit: maxAnswerBytes}
+	rec := &recorder{header: http.Header{}, limit: g.maxRelay}
 	if strings.HasPrefix(relay.SourceOf(ctx), directSource) {
 		rec.limit = g.maxAnswer
 	}

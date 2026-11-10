@@ -17,6 +17,12 @@ const challengeSize = 32
 // memory.
 const readLimit = 8 << 20
 
+// MaxAnswerBytes is the largest answer a relay frame carries. On the wire the
+// body is coded as base64 twice, once in the result and once around the seal,
+// which makes it 16/9 as large; 4 KiB is room for the fields, the seal and the
+// envelope around it.
+const MaxAnswerBytes = (readLimit - 4<<10) / 16 * 9
+
 // minKeyLength is the shortest group key the relay accepts. It cannot enforce
 // entropy, only rule out the laziest hand-made keys; a derived key has 64
 // characters.

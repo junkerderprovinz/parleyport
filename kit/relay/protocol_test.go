@@ -99,6 +99,18 @@ func TestTheLargestHelloFitsTheLimit(t *testing.T) {
 	}
 }
 
+func TestTheLargestAnswerFitsAFrame(t *testing.T) {
+	id := strings.Repeat("f", 32)
+	res := SignResult(testSigning, &alphaKey, id, []byte("call"), ProxyResult{Status: http.StatusOK, Body: make([]byte, MaxAnswerBytes)})
+	frame, err := Encode(TypeProxyResponse, ProxyResponse{RequestID: id, Sealed: sealResultFor(t, id, res)})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	if len(frame) > readLimit {
+		t.Fatalf("the largest answer is a frame of %d bytes, over the %d a relay reads", len(frame), readLimit)
+	}
+}
+
 func TestAnAddressTooLongIsLeftOutRatherThanCut(t *testing.T) {
 	long := "https://" + strings.Repeat("a", MaxAddressBytes)
 	wire, err := sealAnnounce(testFrameKey, Announce{InstanceID: alphaID, Address: long})

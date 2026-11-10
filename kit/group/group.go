@@ -126,10 +126,14 @@ type Config struct {
 	// owner typed in is dialed only on these ports.
 	Ports []int
 	// MaxAnswerBytes is the most the app may answer a direct call with, and
-	// what this instance reads of a direct answer, 4 MiB when zero. Over the
-	// relay an answer stays within 4 MiB, which is what a relay frame carries
-	// sealed.
+	// what this instance reads of a direct answer, 4 MiB when zero.
 	MaxAnswerBytes int
+	// MaxRelayAnswerBytes is the most the app may answer a call over the
+	// relay with, 4 MiB when zero. A relay frame carries no more than
+	// relay.MaxAnswerBytes, about 4.5 MiB, so a larger value counts as that
+	// and a larger answer is refused with answerTooLarge rather than cost the
+	// relay connection.
+	MaxRelayAnswerBytes int
 	// OnChange runs whenever what Members lists changes (a member comes or
 	// goes, waits, is approved or taken out, or is reached another way) and
 	// whenever the relay connection comes up or drops, as RelayConnected
@@ -204,6 +208,7 @@ type Group struct {
 	kinds     []member.Kind
 	ports     []string
 	maxAnswer int
+	maxRelay  int
 
 	replay  *relay.ReplayGuard
 	limits  *memberLimits
@@ -291,6 +296,7 @@ func Open(cfg Config, serve http.Handler) (*Group, error) {
 		kinds:     slices.Clone(cfg.Kinds),
 		ports:     portNames(cfg.Ports),
 		maxAnswer: cmp.Or(cfg.MaxAnswerBytes, maxAnswerBytes),
+		maxRelay:  min(cmp.Or(cfg.MaxRelayAnswerBytes, maxAnswerBytes), relay.MaxAnswerBytes),
 		replay:    relay.NewReplayGuard(),
 		limits:    newMemberLimits(),
 		hc:        directClient(),

@@ -105,6 +105,33 @@ func TestARelayedAnswerStaysWithinARelayFrame(t *testing.T) {
 	}
 }
 
+func TestARelayedAnswerMayBeAsLargeAsTheAppAllows(t *testing.T) {
+	sizes := func(t *testing.T, s setup, fits int) {
+		t.Helper()
+		s.relay = relayServer(t)
+		a, b := open(t, "alpha", s), open(t, "bravo", s)
+		waitFor(t, "alpha to see bravo", func() bool { _, ok := memberOf(a.g, b.id); return ok })
+		meet(t, a, b)
+		status, body, err := call(t, a, b, http.MethodGet, "/api/size/"+strconv.Itoa(fits), nil)
+		if err != nil || status != http.StatusOK || len(body) != fits {
+			t.Errorf("a relayed answer of %d bytes = %d, %d bytes, %v", fits, status, len(body), err)
+		}
+		status, body, err = call(t, a, b, http.MethodGet, "/api/size/"+strconv.Itoa(fits+1), nil)
+		if err != nil || status != http.StatusInternalServerError || !bytes.Contains(body, []byte("answerTooLarge")) {
+			t.Errorf("a relayed answer of %d bytes = %d %.80q %v, want answerTooLarge", fits+1, status, body, err)
+		}
+		if !a.g.RelayConnected() || !b.g.RelayConnected() {
+			t.Error("a large answer cost an instance its relay connection")
+		}
+	}
+	t.Run("set larger", func(t *testing.T) {
+		sizes(t, setup{maxRelay: 4<<20 + 256<<10}, 4<<20+256<<10)
+	})
+	t.Run("set past what a frame carries", func(t *testing.T) {
+		sizes(t, setup{maxRelay: 8 << 20}, relay.MaxAnswerBytes)
+	})
+}
+
 func TestAnAnnounceWithoutThePhraseIsNoMember(t *testing.T) {
 	la := lan.New(lan.Config{})
 	t.Cleanup(func() { _ = la.Close() })
