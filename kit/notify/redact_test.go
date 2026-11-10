@@ -270,3 +270,96 @@ func TestMergeDropsAMaskedAddressThatMoved(t *testing.T) {
 		t.Errorf("the service addresses followed a new Apprise server: %+v", got[7].Apprise)
 	}
 }
+
+func TestRedactedMasksKeyValuesInAJSONBody(t *testing.T) {
+	body := `{"token": "aPpT0k3n", "user": "u9", "message": "%%title%%",
+  "auth": {"API_KEY": "nested-k3y", "Access_Token": "acc3ss"}, "author": "Ann",
+  "client_secret":"cl1ent", "password": "%%pw%%", "items": [{"Password": "pa\"55"}],
+  "key": "", "priority": %%prio%%}`
+	want := `{"token": "********", "user": "u9", "message": "%%title%%",
+  "auth": {"API_KEY": "********", "Access_Token": "********"}, "author": "Ann",
+  "client_secret":"********", "password": "%%pw%%", "items": [{"Password": "********"}],
+  "key": "", "priority": %%prio%%}`
+	ch := notify.Channel{ID: "w", Kind: notify.KindWebhook, Webhook: &notify.Webhook{URL: "https://api.pushover.net/1/messages.json", Body: body}}
+
+	if got := notify.Redacted([]notify.Channel{ch})[0].Webhook.Body; got != want {
+		t.Errorf("body =\n%s\nwant\n%s", got, want)
+	}
+	if ch.Webhook.Body != body {
+		t.Error("Redacted changed the body it was given")
+	}
+}
+
+func TestRedactedMasksKeyValuesInAFormBody(t *testing.T) {
+	for body, want := range map[string]string{
+		"token=abc123&user=u9&message=%%title%%&api_key=xyz789&apikey=&author=Ann\n": "token=********&user=u9&message=%%title%%&api_key=********&apikey=&author=Ann\n",
+		"Backup failed on %%host%%, token sent":                                      "Backup failed on %%host%%, token sent",
+	} {
+		ch := notify.Channel{ID: "w", Kind: notify.KindWebhook, Webhook: &notify.Webhook{URL: "https://h.example/in", Body: body}}
+		if got := notify.Redacted([]notify.Channel{ch})[0].Webhook.Body; got != want {
+			t.Errorf("body %q = %q, want %q", body, got, want)
+		}
+	}
+}
+
+// bodies are webhook channels whose bodies carry a key.
+var bodies = []notify.Channel{
+	{ID: "j", Kind: notify.KindWebhook, Webhook: &notify.Webhook{URL: "https://api.pushover.net/1/messages.json", Body: `{"token":"aPpT0k3n","user":"u9","message":"%%title%%"}`}},
+	{ID: "f", Kind: notify.KindWebhook, Webhook: &notify.Webhook{URL: "https://h.example/in", Body: "secret=s3cr3t&m=%%title%%"}},
+}
+
+func TestMergeRestoresAMaskedBody(t *testing.T) {
+	got := notify.Merge(notify.Redacted(bodies), bodies)
+
+	if !reflect.DeepEqual(got, bodies) {
+		t.Errorf("merged = %+v %+v", got[0].Webhook, got[1].Webhook)
+	}
+}
+
+func TestMergeDropsAMaskedBodyThatChanged(t *testing.T) {
+	tests := []struct {
+		name string
+		edit func(w *notify.Webhook)
+		want string
+	}{
+		{"text around the key edited", func(w *notify.Webhook) {
+			w.Body = strings.Replace(w.Body, "%%title%%", "%%body%%", 1)
+		}, ""},
+		{"key renamed", func(w *notify.Webhook) {
+			w.Body = strings.Replace(w.Body, `"token"`, `"message2"`, 1)
+		}, ""},
+		{"address moved", func(w *notify.Webhook) {
+			w.URL = "https://attacker.example/in"
+		}, ""},
+		{"key retyped", func(w *notify.Webhook) {
+			w.Body = `{"token":"n3w","user":"u9","message":"%%body%%"}`
+		}, `{"token":"n3w","user":"u9","message":"%%body%%"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			next := notify.Redacted(bodies)
+			tt.edit(next[0].Webhook)
+			if got := notify.Merge(next, bodies)[0].Webhook.Body; got != tt.want {
+				t.Errorf("body = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResult_ErrCarriesNoKeyFromTheBody(t *testing.T) {
+	var rec *recorder
+	rec = newRecorder(t, func(n int, w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = fmt.Fprintf(w, "refused %s", rec.all()[n-1].Body)
+	})
+	for _, body := range []string{`{"token":"aPpT0k3n\/x","message":"%%title%%"}`, "api_key=xyz%2F789&m=%%title%%"} {
+		ch := notify.Channel{ID: "w", Kind: notify.KindWebhook, Attempts: 1, Webhook: &notify.Webhook{URL: rec.URL, Body: body}}
+		r := sendOne(t, ch, notify.Options{}, failed)
+		if r.OK() {
+			t.Fatal("want a failure")
+		}
+		if containsAny(r.Err.Error(), "aPpT0k3n", "xyz%2F789", "xyz/789") {
+			t.Errorf("the error carries a key from the body: %v", r.Err)
+		}
+	}
+}

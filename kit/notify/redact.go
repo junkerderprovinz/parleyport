@@ -3,6 +3,7 @@ package notify
 import (
 	"cmp"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"maps"
 	"net/url"
@@ -72,6 +73,7 @@ func (c Channel) secrets() []string {
 	addURL := func(raw string) { add(urlSecrets(raw)...) }
 	if c.Webhook != nil {
 		addURL(c.Webhook.URL)
+		add(bodySecrets(c.Webhook.Body)...)
 		for _, v := range c.Webhook.Headers {
 			add(v)
 			for _, word := range strings.Fields(v) {
@@ -185,13 +187,15 @@ func scrubbed(e Event) Event {
 // Redacted returns a copy of channels fit for a browser, with every token,
 // password and header value replaced by RedactedValue. Addresses keep their
 // host and shape for the user who edits them, with every part that may be a
-// key masked.
+// key masked, and a webhook body keeps its text with the values under key
+// names masked.
 func Redacted(channels []Channel) []Channel {
 	out := clone(channels)
 	for i := range out {
 		c := &out[i]
 		if c.Webhook != nil {
 			c.Webhook.URL = maskURL(c.Webhook.URL)
+			c.Webhook.Body = maskBody(c.Webhook.Body)
 			for name, v := range c.Webhook.Headers {
 				c.Webhook.Headers[name] = mask(v)
 			}
@@ -289,6 +293,143 @@ func maskApprise(raw string) string {
 	return maskAddress(raw, func(segs []string, i int) bool { return i > 0 && segs[i-1] == "notify" })
 }
 
+// keyNames end the names a webhook body keeps a key under, such as token,
+// api_key, accessToken, client_secret or password.
+var keyNames = []string{"token", "key", "secret", "password", "passwd", "auth", "authorization"}
+
+func keyName(name string) bool {
+	name = strings.ToLower(name)
+	return slices.ContainsFunc(keyNames, func(k string) bool { return strings.HasSuffix(name, k) })
+}
+
+// span is where a value sits in a text.
+type span struct{ start, end int }
+
+// bodyKeys finds the values a webhook body keeps under a key name: string
+// values at any depth of a JSON document, else the values of a form. A value
+// that is empty or holds a placeholder carries no key.
+func bodyKeys(body string) []span {
+	var found []span
+	if t := strings.TrimSpace(body); strings.HasPrefix(t, "{") || strings.HasPrefix(t, "[") {
+		found = jsonKeys(body)
+	} else {
+		found = formKeys(body)
+	}
+	return slices.DeleteFunc(found, func(sp span) bool {
+		v := body[sp.start:sp.end]
+		return v == "" || strings.Contains(v, marker)
+	})
+}
+
+// jsonKeys scans the text rather than parsing it, since a body is a template
+// that need not be JSON before its placeholders are filled, and the user's
+// layout has to survive the mask.
+func jsonKeys(s string) []span {
+	var found []span
+	for i := 0; i < len(s); {
+		if s[i] != '"' {
+			i++
+			continue
+		}
+		end, ok := stringEnd(s, i)
+		if !ok {
+			break
+		}
+		var name string
+		if json.Unmarshal([]byte(s[i:end]), &name) != nil {
+			name = s[i+1 : end-1]
+		}
+		i = end
+		j := skipSpace(s, end)
+		if j == len(s) || s[j] != ':' {
+			continue
+		}
+		j = skipSpace(s, j+1)
+		if j == len(s) || s[j] != '"' {
+			continue
+		}
+		vend, ok := stringEnd(s, j)
+		if !ok {
+			break
+		}
+		if keyName(name) {
+			found = append(found, span{j + 1, vend - 1})
+		}
+		i = vend
+	}
+	return found
+}
+
+// stringEnd is the index just past the JSON string that starts at s[i].
+func stringEnd(s string, i int) (int, bool) {
+	for j := i + 1; j < len(s); j++ {
+		switch s[j] {
+		case '\\':
+			j++
+		case '"':
+			return j + 1, true
+		}
+	}
+	return 0, false
+}
+
+func skipSpace(s string, i int) int {
+	for i < len(s) && strings.IndexByte(" \t\r\n", s[i]) >= 0 {
+		i++
+	}
+	return i
+}
+
+func formKeys(s string) []span {
+	var found []span
+	at := 0
+	for pair := range strings.SplitSeq(s, "&") {
+		raw, v, ok := strings.Cut(pair, "=")
+		name := raw
+		if unescaped, err := url.QueryUnescape(raw); err == nil {
+			name = unescaped
+		}
+		if ok && keyName(strings.TrimSpace(name)) {
+			start := at + len(raw) + 1
+			found = append(found, span{start, start + len(strings.TrimRight(v, " \t\r\n"))})
+		}
+		at += len(pair) + 1
+	}
+	return found
+}
+
+// maskBody masks the values a webhook body keeps under a key name and leaves
+// the rest readable.
+func maskBody(body string) string {
+	var b strings.Builder
+	last := 0
+	for _, sp := range bodyKeys(body) {
+		b.WriteString(body[last:sp.start])
+		b.WriteString(RedactedValue)
+		last = sp.end
+	}
+	b.WriteString(body[last:])
+	return b.String()
+}
+
+// bodySecrets are the keys in a webhook body as written and as they go out
+// once unescaped.
+func bodySecrets(body string) []string {
+	var out []string
+	for _, sp := range bodyKeys(body) {
+		v := body[sp.start:sp.end]
+		out = append(out, v)
+		var s string
+		if json.Unmarshal([]byte(`"`+v+`"`), &s) == nil {
+			out = append(out, s)
+		}
+		if s, err := url.QueryUnescape(v); err == nil {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 func mask(v string) string {
 	if v == "" {
 		return ""
@@ -299,9 +440,9 @@ func mask(v string) string {
 // Merge puts the secrets Redacted took out of next back from prev. A secret
 // comes back only to the channel with the same id and kind whose destination
 // is unchanged, so a client that never saw a token cannot point the channel
-// at its own server and have the token sent there. A masked address comes
-// back only as Redacted left it. A RedactedValue that cannot come back
-// becomes empty.
+// at its own server and have the token sent there. A masked address or body
+// comes back only as Redacted left it. A RedactedValue that cannot come back
+// empties its field.
 func Merge(next, prev []Channel) []Channel {
 	old := make(map[string]Channel, len(prev))
 	for _, c := range prev {
@@ -318,6 +459,7 @@ func Merge(next, prev []Channel) []Channel {
 		if c.Webhook != nil {
 			c.Webhook.URL = unmask(c.Webhook.URL, p.Webhook.URL, maskURL)
 			same := strings.TrimSpace(p.Webhook.URL) == strings.TrimSpace(c.Webhook.URL)
+			c.Webhook.Body = unmask(c.Webhook.Body, keep(same, func() string { return p.Webhook.Body }), maskBody)
 			for name, v := range c.Webhook.Headers {
 				if v == RedactedValue {
 					c.Webhook.Headers[name] = keep(same, func() string { return p.Webhook.Headers[name] })
