@@ -587,4 +587,17 @@ func TestAnAnswerPinsTheInstanceThatSignedIt(t *testing.T) {
 	if _, listed := memberOf(a.g, b.id); listed {
 		t.Error("an answer brought back an instance alpha took out")
 	}
+
+	// charlie is taken out before alpha ever pinned its key.
+	c := open(t, "charlie", setup{})
+	if err := a.g.Remove(c.id); err != nil {
+		t.Fatal(err)
+	}
+	la.Observe(tagged(a.g, lan.Peer{ID: c.id, Name: "charlie", URL: c.srv.URL}))
+	_, _, _ = call(t, a, c, http.MethodGet, "/api/whoami", nil)
+	for _, m := range a.g.Roster().Members {
+		if m.ID == c.id {
+			t.Error("an answer pinned an instance alpha took out before it knew its key")
+		}
+	}
 }
