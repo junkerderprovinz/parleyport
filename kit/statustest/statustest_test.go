@@ -3,6 +3,7 @@ package statustest
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -36,10 +37,17 @@ type source struct {
 	ignoreCursor  bool
 	ignoreLimit   bool
 	forgetsCursor bool
+	icon          string
 	calls         int
 }
 
-func newSource() *source { return &source{needs: 2, entries: 3} }
+func newSource() *source { return &source{needs: 2, entries: 3, icon: svgIcon(`<circle r="4"/>`)} }
+
+// svgIcon wraps body in an SVG and returns it as a data URI without checking it.
+func svgIcon(body string) string {
+	svg := `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8">` + body + `</svg>`
+	return "data:image/svg+xml;base64," + base64.StdEncoding.EncodeToString([]byte(svg))
+}
 
 func (s *source) text(lang, en, de string) string {
 	if lang == "de" && !s.untranslated {
@@ -52,7 +60,7 @@ func (s *source) Report(_ context.Context, lang string) (status.Report, error) {
 	s.calls++
 	at := time.Date(2026, 11, 9, 10, 0, 0, 0, time.UTC)
 	r := status.Report{
-		App:      status.App{ID: "example-app", Name: "Example", Version: "1.0.0"},
+		App:      status.App{ID: "example-app", Name: "Example", Version: "1.0.0", Color: "#2e7d32", Icon: s.icon},
 		Instance: status.Instance{ID: "a1", Name: "Tower"},
 		State:    status.StateOK,
 		Work:     []status.Task{{ID: "run-1", Kind: status.KindBackup, Title: "All", StartedAt: at}},
@@ -191,6 +199,26 @@ func TestCheck_FindsEveryDeviation(t *testing.T) {
 			name: "a field that looks like a secret",
 			h:    rewrite(good(nil), status.StatusPath, func(m map[string]any) { m["app"].(map[string]any)["apiToken"] = "x" }),
 			want: `report has a field named "apiToken"`,
+		},
+		{
+			name: "an icon that runs a script",
+			h:    good(func(s *source) { s.icon = svgIcon(`<script>alert(1)</script>`) }),
+			want: "app.icon: ",
+		},
+		{
+			name: "an icon that loads a picture from elsewhere",
+			h:    good(func(s *source) { s.icon = svgIcon(`<image href="https://example.org/x.png"/>`) }),
+			want: "app.icon: ",
+		},
+		{
+			name: "an icon that is not an SVG",
+			h:    rewrite(good(nil), status.StatusPath, func(m map[string]any) { m["app"].(map[string]any)["icon"] = "/icon.png" }),
+			want: "at '/app/icon': '/icon.png' does not match pattern",
+		},
+		{
+			name: "a color that is not hex",
+			h:    rewrite(good(nil), status.StatusPath, func(m map[string]any) { m["app"].(map[string]any)["color"] = "green" }),
+			want: "at '/app/color': 'green' does not match pattern",
 		},
 		{
 			name: "too large",

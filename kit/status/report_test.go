@@ -41,8 +41,15 @@ func validate(t *testing.T, s *jsonschema.Schema, body string) error {
 
 func fullReport() status.Report {
 	at := time.Date(2026, 11, 9, 10, 2, 11, 0, time.UTC)
+	icon, err := status.IconFromSVG([]byte(logo))
+	if err != nil {
+		panic(err)
+	}
 	return status.Report{
-		App: status.App{ID: "example-app", Name: "Example", Version: "9.4.0", Commit: "b6fe55b", UI: "https://tower.lan:3443/"},
+		App: status.App{
+			ID: "example-app", Name: "Example", Version: "9.4.0", Commit: "b6fe55b", UI: "https://tower.lan:3443/",
+			Color: "#2e7d32", Icon: icon,
+		},
 		Instance: status.Instance{
 			ID: "3f9c40", Name: "Tower", Container: "4b1d0c9e",
 			Mounts: []status.Mount{{Container: "/data", Host: "/mnt/user/appdata/example"}},
@@ -102,6 +109,15 @@ func TestReportSchema_RefusesWhatBreaksTheContract(t *testing.T) {
 		{"unknown severity", func(m map[string]any) { m["needsYou"].([]any)[0].(map[string]any)["severity"] = "fatal" }},
 		{"need without text", func(m map[string]any) { m["needsYou"].([]any)[0].(map[string]any)["text"] = "" }},
 		{"negative count", func(m map[string]any) { m["counts"].(map[string]any)["work"] = -1 }},
+		{"color by name", func(m map[string]any) { m["app"].(map[string]any)["color"] = "red" }},
+		{"color with more css", func(m map[string]any) { m["app"].(map[string]any)["color"] = "#2e7d32;background:url(x)" }},
+		{"icon as a web address", func(m map[string]any) { m["app"].(map[string]any)["icon"] = "https://tower.lan/icon.svg" }},
+		{"icon as html", func(m map[string]any) {
+			m["app"].(map[string]any)["icon"] = "data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg=="
+		}},
+		{"icon past the limit", func(m map[string]any) {
+			m["app"].(map[string]any)["icon"] = "data:image/svg+xml;base64," + strings.Repeat("A", 4*(status.MaxIconSize/3+1)+4)
+		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
