@@ -96,6 +96,7 @@ type setup struct {
 	secret   []byte
 	previous []byte
 	onRemove func(id string)
+	onChange func()
 	// keysOnly opens the group on the keys derived from the secret instead.
 	keysOnly bool
 	byPhrase bool
@@ -151,6 +152,7 @@ func openGroup(t *testing.T, n *node, s setup) *Group {
 		JoinByPhrase: s.byPhrase,
 		OnRemoved:    func() { n.removed.Add(1) },
 		OnRemove:     s.onRemove,
+		OnChange:     s.onChange,
 	}, appRoutes())
 	if err != nil {
 		t.Fatalf("open %s: %v", n.name, err)

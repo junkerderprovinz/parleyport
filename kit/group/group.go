@@ -28,6 +28,7 @@ import (
 	"net"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -109,6 +110,11 @@ type Config struct {
 	// OnRemove runs once for every other member taken out here, whether by
 	// Remove or as another instance passed it on.
 	OnRemove func(id string)
+	// OnChange runs whenever what Members lists changes: a member comes or
+	// goes, waits, is approved or taken out, or is reached another way. It
+	// runs on a goroutine of its own, never twice at once, a burst of changes
+	// coming as one call, and must not call Close.
+	OnChange func()
 }
 
 // State is where a member stands with this instance.
@@ -172,6 +178,7 @@ type Group struct {
 	client    *relay.Client
 	onRemoved func()
 	onRemove  func(id string)
+	onChange  func()
 	byPhrase  bool
 
 	replay  *relay.ReplayGuard
@@ -180,6 +187,7 @@ type Group struct {
 	slots   chan struct{}
 	probing chan struct{}
 	kick    chan struct{}
+	stirred chan struct{}
 	removed sync.Once
 
 	mu       sync.Mutex
@@ -192,6 +200,7 @@ type Group struct {
 	heard    map[string]bool
 	greeted  map[string]time.Time
 	synced   map[string]time.Time
+	arrived  map[string]time.Time
 	swept    time.Time
 
 	ctx       context.Context
@@ -253,6 +262,7 @@ func Open(cfg Config, serve http.Handler) (*Group, error) {
 		lan:       cfg.LAN,
 		onRemoved: cfg.OnRemoved,
 		onRemove:  cfg.OnRemove,
+		onChange:  cfg.OnChange,
 		byPhrase:  cfg.JoinByPhrase,
 		replay:    relay.NewReplayGuard(),
 		limits:    newMemberLimits(),
@@ -260,6 +270,7 @@ func Open(cfg Config, serve http.Handler) (*Group, error) {
 		slots:     make(chan struct{}, maxDirectCalls),
 		probing:   make(chan struct{}, maxProbeBacks),
 		kick:      make(chan struct{}, 1),
+		stirred:   make(chan struct{}, 1),
 		st:        st,
 		dirty:     moved,
 		addrs:     map[string]*remoteAddr{},
@@ -268,6 +279,7 @@ func Open(cfg Config, serve http.Handler) (*Group, error) {
 		heard:     map[string]bool{},
 		greeted:   map[string]time.Time{},
 		synced:    map[string]time.Time{},
+		arrived:   map[string]time.Time{},
 		ctx:       ctx,
 		cancel:    cancel,
 	}
@@ -278,6 +290,10 @@ func Open(cfg Config, serve http.Handler) (*Group, error) {
 	if err != nil {
 		cancel()
 		return nil, err
+	}
+	if g.onChange != nil {
+		listed := g.digest()
+		g.wg.Go(func() { g.watch(listed) })
 	}
 	if g.lan != nil {
 		g.lan.SetAccept(g.acceptAnnounce)
@@ -378,12 +394,47 @@ func (g *Group) enter() bool {
 }
 
 // poke asks the background loop to look around now rather than at its next
-// tick, such as when somebody arrives on the relay.
+// tick, such as when somebody arrives on the relay or the network.
 func (g *Group) poke() {
 	select {
 	case g.kick <- struct{}{}:
 	default:
 	}
+	g.stir()
+}
+
+// stir has the app told if what Members lists changed.
+func (g *Group) stir() {
+	select {
+	case g.stirred <- struct{}{}:
+	default:
+	}
+}
+
+// watch calls onChange whenever Members lists something else than listed,
+// what it listed last, until Close.
+func (g *Group) watch(listed string) {
+	for {
+		select {
+		case <-g.ctx.Done():
+			return
+		case <-g.stirred:
+		}
+		if now := g.digest(); now != listed {
+			listed = now
+			g.onChange()
+		}
+	}
+}
+
+// digest is what Members lists, but for the last-seen times, which move
+// whenever a member is online.
+func (g *Group) digest() string {
+	var b strings.Builder
+	for _, m := range g.Members() {
+		fmt.Fprintf(&b, "%s %s %s %q %q %t %t %t\n", m.ID, m.Kind, m.State, m.Name, m.Deployment, m.Direct, m.Relay, m.Awaiting)
+	}
+	return b.String()
 }
 
 // RelayConnected reports whether the relay socket is up, which an empty member

@@ -53,7 +53,14 @@ func (g *Group) tick(now time.Time) {
 	if g.dirty {
 		_ = g.saveLocked()
 	}
+	for id, at := range g.arrived {
+		if now.Sub(at) >= addrTTL {
+			delete(g.arrived, id)
+		}
+	}
 	g.mu.Unlock()
+	// A member on the network ages out of its list without a word.
+	g.stir()
 }
 
 // greet calls every instance in reach that has not served a call from this

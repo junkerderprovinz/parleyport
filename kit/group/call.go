@@ -134,6 +134,7 @@ func directContext(ctx context.Context, relayed bool) (context.Context, context.
 // noteAnswer records whether member id said that this instance waits for its
 // approval there, and whether it served a call from this one at all.
 func (g *Group) noteAnswer(id string, status int, body []byte, now time.Time) {
+	defer g.stir()
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if status == http.StatusForbidden && bytes.Contains(body, []byte(`"memberPending"`)) {
@@ -172,6 +173,7 @@ func (g *Group) confirm(id, url, name, deployment string, now time.Time) {
 	if id == g.self {
 		return
 	}
+	defer g.stir()
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	a := g.addrs[id]
@@ -196,6 +198,7 @@ func (g *Group) directFailed(ctx context.Context, url string) {
 	if ctx.Err() != nil {
 		return
 	}
+	defer g.stir()
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.failed[url] = time.Now()

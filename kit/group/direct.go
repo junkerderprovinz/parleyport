@@ -93,8 +93,22 @@ func recent(unix int64) bool {
 	return d <= relay.ClockSkew && d >= -relay.ClockSkew
 }
 
+// acceptAnnounce takes an announce tagged under the group's key, and looks
+// around at once when it comes from a member the network did not show for a
+// while. It runs under the lock of the lan.Service, which g.mu always nests in.
 func (g *Group) acceptAnnounce(p lan.Peer) bool {
-	return recent(p.Sent) && hmac.Equal([]byte(p.Tag), []byte(announceTag(g.peerAuth, p)))
+	if !recent(p.Sent) || !hmac.Equal([]byte(p.Tag), []byte(announceTag(g.peerAuth, p))) {
+		return false
+	}
+	now := time.Now()
+	g.mu.Lock()
+	last, known := g.arrived[p.ID]
+	g.arrived[p.ID] = now
+	g.mu.Unlock()
+	if !known || now.Sub(last) >= addrTTL {
+		g.poke()
+	}
+	return true
 }
 
 // announce tells the network what this instance goes by now.

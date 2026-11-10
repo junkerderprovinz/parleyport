@@ -132,6 +132,7 @@ func loadState(raw []byte, groupKey, previous string) (state, bool, error) {
 }
 
 func (g *Group) saveLocked() error {
+	g.stir()
 	raw, err := json.Marshal(g.st)
 	if err != nil {
 		return err
