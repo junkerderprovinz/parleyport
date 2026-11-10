@@ -464,36 +464,17 @@ func (g *Group) Remove(id string) error {
 
 // forget removes id here only and tells the app, the first time.
 func (g *Group) forget(id string, now time.Time) error {
-	newly, err := g.forgetLocally(id, now)
+	g.mu.Lock()
+	newly := g.forgetLocked(id, now)
+	var err error
+	if newly {
+		err = g.saveLocked()
+	}
+	g.mu.Unlock()
 	if newly && g.onRemove != nil {
 		g.onRemove(id)
 	}
 	return err
-}
-
-func (g *Group) forgetLocally(id string, now time.Time) (bool, error) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	st := &g.st
-	if _, done := st.Removed[id]; done {
-		return false, nil
-	}
-	rec, known := st.Members[id]
-	delete(st.Members, id)
-	if st.Removed == nil {
-		st.Removed = map[string]time.Time{}
-	}
-	bounded(st.Removed)
-	st.Removed[id] = now
-	if known {
-		if st.Revoked == nil {
-			st.Revoked = map[string]time.Time{}
-		}
-		bounded(st.Revoked)
-		st.Revoked[hex.EncodeToString(rec.Key)] = now
-	}
-	delete(g.addrs, id)
-	return true, g.saveLocked()
 }
 
 // bounded makes room for one more entry by dropping the oldest.
@@ -590,85 +571,7 @@ func (g *Group) decide(d decision, now time.Time) {
 			_ = g.forget(d.ID, now)
 		}
 	case opApprove:
-		g.approvePassed(d.ID, d.Kind, d.Key, now)
-	}
-}
-
-// approvePassed pins key as approved for id unless id was removed, the key was
-// revoked, another key is pinned or the key does not make id.
-func (g *Group) approvePassed(id string, kind member.Kind, key []byte, now time.Time) {
-	if id == g.self || !claimFits(id, kind, key) {
-		return
-	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	st := &g.st
-	_, removed := st.Removed[id]
-	if _, revoked := st.Revoked[hex.EncodeToString(key)]; revoked || removed {
-		return
-	}
-	if rec, ok := st.Members[id]; ok {
-		if rec.Approved || !bytes.Equal(rec.Key, key) {
-			return
-		}
-		rec.Approved, rec.Used = true, now
-		st.Members[id] = rec
-		if g.saveLocked() != nil {
-			rec.Approved = false
-			st.Members[id] = rec
-		}
-		return
-	}
-	idle := ""
-	if len(st.Members) >= maxPinned {
-		if idle = idlePinLocked(st, now); idle == "" {
-			return
-		}
-	}
-	_ = g.pinLocked(id, record{Kind: kind, Key: bytes.Clone(key), Approved: true, Used: now}, idle)
-}
-
-// roster is what an instance tells the others of who is approved and who was
-// taken out, for one that was away when it was decided.
-type roster struct {
-	Members []rosterMember       `json:"members"`
-	Removed map[string]time.Time `json:"removed,omitempty"`
-}
-
-type rosterMember struct {
-	ID   string      `json:"id"`
-	Kind member.Kind `json:"kind"`
-	Key  []byte      `json:"key"`
-}
-
-func (g *Group) roster() roster {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	r := roster{Members: []rosterMember{}, Removed: map[string]time.Time{}}
-	for id, rec := range g.st.Members {
-		if rec.Approved {
-			r.Members = append(r.Members, rosterMember{ID: id, Kind: rec.Kind, Key: bytes.Clone(rec.Key)})
-		}
-	}
-	for id, at := range g.st.Removed {
-		r.Removed[id] = at
-	}
-	return r
-}
-
-// merge takes from r, the roster of an approved instance, the approvals and
-// removals missing here.
-func (g *Group) merge(r roster, now time.Time) {
-	for id := range r.Removed {
-		if id != g.self && kindOfID(id) != "" {
-			_ = g.forget(id, now)
-		}
-	}
-	for i, m := range r.Members {
-		if i >= maxPinned {
-			break
-		}
-		g.approvePassed(m.ID, m.Kind, m.Key, now)
+		_ = g.Import(Roster{Members: []Member{{ID: d.ID, Kind: d.Kind, Key: d.Key, State: StateApproved}}})
 	}
 }
 

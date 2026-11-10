@@ -58,12 +58,24 @@ func (s *memStore) Save(b []byte) error {
 // identity is the member key of the instance called name in these tests.
 func identity(t testing.TB, name string) member.Identity {
 	t.Helper()
+	return device(t, member.KindInstance, name)
+}
+
+// device is the member key of the member of kind called name in these tests.
+func device(t testing.TB, kind member.Kind, name string) member.Identity {
+	t.Helper()
 	seed := sha256.Sum256([]byte(name))
-	id, err := member.FromSeed(member.KindInstance, seed[:])
+	id, err := member.FromSeed(kind, seed[:])
 	if err != nil {
 		t.Fatal(err)
 	}
 	return id
+}
+
+// signedBy is a call to target's path signed by from under request id, as the
+// guard sees it once it opened.
+func signedBy(from member.Identity, id, target, path string) relay.ProxyCall {
+	return relay.SignCall(testDomain.Signing(), &from, id, target, relay.ProxyCall{Method: http.MethodGet, Path: path})
 }
 
 // node is one instance in a test: its group, the app routes behind it and the

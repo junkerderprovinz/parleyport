@@ -126,7 +126,7 @@ func (g *Group) syncRosters(ctx context.Context, now time.Time) {
 		cancel()
 		var r roster
 		if err == nil && status == http.StatusOK && json.Unmarshal(body, &r) == nil {
-			g.merge(r, now)
+			g.merge(r)
 		}
 	}
 }

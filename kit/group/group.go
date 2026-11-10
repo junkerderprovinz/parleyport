@@ -400,13 +400,17 @@ func (g *Group) Members() []Member {
 	for _, m := range view {
 		out = append(out, *m)
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Name != out[j].Name {
-			return out[i].Name < out[j].Name
-		}
-		return out[i].ID < out[j].ID
-	})
+	sortMembers(out)
 	return out
+}
+
+func sortMembers(ms []Member) {
+	sort.Slice(ms, func(i, j int) bool {
+		if ms[i].Name != ms[j].Name {
+			return ms[i].Name < ms[j].Name
+		}
+		return ms[i].ID < ms[j].ID
+	})
 }
 
 // look merges what the network, the relay and the store say about each
@@ -460,10 +464,7 @@ func (g *Group) look(now time.Time) map[string]*Member {
 	}
 	for id, rec := range g.st.Members {
 		m := get(id, rec.Kind)
-		m.Key, m.State = rec.Key, StatePending
-		if rec.Approved {
-			m.State = StateApproved
-		}
+		m.Key, m.State = rec.Key, rec.state()
 		if m.Online() {
 			if rec.seenAs(m, now) {
 				g.st.Members[id] = rec
