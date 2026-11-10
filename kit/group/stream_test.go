@@ -232,7 +232,7 @@ func sealedStream(t *testing.T, key, data []byte, end streamEnd) io.Reader {
 		sealed := aead.Seal(nil, pieceNonce(count), plain, []byte{kind})
 		count++
 		buf.WriteByte(kind)
-		buf.Write(binary.BigEndian.AppendUint32(nil, uint32(len(sealed))))
+		buf.Write(binary.BigEndian.AppendUint32(nil, uint32(len(sealed)))) //nolint:gosec // G115: a piece of a few KiB
 		buf.Write(sealed)
 	}
 	piece(pieceData, data)

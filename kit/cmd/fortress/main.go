@@ -19,35 +19,28 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/junkerderprovinz/parleyport/kit/fortress"
 	"github.com/junkerderprovinz/parleyport/kit/group"
-	"github.com/junkerderprovinz/parleyport/kit/keys"
-	"github.com/junkerderprovinz/parleyport/kit/lan"
 	"github.com/junkerderprovinz/parleyport/kit/member"
 	"github.com/junkerderprovinz/parleyport/kit/phrase"
 	"github.com/junkerderprovinz/parleyport/kit/status"
 )
 
-const (
-	configFile = "fortress.json"
-	stateFile  = "state.json"
-	// settle is how long after the relay connects the members it lists are
-	// taken as complete.
-	settle = 1500 * time.Millisecond
-)
+// settle is how long after the relay connects the members it lists are taken
+// as complete.
+const settle = 1500 * time.Millisecond
 
 // errUsage is a command line that does not make sense; it exits with 2.
 var errUsage = errors.New("usage")
@@ -105,7 +98,7 @@ func dispatch(ctx context.Context, args []string, stdin io.Reader, stdout io.Wri
 		if *uses != "" {
 			list = strings.Split(*uses, ",")
 		}
-		return join(*dir, settings{App: *app, Name: *name, Relay: *relayURL, LAN: *useLAN, Uses: list}, stdin)
+		return join(*dir, fortress.Membership{App: *app, Device: *name, Relay: *relayURL, LAN: *useLAN, Uses: list}, stdin)
 	case "members":
 		return withFortress(ctx, *dir, *wait, func(f *fortress.Fortress) error { return members(f, stdout, *asJSON) })
 	case "status":
@@ -123,37 +116,7 @@ func dispatch(ctx context.Context, args []string, stdin io.Reader, stdout io.Wri
 	return fmt.Errorf("%w: unknown command %q", errUsage, verb)
 }
 
-// settings is what join keeps in DIR: the plugin's member key and the keys of
-// the fortress's own domain, never the phrase.
-type settings struct {
-	App      string   `json:"app"`
-	Name     string   `json:"name"`
-	Relay    string   `json:"relay,omitempty"`
-	LAN      bool     `json:"lan,omitempty"`
-	Uses     []string `json:"uses,omitempty"`
-	Seed     string   `json:"seed"`
-	Group    string   `json:"group"`
-	Frame    string   `json:"frame"`
-	PeerAuth string   `json:"peerAuth"`
-}
-
-func (s settings) keys() (keys.Set, error) {
-	frame, err := hex.DecodeString(s.Frame)
-	if err != nil {
-		return keys.Set{}, err
-	}
-	peerAuth, err := hex.DecodeString(s.PeerAuth)
-	if err != nil {
-		return keys.Set{}, err
-	}
-	set := keys.Set{Group: s.Group, Frame: frame, PeerAuth: peerAuth}
-	if !set.Complete() {
-		return keys.Set{}, errors.New("the keys are incomplete")
-	}
-	return set, nil
-}
-
-func join(dir string, s settings, stdin io.Reader) error {
+func join(dir string, m fortress.Membership, stdin io.Reader) error {
 	line, err := bufio.NewReader(stdin).ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
 		return err
@@ -162,139 +125,31 @@ func join(dir string, s settings, stdin io.Reader) error {
 	if err != nil {
 		return err
 	}
-	set := fortress.Domain.Keys(secret)
-	clear(secret)
-	id, err := member.NewIdentity(member.KindInstance)
-	if err != nil {
-		return err
-	}
-	s.Seed = hex.EncodeToString(id.Seed())
-	s.Group, s.Frame, s.PeerAuth = set.Group, hex.EncodeToString(set.Frame), hex.EncodeToString(set.PeerAuth)
-	// Opening it once, off the network, checks the app id and the actions
-	// before anything is written.
-	offline := s
-	offline.Relay, offline.LAN = "off", false
-	if err := os.MkdirAll(dir, 0o700); err != nil { //nolint:gosec // G703: the operator names the directory
-		return err
-	}
-	_, leave, err := open(dir, offline, filepath.Join(dir, stateFile))
-	if err != nil {
-		return err
-	}
-	if err := leave(); err != nil {
-		return err
-	}
-	raw, err := json.MarshalIndent(s, "", "  ")
-	if err != nil {
-		return err
-	}
-	return writeFile(filepath.Join(dir, configFile), raw)
-}
-
-// writeFile replaces path with raw, so that a crash leaves the old file or the
-// new one and never half of either. CreateTemp makes the file readable by its
-// owner alone; on a FAT stick the mount decides.
-func writeFile(path string, raw []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".fortress-*")
-	if err != nil {
-		return err
-	}
-	defer func() { _ = os.Remove(tmp.Name()) }() //nolint:gosec // G703: a file CreateTemp just made
-	if _, err := tmp.Write(raw); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), path) //nolint:gosec // G703: the operator names the directory
-}
-
-// fileStore keeps the fortress's state in a file of its own.
-type fileStore string
-
-func (p fileStore) Load() ([]byte, error) {
-	raw, err := os.ReadFile(string(p))
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	return raw, err
-}
-
-func (p fileStore) Save(raw []byte) error {
-	if err := os.MkdirAll(filepath.Dir(string(p)), 0o700); err != nil {
-		return err
-	}
-	return writeFile(string(p), raw)
-}
-
-// open joins the fortress s describes and returns how to leave it again.
-func open(dir string, s settings, state string) (*fortress.Fortress, func() error, error) {
-	seed, err := hex.DecodeString(s.Seed)
-	if err != nil {
-		return nil, nil, fmt.Errorf("%s is damaged: %w", filepath.Join(dir, configFile), err)
-	}
-	set, err := s.keys()
-	if err != nil {
-		return nil, nil, fmt.Errorf("%s is damaged: %w", filepath.Join(dir, configFile), err)
-	}
-	id, err := member.FromSeed(member.KindInstance, seed)
-	if err != nil {
-		return nil, nil, err
-	}
-	cfg := fortress.Config{
-		App:      fortress.App{ID: s.App, Name: s.App},
-		Keys:     set,
-		Identity: id,
-		Self:     group.Self{Name: s.Name, Deployment: "plugin"},
-		Store:    fileStore(state),
-		Uses:     s.Uses,
-	}
-	switch s.Relay {
-	case "":
-		cfg.Relay = group.RelayProject
-	case "off":
-		cfg.Relay = group.RelayOff
-	default:
-		cfg.Relay, cfg.RelayURL = group.RelayOwn, s.Relay
-	}
-	if !s.LAN {
-		f, err := fortress.Open(cfg)
-		if err != nil {
-			return nil, nil, err
-		}
-		return f, f.Close, nil
-	}
-	cfg.LAN = lan.New(lan.Config{Group: fortress.Multicast})
-	cfg.LAN.Start()
-	f, err := fortress.Open(cfg)
-	if err != nil {
-		_ = cfg.LAN.Close()
-		return nil, nil, err
-	}
-	return f, func() error { return errors.Join(f.Close(), cfg.LAN.Close()) }, nil
+	defer clear(secret)
+	return fortress.Join(dir, secret, m)
 }
 
 // withFortress joins the fortress kept in dir, waits for its members and runs
 // do.
 func withFortress(ctx context.Context, dir string, wait time.Duration, do func(*fortress.Fortress) error) error {
-	raw, err := os.ReadFile(filepath.Join(dir, configFile)) //nolint:gosec // G304: the operator names the directory
-	if errors.Is(err, os.ErrNotExist) {
+	cfg, err := fortress.Load(dir)
+	if errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("%s holds no fortress yet; run fortress join first", dir)
 	}
 	if err != nil {
 		return err
 	}
-	var s settings
-	if err := json.Unmarshal(raw, &s); err != nil {
-		return fmt.Errorf("%s is damaged: %w", filepath.Join(dir, configFile), err)
+	leave := func() error { return nil }
+	if cfg.LAN != nil {
+		cfg.LAN.Start()
+		leave = cfg.LAN.Close
 	}
-	f, leave, err := open(dir, s, filepath.Join(dir, stateFile))
+	f, err := fortress.Open(cfg)
 	if err != nil {
-		return err
+		return errors.Join(err, leave())
 	}
-	settled(ctx, f, s.Relay != "off", wait)
-	return errors.Join(do(f), leave())
+	settled(ctx, f, cfg.Relay != group.RelayOff, wait)
+	return errors.Join(do(f), f.Close(), leave())
 }
 
 // settled waits until the relay lists the members and every instance in reach

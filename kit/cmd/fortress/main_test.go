@@ -192,7 +192,7 @@ func TestTheJoinedPluginKeepsNoPhrase(t *testing.T) {
 	}
 
 	var kept []string
-	for _, name := range []string{configFile, stateFile} {
+	for _, name := range []string{"fortress.json", "state.json"} {
 		raw, err := os.ReadFile(filepath.Join(dir, name)) //nolint:gosec // G304: the test's own directory
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			t.Fatal(err)
@@ -227,7 +227,7 @@ func TestTheJoinedPluginKeepsNoPhrase(t *testing.T) {
 	}
 
 	if runtime.GOOS != "windows" {
-		for name, want := range map[string]os.FileMode{dir: 0o700, filepath.Join(dir, configFile): 0o600} {
+		for name, want := range map[string]os.FileMode{dir: 0o700, filepath.Join(dir, "fortress.json"): 0o600} {
 			info, err := os.Stat(name)
 			if err != nil || info.Mode().Perm() != want {
 				t.Errorf("%s is %v %v, want %v", name, info.Mode().Perm(), err, want)
