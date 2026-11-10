@@ -94,9 +94,29 @@ type node struct {
 	store     *memStore
 	pairStore *memStore
 	removed   atomic.Int32
+	// current is the fortress the server hands direct calls to.
+	current atomic.Pointer[Fortress]
 
 	mu      sync.Mutex
 	dropped []string
+	kept    [][]byte
+}
+
+func (n *node) Keep(secret []byte) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.kept = append(n.kept, bytes.Clone(secret))
+	return nil
+}
+
+// lastKept is the secret the node's app was last given to keep.
+func (n *node) lastKept() []byte {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if len(n.kept) == 0 {
+		return nil
+	}
+	return n.kept[len(n.kept)-1]
 }
 
 func (n *node) drops() []string {
@@ -111,16 +131,17 @@ type setup struct {
 	pairLAN  *lan.Service
 	secret   []byte
 	previous []byte
-	noPair   bool
+	// moved is the secret of the fortress before ChangePhrase.
+	moved  []byte
+	noPair bool
 }
 
 // open starts the instance name of app in the fortress s describes.
 func open(t *testing.T, app, name string, s setup) *node {
 	t.Helper()
 	n := &node{name: name, app: app, id: identity(t, name).ID(), store: &memStore{}, pairStore: &memStore{}}
-	var current atomic.Pointer[Fortress]
 	n.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if f := current.Load(); f != nil && r.URL.Path == group.DirectPath {
+		if f := n.current.Load(); f != nil && r.URL.Path == group.DirectPath {
 			f.DirectHandler().ServeHTTP(w, r)
 			return
 		}
@@ -128,7 +149,6 @@ func open(t *testing.T, app, name string, s setup) *node {
 	}))
 	t.Cleanup(n.srv.Close)
 	n.f = reopen(t, n, s)
-	current.Store(n.f)
 	return n
 }
 
@@ -139,6 +159,7 @@ func reopen(t *testing.T, n *node, s setup) *Fortress {
 		t.Fatalf("open %s: %v", n.name, err)
 	}
 	t.Cleanup(func() { _ = f.Close() })
+	n.current.Store(f)
 	return f
 }
 
@@ -176,6 +197,8 @@ func config(t *testing.T, n *node, s setup) Config {
 			return []byte(`{"ok":true}`), nil
 		}}},
 		Uses:      []string{"files.drop"},
+		Keeper:    n,
+		Previous:  s.moved,
 		OnRemoved: func() { n.removed.Add(1) },
 	}
 	if !s.noPair {
@@ -254,20 +277,10 @@ func inRelay(t *testing.T, apps ...string) []*node {
 	return nodes
 }
 
-// meet approves a and b in each other's fortress, as their owners would.
+// meet waits until a and b know which app the other runs. It takes nothing
+// but the phrase both hold.
 func meet(t *testing.T, a, b *node) {
 	t.Helper()
-	for _, pair := range [][2]*node{{a, b}, {b, a}} {
-		from, to := pair[0], pair[1]
-		_, _ = to.f.Status(ctx(t), from.id, "")
-		waitFor(t, from.name+" to see "+to.name+" ask", func() bool {
-			m, ok := memberOf(from.f, to.id)
-			return ok && m.State != ""
-		})
-		if err := from.f.Approve(to.id); err != nil {
-			t.Fatalf("%s approves %s: %v", from.name, to.name, err)
-		}
-	}
 	for _, pair := range [][2]*node{{a, b}, {b, a}} {
 		from, to := pair[0], pair[1]
 		waitFor(t, from.name+" to know "+to.name+"'s app", func() bool {

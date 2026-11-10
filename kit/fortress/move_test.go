@@ -23,6 +23,13 @@ type paired struct {
 	moved []byte
 }
 
+func (p *paired) Keep(secret []byte) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.moved = bytes.Clone(secret)
+	return nil
+}
+
 func (p *paired) given() []byte {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -32,16 +39,10 @@ func (p *paired) given() []byte {
 func openPaired(t *testing.T, url, name string) *paired {
 	t.Helper()
 	p := &paired{name: name, id: identity(t, name).ID(), store: &memStore{}}
-	accept := func(secret []byte) error {
-		p.mu.Lock()
-		defer p.mu.Unlock()
-		p.moved = bytes.Clone(secret)
-		return nil
-	}
 	g, err := group.Open(group.Config{
 		Domain: keys.Domain("alpha"), Secret: oldSecret, Identity: identity(t, name),
 		Self: group.Self{Name: name}, Relay: group.RelayOwn, RelayURL: url, Store: p.store,
-	}, Moving(appRoutes(), accept))
+	}, Moving(appRoutes(), p))
 	if err != nil {
 		t.Fatal(err)
 	}

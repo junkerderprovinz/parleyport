@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/junkerderprovinz/parleyport/kit/group"
 	"github.com/junkerderprovinz/parleyport/kit/internal/vectors"
@@ -30,8 +31,12 @@ func TestOpenRefusesAnIncompleteConfig(t *testing.T) {
 		"an action that no-one runs": func(c *Config) {
 			c.Actions = []Action{{Name: "files.drop"}}
 		},
-		"a use named badly":       func(c *Config) { c.Uses = []string{"run"} },
-		"a pairing with no store": func(c *Config) { c.Pairing.Store = nil },
+		"a use named badly":                  func(c *Config) { c.Uses = []string{"run"} },
+		"a pairing with no store":            func(c *Config) { c.Pairing.Store = nil },
+		"keys but no secret for the pairing": func(c *Config) { c.Secret, c.Keys = nil, Domain.Keys(testSecret) },
+		"half the keys": func(c *Config) {
+			c.Secret, c.Pairing, c.Keys = nil, nil, keys.Set{Group: Domain.GroupKey(testSecret)}
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := good()
@@ -65,16 +70,31 @@ func TestMembersOfTwoAppsSeeEachOther(t *testing.T) {
 	}
 }
 
-func TestAMemberWaitsForApproval(t *testing.T) {
+func TestThePhraseIsAllItTakes(t *testing.T) {
 	n := inRelay(t, "alpha", "alpha-1", "bravo", "bravo-1")
 	a, b := n[0], n[1]
-	waitFor(t, "bravo to wait at alpha", func() bool { m, _ := memberOf(a.f, b.id); return m.State == group.StatePending })
 
-	if _, err := b.f.Status(ctx(t), a.id, ""); err == nil {
-		t.Error("bravo read alpha's status before anybody approved it")
+	if _, err := b.f.Status(ctx(t), a.id, ""); err != nil {
+		t.Errorf("bravo reads alpha's status with the phrase alone: %v", err)
 	}
-	if _, err := b.f.Act(ctx(t), a.id, "files.drop", []byte(`"x"`)); err == nil || len(a.drops()) > 0 {
-		t.Errorf("bravo acted at alpha before anybody approved it: %v %v", err, a.drops())
+	if _, err := b.f.Act(ctx(t), a.id, "files.drop", []byte(`"x"`)); err != nil {
+		t.Errorf("bravo acts at alpha with the phrase alone: %v", err)
+	}
+	if m, _ := memberOf(a.f, b.id); m.State != group.StateApproved {
+		t.Errorf("alpha lists bravo as %q, want a member", m.State)
+	}
+}
+
+func TestAnotherPhraseGetsNobodyIn(t *testing.T) {
+	url := relayServer(t)
+	a := open(t, "alpha", "alpha-1", setup{relay: url})
+	b := open(t, "bravo", "bravo-1", setup{relay: url, secret: []byte("another phrase..")})
+	time.Sleep(time.Second)
+	if len(a.f.Members()) != 0 || len(b.f.Members()) != 0 {
+		t.Errorf("two phrases see each other: %v %v", a.f.Members(), b.f.Members())
+	}
+	if _, err := b.f.Status(ctx(t), a.id, ""); err == nil {
+		t.Error("bravo reads alpha's status under another phrase")
 	}
 }
 
@@ -214,5 +234,27 @@ func TestTheFortressKeysMatchTheVectors(t *testing.T) {
 	}
 	if found == 0 {
 		t.Error("the vectors pin no key of the fortress")
+	}
+}
+
+func TestAMemberWithTheFortressKeysAloneTakesPart(t *testing.T) {
+	url := relayServer(t)
+	a := open(t, "alpha", "alpha-1", setup{relay: url})
+	b := &node{name: "bravo-1", app: "bravo", id: identity(t, "bravo-1").ID(), store: &memStore{}, pairStore: &memStore{}}
+	cfg := config(t, b, setup{relay: url, noPair: true})
+	cfg.Secret, cfg.Keys = nil, Domain.Keys(testSecret)
+	f, err := Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+	b.f = f
+	waitFor(t, "both on the relay", func() bool { return len(a.f.Members()) == 1 && len(b.f.Members()) == 1 })
+	meet(t, a, b)
+	if _, err := b.f.Act(ctx(t), a.id, "files.drop", []byte(`"x"`)); err != nil {
+		t.Errorf("bravo acts on its keys alone: %v", err)
+	}
+	if b.f.Pairing() != nil {
+		t.Error("a member without the secret has a pairing")
 	}
 }

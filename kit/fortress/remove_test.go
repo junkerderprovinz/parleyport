@@ -32,9 +32,6 @@ func TestARemovedMemberCanDoNothing(t *testing.T) {
 			t.Errorf("%s ran %v for a removed member", target.name, target.drops())
 		}
 	}
-	if err := b.f.Approve(c.id); err == nil {
-		t.Error("bravo approved charlie again with the same key")
-	}
 }
 
 func TestRemovingAnInstanceTakesItOutOfItsPairing(t *testing.T) {

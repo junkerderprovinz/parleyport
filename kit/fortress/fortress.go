@@ -4,8 +4,8 @@
 // Domain, and every app derives the keys of its own pairing from it under its
 // own domain, as it did from a phrase of its own. So joining the fortress
 // pairs an instance with the other instances of its app as well. An instance
-// signs with one member key in both groups, and a member approved or taken
-// out in one is approved or taken out in the other.
+// signs with one member key in both groups, and a member taken out of one is
+// taken out of the other.
 //
 // Members see each other's status and log without asking. Anything more is an
 // action: an app offers actions by name and runs them for the members that
@@ -13,10 +13,12 @@
 // permission is on until then, and a switch made at any instance reaches all
 // of them.
 //
-// The phrase only lets a device ask. Somebody approves it at one instance and
-// the others follow, and a member taken out is refused by all of them. A
-// member names its app itself and keeps the first name it gave, so the
-// permissions keep apps apart, not members that lie about their app.
+// The phrase is the proof: a device that holds it is a member at once, with
+// the permissions as they stand. A member taken out is refused by all the
+// others for good, but whoever still holds the phrase can come back under a
+// new key until the phrase is changed. A member names its app itself and
+// keeps the first name it gave, so the permissions keep apps apart, not
+// members that lie about their app.
 package fortress
 
 import (
@@ -55,6 +57,7 @@ const (
 	permissionsPath = prefix + "permissions"
 	actPrefix       = prefix + "act/"
 	movePath        = prefix + "move"
+	phrasePath      = prefix + "phrase"
 )
 
 const (
@@ -115,12 +118,16 @@ type Pairing struct {
 	Previous []byte
 }
 
-// Config is what a Fortress runs on. App, Secret, Identity and Store are
-// required.
+// Config is what a Fortress runs on. App, Secret or Keys, Identity and Store
+// are required.
 type Config struct {
 	App App
 	// Secret is what the phrase encodes.
 	Secret []byte
+	// Keys stand in for Secret on a device that keeps only what the fortress
+	// derives under Domain. It cannot pair the app's instances, whose keys
+	// come from the secret.
+	Keys keys.Set
 	// Identity is this instance's member key, in the fortress and in the
 	// pairing alike.
 	Identity member.Identity
@@ -134,6 +141,14 @@ type Config struct {
 	// alone.
 	LAN   *lan.Service
 	Store group.Store
+	// Previous is the secret of the phrase before ChangePhrase. Members,
+	// removals and permissions carry over to Secret, in the pairing as well
+	// unless Pairing.Previous says otherwise.
+	Previous []byte
+	// Keeper keeps a new phrase when the fortress changes it; nil for an app
+	// that has nowhere safe to keep one, which then enters the new phrase
+	// like a new member.
+	Keeper Keeper
 	// Pairing pairs the app's own instances; nil for an app that has none.
 	Pairing *Pairing
 	// Status is what the members read about this instance; nil shows them
@@ -153,8 +168,10 @@ func (cfg Config) check() error {
 	switch {
 	case !validApp(cfg.App.ID):
 		return fmt.Errorf("fortress: %q is no app id", cfg.App.ID)
-	case len(cfg.Secret) == 0:
-		return errors.New("fortress: no secret")
+	case len(cfg.Secret) == 0 && !cfg.Keys.Complete():
+		return errors.New("fortress: no secret and no complete keys")
+	case len(cfg.Secret) == 0 && cfg.Pairing != nil:
+		return errors.New("fortress: a pairing needs the secret")
 	case cfg.Store == nil:
 		return errors.New("fortress: no store")
 	case cfg.Pairing != nil && (cfg.Pairing.Store == nil || cfg.Pairing.Serve == nil):
@@ -177,6 +194,15 @@ func (cfg Config) check() error {
 	return nil
 }
 
+// Keeper keeps the secret behind the phrase under the app's own seal, such as
+// its main key, so that the app can show the phrase again once its user
+// signed in. The fortress keeps no secret itself. Keep may run inside a call
+// the fortress serves, so it must not close the fortress; the app opens it
+// again afterwards, with the new secret and the old one as Config.Previous.
+type Keeper interface {
+	Keep(secret []byte) error
+}
+
 // Member is another instance in the fortress, of any app, or a viewer that
 // only reads, such as a tile.
 type Member struct {
@@ -192,10 +218,7 @@ type Member struct {
 	// Direct means it is reachable on this network now, Relay that it is on
 	// the relay now.
 	Direct, Relay bool
-	// Awaiting means it said recently that this instance waits for its
-	// approval there.
-	Awaiting bool
-	LastSeen time.Time
+	LastSeen      time.Time
 	// Actions are what its app offers, Uses what it calls at others.
 	Actions []string
 	Uses    []string
@@ -214,6 +237,7 @@ type Fortress struct {
 	store     *splitStore
 	group     *group.Group
 	pairing   *group.Group
+	keeper    Keeper
 	onRemoved func()
 	removed   sync.Once
 
@@ -243,7 +267,15 @@ func Open(cfg Config) (*Fortress, error) {
 	if err := store.load(); err != nil {
 		return nil, err
 	}
-	bk, err := loadBook(store.fortress(), Domain.GroupKey(cfg.Secret))
+	set := cfg.Keys
+	if len(cfg.Secret) > 0 {
+		set = Domain.Keys(cfg.Secret)
+	}
+	previous := ""
+	if len(cfg.Previous) > 0 {
+		previous = Domain.GroupKey(cfg.Previous)
+	}
+	bk, err := loadBook(store.fortress(), set.Group, previous)
 	if err != nil {
 		return nil, err
 	}
@@ -254,6 +286,7 @@ func Open(cfg Config) (*Fortress, error) {
 		about:     about{App: cfg.App, Uses: cfg.Uses},
 		actions:   map[string]Action{},
 		store:     store,
+		keeper:    cfg.Keeper,
 		onRemoved: cfg.OnRemoved,
 		book:      bk,
 		described: map[string]time.Time{},
@@ -271,11 +304,15 @@ func Open(cfg Config) (*Fortress, error) {
 		f.status = status.Handler(cfg.Status, func(*http.Request) error { return nil })
 	}
 	if p := cfg.Pairing; p != nil {
+		before := p.Previous
+		if len(before) == 0 {
+			before = cfg.Previous
+		}
 		f.pairing, err = group.Open(group.Config{
 			Domain:    keys.Domain(cfg.App.ID),
 			Signing:   p.Signing,
 			Secret:    cfg.Secret,
-			Previous:  p.Previous,
+			Previous:  before,
 			Identity:  cfg.Identity,
 			Self:      cfg.Self,
 			Relay:     cfg.Relay,
@@ -291,16 +328,18 @@ func Open(cfg Config) (*Fortress, error) {
 		}
 	}
 	g, err := group.Open(group.Config{
-		Domain:    Domain,
-		Secret:    cfg.Secret,
-		Identity:  cfg.Identity,
-		Self:      cfg.Self,
-		Relay:     cfg.Relay,
-		RelayURL:  cfg.RelayURL,
-		LAN:       cfg.LAN,
-		Store:     store,
-		OnRemoved: f.leave,
-		OnRemove:  f.fortressRemoved,
+		Domain:       Domain,
+		Keys:         set,
+		Previous:     cfg.Previous,
+		JoinByPhrase: true,
+		Identity:     cfg.Identity,
+		Self:         cfg.Self,
+		Relay:        cfg.Relay,
+		RelayURL:     cfg.RelayURL,
+		LAN:          cfg.LAN,
+		Store:        store,
+		OnRemoved:    f.leave,
+		OnRemove:     f.fortressRemoved,
 	}, http.HandlerFunc(f.serve))
 	if err != nil {
 		cancel()
@@ -392,7 +431,7 @@ func (f *Fortress) Members() []Member {
 		a := f.book.Members[m.ID]
 		out = append(out, Member{
 			ID: m.ID, Kind: m.Kind, App: a.App, Device: m.Name, Deployment: m.Deployment, Address: m.Address,
-			State: m.State, Direct: m.Direct, Relay: m.Relay, Awaiting: m.Awaiting, LastSeen: m.LastSeen,
+			State: m.State, Direct: m.Direct, Relay: m.Relay, LastSeen: m.LastSeen,
 			Actions: append([]string(nil), a.Actions...), Uses: append([]string(nil), a.Uses...),
 		})
 	}
@@ -406,16 +445,6 @@ func (f *Fortress) Members() []Member {
 		return out[i].ID < out[j].ID
 	})
 	return out
-}
-
-// Approve lets member id into the fortress, and into the pairing when it is
-// an instance of this app waiting there under the same key.
-func (f *Fortress) Approve(id string) error {
-	if err := f.group.Approve(id); err != nil {
-		return err
-	}
-	f.follow(time.Now())
-	return nil
 }
 
 // Remove takes member id out of the fortress and out of the pairing: its key
@@ -479,11 +508,10 @@ func (f *Fortress) pairingRemoved(id string) {
 	}
 }
 
-// follow approves in each group the instances of this app that are approved
-// in the other under the same key. Into the pairing goes only a member that
-// said it runs this app; into the fortress any instance the pairing approved,
-// since only this app's instances pair here. Every sibling is greeted in the
-// pairing, so that each knows the other's key there and can approve it.
+// follow approves in the pairing every member of the fortress that said it
+// runs this app and waits there under the same key, which is how holding the
+// phrase pairs an app's instances. Every such sibling is greeted in the
+// pairing, so that each knows the other's key there.
 func (f *Fortress) follow(now time.Time) {
 	if f.pairing == nil {
 		return
@@ -504,11 +532,7 @@ func (f *Fortress) follow(now time.Time) {
 			f.again(f.greeted, m.ID, now.Add(greetEvery))
 			f.greet(m.ID)
 		}
-		switch {
-		case !bytes.Equal(p.Key, m.Key) || len(m.Key) == 0:
-		case p.State == group.StateApproved && m.State == group.StatePending:
-			_ = f.group.Approve(m.ID)
-		case p.State == group.StatePending && sibling:
+		if sibling && p.State == group.StatePending && len(m.Key) > 0 && bytes.Equal(p.Key, m.Key) {
 			_ = f.pairing.Approve(m.ID)
 		}
 	}
@@ -555,7 +579,7 @@ func (f *Fortress) run() {
 func (f *Fortress) tick(now time.Time) {
 	var due []string
 	for _, m := range f.group.Members() {
-		if m.Kind == member.KindInstance && m.State == group.StateApproved && m.Online() {
+		if m.Kind == member.KindInstance && m.Online() {
 			due = append(due, m.ID)
 		}
 	}
@@ -626,8 +650,7 @@ func (f *Fortress) get(ctx context.Context, id, path string) ([]byte, error) {
 }
 
 // serve answers the calls of the members. The group lets through only
-// approved members, each named by CallerOf. A viewer reads and does nothing
-// else.
+// members, each named by CallerOf. A viewer reads and does nothing else.
 func (f *Fortress) serve(w http.ResponseWriter, r *http.Request) {
 	caller, ok := group.CallerOf(r.Context())
 	switch {
@@ -645,6 +668,8 @@ func (f *Fortress) serve(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, f.permissionList())
 	case path == permissionsPath && r.Method == http.MethodPost:
 		f.takeSwitch(w, r, caller.ID)
+	case path == phrasePath && r.Method == http.MethodPost && f.keeper != nil:
+		takeSecret(w, r, f.keeper)
 	case len(path) > len(actPrefix) && path[:len(actPrefix)] == actPrefix && r.Method == http.MethodPost:
 		f.serveAction(w, r, caller.ID, path[len(actPrefix):])
 	case (path == status.StatusPath || path == status.LogPath) && f.status != nil:

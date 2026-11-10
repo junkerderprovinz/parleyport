@@ -40,7 +40,9 @@ type book struct {
 	Permissions permissionTable  `json:"permissions,omitempty"`
 }
 
-func loadBook(raw []byte, groupKey string) (book, error) {
+// loadBook reads the book kept under groupKey, or under previous, the group
+// key of the phrase the fortress changed from.
+func loadBook(raw []byte, groupKey, previous string) (book, error) {
 	fresh := book{Group: groupKey}
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return fresh, nil
@@ -49,7 +51,11 @@ func loadBook(raw []byte, groupKey string) (book, error) {
 	if err := json.Unmarshal(raw, &b); err != nil {
 		return book{}, fmt.Errorf("fortress: the store is damaged: %w", err)
 	}
-	if b.Group != groupKey {
+	switch {
+	case b.Group == groupKey:
+	case previous != "" && b.Group == previous:
+		b.Group = groupKey
+	default:
 		return fresh, nil
 	}
 	return b, nil

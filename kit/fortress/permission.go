@@ -11,13 +11,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/junkerderprovinz/parleyport/kit/group"
 	"github.com/junkerderprovinz/parleyport/kit/member"
 	"github.com/junkerderprovinz/parleyport/kit/relay"
 )
 
-// maxPermissions bounds the switches a fortress keeps, which any approved
-// instance can add to.
+// maxPermissions bounds the switches a fortress keeps, which any member can
+// add to.
 const maxPermissions = 1024
 
 // Permission is whether the app From may run Action at the app To. Changed is
@@ -198,7 +197,7 @@ func (f *Fortress) SetPermission(from, to, action string, on bool) error {
 		return err
 	}
 	for _, m := range f.group.Members() {
-		if m.Kind != member.KindInstance || m.State != group.StateApproved || !m.Online() || !f.enter() {
+		if m.Kind != member.KindInstance || !m.Online() || !f.enter() {
 			continue
 		}
 		go func() {

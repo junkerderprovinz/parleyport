@@ -57,12 +57,8 @@ func TestAViewerOnlyReads(t *testing.T) {
 	waitFor(t, "the viewer on the relay", func() bool { return v.client.Connected() && len(v.client.Siblings()) > 0 })
 
 	v.call(t, a.id, http.MethodGet, aboutPath, nil)
-	waitFor(t, "alpha to list the viewer", func() bool {
-		m, _ := memberOf(a.f, v.id.ID())
-		return m.Kind == member.KindViewer && m.State == group.StatePending
-	})
-	if err := a.f.Approve(v.id.ID()); err != nil {
-		t.Fatal(err)
+	if m, _ := memberOf(a.f, v.id.ID()); m.Kind != member.KindViewer || m.State != group.StateApproved {
+		t.Errorf("alpha lists the viewer as %+v, want a member", m)
 	}
 
 	if status, _ := v.call(t, a.id, http.MethodGet, "/api/fortress/v1/status", nil); status != http.StatusOK {
