@@ -721,10 +721,9 @@ func TestAReconnectRepublishesToABrokerThatForgotEverything(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitAnnounced(t, tb, cfg)
+	// The bridge may reconnect and announce before the fresh broker could be
+	// looked at, so only what comes back is checked.
 	tb.restart()
-	if got := tb.retainedOf(cfg); len(got) != 0 {
-		t.Fatalf("the fresh broker holds %v", got)
-	}
 	waitAnnounced(t, tb, cfg)
 	waitUntil(t, "discovery and state are back", func() bool {
 		_, state := tb.retained(cfg.Topic + "/state")
