@@ -460,6 +460,64 @@ func TestAViewerIsPinnedApprovedAndRemovedLikeAnyMember(t *testing.T) {
 	}
 }
 
+// onRelayAs puts a device of kind called name on the relay at url, the way a
+// phone or a browser joins a group.
+func onRelayAs(t *testing.T, url string, kind member.Kind, name string) member.Identity {
+	t.Helper()
+	id := device(t, kind, name)
+	c, err := relay.NewClient(relay.ClientOptions{
+		URL:      url,
+		Key:      testDomain.GroupKey(testSecret),
+		FrameKey: testDomain.FrameKey(testSecret),
+		Signing:  testDomain.Signing(),
+		Self:     relay.Announce{Name: name, Deployment: string(kind), Client: true, Member: id.ID()},
+		Identity: &id,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Start()
+	t.Cleanup(func() { _ = c.Close() })
+	return id
+}
+
+func TestAGroupTakesOnlyTheKindsTheAppAllows(t *testing.T) {
+	url := relayServer(t)
+	a := open(t, "alpha", setup{relay: url, kinds: []member.Kind{member.KindInstance}})
+	phone := onRelayAs(t, url, member.KindMobile, "pixel")
+	b := open(t, "bravo", setup{relay: url})
+	waitFor(t, "alpha to see bravo", func() bool { _, ok := memberOf(a.g, b.id); return ok })
+	waitFor(t, "bravo to see the phone", func() bool { _, ok := memberOf(b.g, phone.ID()); return ok })
+	if _, listed := memberOf(a.g, phone.ID()); listed {
+		t.Error("alpha lists a phone on the relay, a kind it does not take")
+	}
+
+	status, body := a.g.handle(context.Background(), signedBy(phone, "p1", a.id, "/api/whoami"))
+	if status != http.StatusForbidden || !strings.Contains(string(body), "memberKindRefused") {
+		t.Errorf("a phone calls alpha = %d %s, want memberKindRefused", status, body)
+	}
+	if err := a.g.Import(Roster{Members: []Member{{ID: phone.ID(), Kind: member.KindMobile, Key: phone.Public(), State: StateApproved}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, listed := memberOf(a.g, phone.ID()); listed {
+		t.Error("alpha took in a phone from an import")
+	}
+	if status, _ := a.g.handle(context.Background(), signedBy(identity(t, "charlie"), "c1", a.id, "/api/whoami")); status != http.StatusForbidden {
+		t.Errorf("an instance calls alpha = %d, want it waiting", status)
+	}
+	if m, _ := memberOf(a.g, identity(t, "charlie").ID()); m.State != StatePending {
+		t.Errorf("alpha lists charlie as %+v, want it waiting", m)
+	}
+}
+
+func TestAGroupAlwaysTakesInstances(t *testing.T) {
+	a := open(t, "alpha", setup{kinds: []member.Kind{member.KindMobile}})
+	served(a, identity(t, "bravo"), "b1")
+	if m, _ := memberOf(a.g, identity(t, "bravo").ID()); m.State != StatePending {
+		t.Errorf("alpha lists bravo as %+v, want it waiting", m)
+	}
+}
+
 func TestThePhraseAloneLetsAMemberIn(t *testing.T) {
 	url := relayServer(t)
 	a := open(t, "alpha", setup{relay: url, byPhrase: true})

@@ -102,6 +102,7 @@ type setup struct {
 	keysOnly  bool
 	byPhrase  bool
 	maxAnswer int
+	kinds     []member.Kind
 }
 
 // open starts an instance called name. Its app answers GET /api/whoami with
@@ -153,6 +154,7 @@ func openGroup(t *testing.T, n *node, s setup) *Group {
 		Previous:       s.previous,
 		JoinByPhrase:   s.byPhrase,
 		MaxAnswerBytes: s.maxAnswer,
+		Kinds:          s.kinds,
 		OnRemoved:      func() { n.removed.Add(1) },
 		OnRemove:       s.onRemove,
 		OnChange:       s.onChange,

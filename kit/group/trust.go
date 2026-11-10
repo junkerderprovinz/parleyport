@@ -199,6 +199,9 @@ var (
 	unsignedRefusal = refuse(http.StatusForbidden, "memberUnsigned", "this device does not sign its calls, which every member of the group has to; update it")
 	unnamedRefusal  = refuse(http.StatusForbidden, "memberUnnamed", "a signed call has to name the member it comes from")
 	kindRefusal     = refuse(http.StatusForbidden, "memberKind", "this call names an id that its key and kind do not make")
+	// kindNotTakenRefusal answers a device of a kind the app keeps out of its
+	// group, such as a phone where only instances pair.
+	kindNotTakenRefusal = refuse(http.StatusForbidden, "memberKindRefused", "this group takes no devices of this kind")
 )
 
 // memberLimits counts what each member key has in flight and when keys were
@@ -297,6 +300,9 @@ func (g *Group) admit(call relay.ProxyCall, source string, now time.Time) (Calle
 	}
 	if !claimFits(call.From, call.Kind, call.Key) {
 		return Caller{}, kindRefusal
+	}
+	if !g.takes(call.Kind) {
+		return Caller{}, kindNotTakenRefusal
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()

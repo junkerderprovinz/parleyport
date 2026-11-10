@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -111,6 +112,10 @@ type Config struct {
 	// OnRemove runs once for every other member taken out here, whether by
 	// Remove or as another instance passed it on.
 	OnRemove func(id string)
+	// Kinds are the kinds of member the group takes, instances among them
+	// whatever it says; empty takes every kind. A member of another kind is
+	// neither listed nor pinned, and its calls are refused.
+	Kinds []member.Kind
 	// MaxAnswerBytes is the most the app may answer a direct call with, and
 	// what this instance reads of a direct answer, 4 MiB when zero. Over the
 	// relay an answer stays within 4 MiB, which is what a relay frame carries
@@ -186,6 +191,7 @@ type Group struct {
 	onRemove  func(id string)
 	onChange  func()
 	byPhrase  bool
+	kinds     []member.Kind
 	maxAnswer int
 
 	replay  *relay.ReplayGuard
@@ -271,6 +277,7 @@ func Open(cfg Config, serve http.Handler) (*Group, error) {
 		onRemove:  cfg.OnRemove,
 		onChange:  cfg.OnChange,
 		byPhrase:  cfg.JoinByPhrase,
+		kinds:     slices.Clone(cfg.Kinds),
 		maxAnswer: cmp.Or(cfg.MaxAnswerBytes, maxAnswerBytes),
 		replay:    relay.NewReplayGuard(),
 		limits:    newMemberLimits(),
@@ -506,7 +513,7 @@ func (g *Group) look(now time.Time) map[string]*Member {
 			if s.Member != "" {
 				id = s.Member
 			}
-			if kind = member.Kind(s.Deployment); kindOfID(id) != kind {
+			if kind = member.Kind(s.Deployment); kindOfID(id) != kind || !g.takes(kind) {
 				continue
 			}
 		}
@@ -550,6 +557,11 @@ func (g *Group) look(now time.Time) map[string]*Member {
 		}
 	}
 	return view
+}
+
+// takes reports whether the group takes members of kind.
+func (g *Group) takes(kind member.Kind) bool {
+	return kind == member.KindInstance || len(g.kinds) == 0 || slices.Contains(g.kinds, kind)
 }
 
 // fill sets what m does not know yet.

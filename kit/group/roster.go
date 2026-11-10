@@ -47,7 +47,8 @@ func (g *Group) Roster() Roster {
 //
 // Removed ids and revoked keys come first, and a member they cover stays out.
 // A member is pinned only under the id its key and kind make, never in place
-// of another key and only while there is room. A member approved here stays approved, and a name or a last-seen time
+// of another key, only while there is room and only in a kind the group
+// takes. A member approved here stays approved, and a name or a last-seen time
 // replaces the one known here only when it is newer. A time ahead of this
 // instance's clock counts as now. The error is the store's.
 func (g *Group) Import(r Roster) error {
@@ -99,7 +100,7 @@ func (g *Group) Import(r Roster) error {
 // changed anything.
 func (g *Group) takeLocked(m Member, now time.Time) bool {
 	if m.ID == g.self || (m.State != StatePending && m.State != StateApproved) || kindOfID(m.ID) != m.Kind ||
-		!claimFits(m.ID, m.Kind, m.Key) {
+		!g.takes(m.Kind) || !claimFits(m.ID, m.Kind, m.Key) {
 		return false
 	}
 	st := &g.st
