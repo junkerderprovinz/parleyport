@@ -1,6 +1,6 @@
 // Package events describes what happened in an app in a form other members of
-// a fortress can react to. It holds the types and their schema; how events
-// travel and which rules act on them is up to the caller.
+// a fortress can react to: the types, their schema and the Log an app keeps
+// them in. The fortress carries them to other members and runs the rules.
 package events
 
 import (

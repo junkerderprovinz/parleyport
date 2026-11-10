@@ -13,6 +13,12 @@
 // permission is on until then, and a switch made at any instance reaches all
 // of them.
 //
+// An app that keeps events lets the members whose app may run EventsAction
+// read them by cursor. Rules turn them into actions: when a member adds an
+// event of some kind, the instance that holds the rule runs one of its own
+// actions. Every event carries how many rules led to it, and a chain stops at
+// events.MaxDepth, so two apps that answer each other cannot loop.
+//
 // The phrase is the proof: a device that holds it is a member at once, with
 // the permissions as they stand. A member taken out is refused by all the
 // others for good, but whoever still holds the phrase can come back under a
@@ -35,6 +41,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/junkerderprovinz/parleyport/kit/events"
 	"github.com/junkerderprovinz/parleyport/kit/group"
 	"github.com/junkerderprovinz/parleyport/kit/keys"
 	"github.com/junkerderprovinz/parleyport/kit/lan"
@@ -165,6 +172,9 @@ type Config struct {
 	// through the relay. A *Refusal says no with a code the member sees. nil
 	// offers no backup.
 	Export func(ctx context.Context, from Caller) (backup io.ReadCloser, n int64, err error)
+	// Events are what members whose app may run EventsAction here read of
+	// this instance; nil keeps none.
+	Events *events.Log
 	// MaxAnswerBytes and MaxRelayAnswerBytes bound what an action answers,
 	// directly and through the relay, here and in the pairing, as in
 	// group.Config.
@@ -193,8 +203,8 @@ func (cfg Config) check() error {
 	}
 	seen := map[string]bool{}
 	for _, a := range cfg.Actions {
-		if a.Name == ExportAction {
-			return fmt.Errorf("fortress: %s is offered through Config.Export, not as an action", ExportAction)
+		if a.Name == ExportAction || a.Name == EventsAction {
+			return fmt.Errorf("fortress: %s is offered through Config.Export or Config.Events, not as an action", a.Name)
 		}
 		if !validAction(a.Name) || a.Run == nil || seen[a.Name] {
 			return fmt.Errorf("fortress: action %q needs a name of the form a.b, used once, and a Run", a.Name)
@@ -254,6 +264,7 @@ type Fortress struct {
 	pairing   *group.Group
 	keeper    Keeper
 	export    func(context.Context, Caller) (io.ReadCloser, int64, error)
+	events    *events.Log
 	onRemoved func()
 	removed   sync.Once
 
@@ -265,6 +276,7 @@ type Fortress struct {
 	described map[string]time.Time
 	synced    map[string]time.Time
 	greeted   map[string]time.Time
+	watched   map[string]time.Time
 
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -304,11 +316,13 @@ func Open(cfg Config) (*Fortress, error) {
 		store:     store,
 		keeper:    cfg.Keeper,
 		export:    cfg.Export,
+		events:    cfg.Events,
 		onRemoved: cfg.OnRemoved,
 		book:      bk,
 		described: map[string]time.Time{},
 		synced:    map[string]time.Time{},
 		greeted:   map[string]time.Time{},
+		watched:   map[string]time.Time{},
 		ctx:       ctx,
 		cancel:    cancel,
 	}
@@ -318,6 +332,10 @@ func Open(cfg Config) (*Fortress, error) {
 	}
 	if cfg.Export != nil {
 		f.about.Actions = append(f.about.Actions, ExportAction)
+	}
+	if cfg.Events != nil {
+		f.actions[EventsAction] = Action{Name: EventsAction, Run: f.serveEvents}
+		f.about.Actions = append(f.about.Actions, EventsAction)
 	}
 	sort.Strings(f.about.Actions)
 	if cfg.Status != nil {
@@ -507,6 +525,10 @@ func (f *Fortress) fortressRemoved(id string) {
 		delete(f.book.Members, id)
 		f.dirty = true
 	}
+	if _, ok := f.book.Cursors[id]; ok {
+		delete(f.book.Cursors, id)
+		f.dirty = true
+	}
 	f.mu.Unlock()
 	if f.pairing != nil {
 		if _, ok := listed(f.pairing, id); ok {
@@ -617,6 +639,7 @@ func (f *Fortress) tick(now time.Time) {
 		}
 	}
 	f.follow(now)
+	f.watch(now)
 	f.mu.Lock()
 	if f.dirty {
 		_ = f.saveLocked()

@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/junkerderprovinz/parleyport/kit/events"
 	"github.com/junkerderprovinz/parleyport/kit/status"
 )
 
@@ -82,7 +83,11 @@ func (f *Fortress) Act(ctx context.Context, id, action string, body []byte) ([]b
 	if !validAction(action) {
 		return nil, fmt.Errorf("fortress: %q is no action", action)
 	}
-	status, out, err := f.group.Call(ctx, id, http.MethodPost, actPrefix+action, body)
+	path := actPrefix + action
+	if d := events.Depth(ctx); d > 0 {
+		path += "?" + url.Values{"depth": {strconv.Itoa(d)}}.Encode()
+	}
+	status, out, err := f.group.Call(ctx, id, http.MethodPost, path, body)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +113,11 @@ func (f *Fortress) serveAction(w http.ResponseWriter, r *http.Request, caller, a
 		writeError(w, http.StatusBadRequest, "bad_request")
 		return
 	}
-	out, err := a.Run(r.Context(), from, body)
+	ctx := r.Context()
+	if d, err := strconv.Atoi(r.URL.Query().Get("depth")); err == nil && d > 0 {
+		ctx = events.WithDepth(ctx, min(d, events.MaxDepth))
+	}
+	out, err := a.Run(ctx, from, body)
 	if err != nil {
 		failed(w, r, action, from.App, err)
 		return

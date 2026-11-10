@@ -16,6 +16,7 @@ import (
 
 	"go.uber.org/goleak"
 
+	"github.com/junkerderprovinz/parleyport/kit/events"
 	"github.com/junkerderprovinz/parleyport/kit/group"
 	"github.com/junkerderprovinz/parleyport/kit/lan"
 	"github.com/junkerderprovinz/parleyport/kit/member"
@@ -139,6 +140,8 @@ type setup struct {
 	maxRelay  int
 	export    func(context.Context, Caller) (io.ReadCloser, int64, error)
 	actions   []Action
+	uses      []string
+	log       *events.Log
 	// noListener opens the instance without a direct address, so the others
 	// reach it through the relay alone.
 	noListener bool
@@ -204,7 +207,8 @@ func config(t *testing.T, n *node, s setup) Config {
 			n.mu.Unlock()
 			return []byte(`{"ok":true}`), nil
 		}}},
-		Uses:                []string{"files.drop"},
+		Uses:                append([]string{"files.drop"}, s.uses...),
+		Events:              s.log,
 		Keeper:              n,
 		Previous:            s.moved,
 		OnRemoved:           func() { n.removed.Add(1) },

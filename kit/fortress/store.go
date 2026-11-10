@@ -38,6 +38,9 @@ type book struct {
 	Group       string           `json:"group"`
 	Members     map[string]about `json:"members,omitempty"`
 	Permissions permissionTable  `json:"permissions,omitempty"`
+	Rules       []Rule           `json:"rules,omitempty"`
+	// Cursors are where the rules stand in each member's events.
+	Cursors map[string]string `json:"cursors,omitempty"`
 }
 
 // loadBook reads the book kept under groupKey, or under previous, the group

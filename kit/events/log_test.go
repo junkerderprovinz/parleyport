@@ -181,7 +181,8 @@ func TestACursorOfAnotherLogStartsAtTheOldest(t *testing.T) {
 	if got := subjects(restarted.Read(cursor, 10).Events); len(got) != 1 || got[0] != "c" {
 		t.Errorf("a cursor from before a restart read %v", got)
 	}
-	for _, c := range []string{"garbage", "-1", cursor + "0"} {
+	ahead := restarted.Read("", 10).Next + "0"
+	for _, c := range []string{"garbage", "-1", cursor + "0", ahead} {
 		if got := subjects(restarted.Read(c, 10).Events); len(got) != 1 {
 			t.Errorf("cursor %q read %v", c, got)
 		}

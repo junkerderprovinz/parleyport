@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -161,13 +162,10 @@ func (l *Log) Read(after string, limit int) Page {
 		return Page{Events: []Event{}, Next: end}
 	}
 	start := 0
-	if ours && len(l.kept) > 0 && seq >= l.kept[0].seq {
-		start = int(seq - l.kept[0].seq + 1)
+	if ours {
+		start = sort.Search(len(l.kept), func(i int) bool { return l.kept[i].seq > seq })
 	}
 	p := Page{Events: []Event{}, Next: end}
-	if ours {
-		p.Next = after
-	}
 	bytes := len(`{"events":[],"next":""}`) + len(end)
 	for _, k := range l.kept[start:] {
 		bytes += k.size + 1
