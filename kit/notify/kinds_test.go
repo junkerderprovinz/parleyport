@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -384,6 +385,7 @@ func (r *runner) Run(_ context.Context, name string, args ...string) error {
 }
 
 func TestUnraid(t *testing.T) {
+	notify.SetUnraidSpacing(t, 0)
 	tests := []struct {
 		severity   notify.Severity
 		importance string
@@ -405,7 +407,7 @@ func TestUnraid(t *testing.T) {
 			if !r.OK() {
 				t.Fatal(r.Err)
 			}
-			want := []string{"-e", "Alpha", "-s", "Backup failed", "-d", failed.Body, "-i", tt.importance, "-l", failed.Link}
+			want := []string{"-e", "Alpha", "-s", "Backup failed", "-d", "Der Direktor & co", "-i", tt.importance, "-l", failed.Link}
 			if run.name != notify.UnraidNotifyScript || !slices.Equal(run.args, want) {
 				t.Errorf("ran %s %q", run.name, run.args)
 			}
@@ -414,6 +416,7 @@ func TestUnraid(t *testing.T) {
 }
 
 func TestUnraid_ReportsAFailedScript(t *testing.T) {
+	notify.SetUnraidSpacing(t, 0)
 	run := &runner{err: errors.New("exit status 1: no such agent")}
 
 	r := sendOne(t, notify.Channel{ID: "u", Kind: notify.KindUnraid}, notify.Options{Unraid: run}, failed)
@@ -423,7 +426,60 @@ func TestUnraid_ReportsAFailedScript(t *testing.T) {
 	}
 }
 
+// clock notes when each run started, from any goroutine.
+type clock struct {
+	mu     sync.Mutex
+	starts []time.Time
+}
+
+func (c *clock) Run(context.Context, string, ...string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.starts = append(c.starts, time.Now())
+	return nil
+}
+
+func TestUnraidSpacesSendsOneSecondApart(t *testing.T) {
+	run := &clock{}
+	chs := []notify.Channel{
+		{ID: "u1", Kind: notify.KindUnraid, Enabled: true, On: notify.OnAlways},
+		{ID: "u2", Kind: notify.KindUnraid, Enabled: true, On: notify.OnAlways},
+	}
+	d, _ := dispatcher(t, chs, notify.Options{Unraid: run})
+
+	for _, r := range d.Send(t.Context(), failed) {
+		if !r.OK() {
+			t.Fatalf("result = %+v", r)
+		}
+	}
+
+	if len(run.starts) != 2 {
+		t.Fatalf("ran %d times", len(run.starts))
+	}
+	gap := run.starts[1].Sub(run.starts[0]).Abs()
+	if gap < time.Second {
+		t.Errorf("the two notifications went out %v apart", gap)
+	}
+}
+
+func TestUnraidStripsBackslashesAndQuotes(t *testing.T) {
+	notify.SetUnraidSpacing(t, 0)
+	run := &runner{}
+	e := failed
+	e.Title = `Backup "flash" failed`
+	e.Body = `C:\share\x said "no"`
+	e.Link = `https://tower.example/runs/7?q="a\b"`
+
+	sendOne(t, notify.Channel{ID: "u", Kind: notify.KindUnraid}, notify.Options{Source: `Al"pha\`, Unraid: run}, e)
+
+	want := []string{"-e", "Alpha", "-s", "Backup flash failed", "-d", "C:sharex said no", "-i", "warning", "-l", "https://tower.example/runs/7?q=ab"}
+	if !slices.Equal(run.args, want) {
+		t.Errorf("ran with %q", run.args)
+	}
+}
+
 func TestUnraid_RunsTheScriptOnThisMachineByDefault(t *testing.T) {
+	notify.SetUnraidSpacing(t, 0)
 	d, err := notify.NewDispatcher(nil, notify.Options{})
 	if err != nil {
 		t.Fatal(err)

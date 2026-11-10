@@ -227,16 +227,47 @@ func (d *Dispatcher) ping(ctx context.Context, check string, p Ping, body string
 	return d.do(req, nil)
 }
 
+// unraidText takes out what Unraid's push agents mangle: they pass the
+// text through echo -e and into JSON they build by hand.
+var unraidText = strings.NewReplacer(`\`, "", `"`, "")
+
+// unraidGate keeps Unraid notifications a second apart across the process,
+// since the notify script names its file after the second and a second
+// message within it replaces the first while the script still succeeds.
+var unraidGate = &gate{slot: make(chan struct{}, 1), spacing: time.Second}
+
+type gate struct {
+	slot    chan struct{}
+	spacing time.Duration
+	last    time.Time
+}
+
+func (g *gate) run(ctx context.Context, f func() error) error {
+	select {
+	case g.slot <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-g.slot }()
+	if wait := time.Until(g.last.Add(g.spacing)); wait > 0 && !sleep(ctx, wait) {
+		return ctx.Err()
+	}
+	err := f()
+	g.last = time.Now()
+	return err
+}
+
 func (d *Dispatcher) unraid(ctx context.Context, e Event) error {
 	var args []string
 	if d.source != "" {
-		args = append(args, "-e", d.source)
+		args = append(args, "-e", unraidText.Replace(d.source))
 	}
-	args = append(args, "-s", e.Title, "-d", e.Body, "-i", e.Severity.importance())
+	args = append(args, "-s", unraidText.Replace(e.Title), "-d", unraidText.Replace(e.Body), "-i", e.Severity.importance())
 	if e.Link != "" {
-		args = append(args, "-l", e.Link)
+		args = append(args, "-l", unraidText.Replace(e.Link))
 	}
-	if err := d.runner.Run(ctx, UnraidNotifyScript, args...); err != nil {
+	err := unraidGate.run(ctx, func() error { return d.runner.Run(ctx, UnraidNotifyScript, args...) })
+	if err != nil {
 		if ctx.Err() != nil {
 			return failf(CodeTimeout, "unraid notify: %v", err)
 		}
