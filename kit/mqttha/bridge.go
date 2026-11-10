@@ -414,6 +414,14 @@ func (b *Bridge) remove(s *session) error {
 	if !s.client.IsConnected() {
 		return ErrNotConnected
 	}
+	deadline := time.Now().Add(waitFor)
+	// Echoes of the clears to our own subscriptions would still be unread
+	// when the connection closes. The socket then resets, the broker never
+	// sees the DISCONNECT and publishes the will onto the cleared topic.
+	unsub := s.client.Unsubscribe(s.cfg.pressTopic("+"), s.cfg.discoveryFilter())
+	if !unsub.WaitTimeout(time.Until(deadline)) || unsub.Error() != nil {
+		return ErrNotConnected
+	}
 	s.mu.Lock()
 	topics := []string{s.cfg.stateTopic(), s.cfg.availabilityTopic()}
 	for topic := range s.retained {
@@ -424,7 +432,6 @@ func (b *Bridge) remove(s *session) error {
 	for _, topic := range topics {
 		tokens = append(tokens, s.client.Publish(topic, 1, true, []byte{}))
 	}
-	deadline := time.Now().Add(waitFor)
 	for _, t := range tokens {
 		if !t.WaitTimeout(time.Until(deadline)) {
 			return ErrNotConnected
