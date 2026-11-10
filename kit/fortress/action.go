@@ -99,16 +99,8 @@ func (f *Fortress) serveAction(w http.ResponseWriter, r *http.Request, caller, a
 		writeError(w, http.StatusNotFound, "no_such_action")
 		return
 	}
-	app := f.appOf(caller)
-	if app == "" && f.describe(r.Context(), caller, time.Now()) {
-		app = f.appOf(caller)
-	}
-	if app == "" {
-		writeError(w, http.StatusForbidden, "unknown_app")
-		return
-	}
-	if !f.permitted(app, action) {
-		writeError(w, http.StatusForbidden, "permission_off")
+	from, ok := f.allowed(w, r, caller, action)
+	if !ok {
 		return
 	}
 	body, err := io.ReadAll(r.Body)
@@ -116,23 +108,47 @@ func (f *Fortress) serveAction(w http.ResponseWriter, r *http.Request, caller, a
 		writeError(w, http.StatusBadRequest, "bad_request")
 		return
 	}
-	device := ""
-	if m, ok := listed(f.group, caller); ok {
-		device = m.Name
-	}
-	out, err := a.Run(r.Context(), Caller{ID: caller, App: app, Device: device}, body)
-	var no *Refusal
-	switch {
-	case errors.As(err, &no):
-		writeError(w, http.StatusConflict, no.Code)
-		return
-	case err != nil:
-		slog.ErrorContext(r.Context(), "fortress: an action failed", "action", action, "app", app, "err", err)
-		writeError(w, http.StatusInternalServerError, "internal")
+	out, err := a.Run(r.Context(), from, body)
+	if err != nil {
+		failed(w, r, action, from.App, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(out)
+}
+
+// allowed is the member caller as an action runs for it, once its app may run
+// action here. Otherwise it answers w with why not.
+func (f *Fortress) allowed(w http.ResponseWriter, r *http.Request, caller, action string) (Caller, bool) {
+	app := f.appOf(caller)
+	if app == "" && f.describe(r.Context(), caller, time.Now()) {
+		app = f.appOf(caller)
+	}
+	if app == "" {
+		writeError(w, http.StatusForbidden, "unknown_app")
+		return Caller{}, false
+	}
+	if !f.permitted(app, action) {
+		writeError(w, http.StatusForbidden, "permission_off")
+		return Caller{}, false
+	}
+	device := ""
+	if m, ok := listed(f.group, caller); ok {
+		device = m.Name
+	}
+	return Caller{ID: caller, App: app, Device: device}, true
+}
+
+// failed answers w for an action that returned err: a *Refusal with its code,
+// anything else as "internal", which is logged.
+func failed(w http.ResponseWriter, r *http.Request, action, app string, err error) {
+	var no *Refusal
+	if errors.As(err, &no) {
+		writeError(w, http.StatusConflict, no.Code)
+		return
+	}
+	slog.ErrorContext(r.Context(), "fortress: an action failed", "action", action, "app", app, "err", err)
+	writeError(w, http.StatusInternalServerError, "internal")
 }
 
 // Status reads member id's status report, its texts in lang if the app has

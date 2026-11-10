@@ -1,8 +1,13 @@
 package group
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"math/rand/v2"
@@ -211,5 +216,57 @@ func TestAnInstanceWithoutStreamsSaysSo(t *testing.T) {
 	meet(t, a, b)
 	if status, _, err := stream(t, a, b, "/backup/10"); err != nil || status != http.StatusNotFound {
 		t.Errorf("a stream from an instance that takes none = %d %v, want 404", status, err)
+	}
+}
+
+// sealedStream is data as the pieces of a stream under key, ended by end.
+func sealedStream(t *testing.T, key, data []byte, end streamEnd) io.Reader {
+	t.Helper()
+	aead, err := streamAEAD(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	var count uint64
+	piece := func(kind byte, plain []byte) {
+		sealed := aead.Seal(nil, pieceNonce(count), plain, []byte{kind})
+		count++
+		buf.WriteByte(kind)
+		buf.Write(binary.BigEndian.AppendUint32(nil, uint32(len(sealed))))
+		buf.Write(sealed)
+	}
+	piece(pieceData, data)
+	raw, _ := json.Marshal(end)
+	piece(pieceEnd, raw)
+	return &buf
+}
+
+func TestAStreamEndsOnlyWhereTheMemberSignedIt(t *testing.T) {
+	key := bytes.Repeat([]byte{9}, 32)
+	data := backupOf(1000)
+	sum := sha256.Sum256(data)
+	good := hex.EncodeToString(sum[:])
+	for name, c := range map[string]struct {
+		end  streamEnd
+		fail bool
+	}{
+		"as signed":         {end: streamEnd{Length: 1000, SHA256: good, Sig: []byte("signed")}},
+		"another checksum":  {end: streamEnd{Length: 1000, SHA256: hex.EncodeToString(make([]byte, 32)), Sig: []byte("signed")}, fail: true},
+		"another length":    {end: streamEnd{Length: 999, SHA256: good, Sig: []byte("signed")}, fail: true},
+		"another signature": {end: streamEnd{Length: 1000, SHA256: good, Sig: []byte("forged")}, fail: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			aead, _ := streamAEAD(key)
+			r := &streamReader{
+				br: bufio.NewReader(sealedStream(t, key, data, c.end)), aead: aead, length: 1000, sum: sha256.New(),
+				verify: func(end, sig []byte) bool {
+					return string(sig) == "signed" && bytes.Equal(end, endBody(1000, sum[:]))
+				},
+			}
+			got, err := io.ReadAll(r)
+			if c.fail != errors.Is(err, ErrStreamBroken) || !c.fail && (err != nil || !bytes.Equal(got, data)) {
+				t.Errorf("read %d bytes, %v", len(got), err)
+			}
+		})
 	}
 }

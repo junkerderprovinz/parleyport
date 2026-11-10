@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -132,8 +133,15 @@ type setup struct {
 	secret   []byte
 	previous []byte
 	// moved is the secret of the fortress before ChangePhrase.
-	moved  []byte
-	noPair bool
+	moved     []byte
+	noPair    bool
+	maxAnswer int
+	maxRelay  int
+	export    func(context.Context, Caller) (io.ReadCloser, int64, error)
+	actions   []Action
+	// noListener opens the instance without a direct address, so the others
+	// reach it through the relay alone.
+	noListener bool
 }
 
 // open starts the instance name of app in the fortress s describes.
@@ -174,7 +182,7 @@ func config(t *testing.T, n *node, s setup) Config {
 		mode, url = group.RelayOwn, s.relay
 	}
 	direct := ""
-	if n.srv != nil {
+	if n.srv != nil && !s.noListener {
 		direct = n.srv.URL
 	}
 	cfg := Config{
@@ -196,11 +204,15 @@ func config(t *testing.T, n *node, s setup) Config {
 			n.mu.Unlock()
 			return []byte(`{"ok":true}`), nil
 		}}},
-		Uses:      []string{"files.drop"},
-		Keeper:    n,
-		Previous:  s.moved,
-		OnRemoved: func() { n.removed.Add(1) },
+		Uses:                []string{"files.drop"},
+		Keeper:              n,
+		Previous:            s.moved,
+		OnRemoved:           func() { n.removed.Add(1) },
+		MaxAnswerBytes:      s.maxAnswer,
+		MaxRelayAnswerBytes: s.maxRelay,
+		Export:              s.export,
 	}
+	cfg.Actions = append(cfg.Actions, s.actions...)
 	if !s.noPair {
 		cfg.Pairing = &Pairing{LAN: s.pairLAN, Store: n.pairStore, Serve: appRoutes(), Previous: s.previous}
 	}

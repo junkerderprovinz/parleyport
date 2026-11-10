@@ -118,6 +118,9 @@ func (g *Group) Stream(ctx context.Context, id, path string) (int, io.ReadCloser
 		}
 		g.directFailed(ctx, u)
 		err = serr
+		if relayed {
+			err = fmt.Errorf("%w: %w", ErrNotDirect, serr)
+		}
 	}
 	return 0, nil, err
 }

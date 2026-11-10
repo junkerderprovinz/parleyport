@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/netip"
 	"regexp"
@@ -158,6 +159,17 @@ type Config struct {
 	// calls at them.
 	Actions []Action
 	Uses    []string
+	// Export hands over this instance's backup and its length in bytes when
+	// another member fetches it with Fortress.Export and its app may run
+	// ExportAction here. It runs only for a member on this network, never
+	// through the relay. A *Refusal says no with a code the member sees. nil
+	// offers no backup.
+	Export func(ctx context.Context, from Caller) (backup io.ReadCloser, n int64, err error)
+	// MaxAnswerBytes and MaxRelayAnswerBytes bound what an action answers,
+	// directly and through the relay, here and in the pairing, as in
+	// group.Config.
+	MaxAnswerBytes      int
+	MaxRelayAnswerBytes int
 	// OnRemoved runs, at most once and on its own goroutine, when another
 	// member says this instance was taken out of the fortress or its pairing.
 	// The app leaves.
@@ -181,6 +193,9 @@ func (cfg Config) check() error {
 	}
 	seen := map[string]bool{}
 	for _, a := range cfg.Actions {
+		if a.Name == ExportAction {
+			return fmt.Errorf("fortress: %s is offered through Config.Export, not as an action", ExportAction)
+		}
 		if !validAction(a.Name) || a.Run == nil || seen[a.Name] {
 			return fmt.Errorf("fortress: action %q needs a name of the form a.b, used once, and a Run", a.Name)
 		}
@@ -238,6 +253,7 @@ type Fortress struct {
 	group     *group.Group
 	pairing   *group.Group
 	keeper    Keeper
+	export    func(context.Context, Caller) (io.ReadCloser, int64, error)
 	onRemoved func()
 	removed   sync.Once
 
@@ -287,6 +303,7 @@ func Open(cfg Config) (*Fortress, error) {
 		actions:   map[string]Action{},
 		store:     store,
 		keeper:    cfg.Keeper,
+		export:    cfg.Export,
 		onRemoved: cfg.OnRemoved,
 		book:      bk,
 		described: map[string]time.Time{},
@@ -299,6 +316,9 @@ func Open(cfg Config) (*Fortress, error) {
 		f.actions[a.Name] = a
 		f.about.Actions = append(f.about.Actions, a.Name)
 	}
+	if cfg.Export != nil {
+		f.about.Actions = append(f.about.Actions, ExportAction)
+	}
 	sort.Strings(f.about.Actions)
 	if cfg.Status != nil {
 		f.status = status.Handler(cfg.Status, func(*http.Request) error { return nil })
@@ -309,18 +329,20 @@ func Open(cfg Config) (*Fortress, error) {
 			before = cfg.Previous
 		}
 		f.pairing, err = group.Open(group.Config{
-			Domain:    keys.Domain(cfg.App.ID),
-			Signing:   p.Signing,
-			Secret:    cfg.Secret,
-			Previous:  before,
-			Identity:  cfg.Identity,
-			Self:      cfg.Self,
-			Relay:     cfg.Relay,
-			RelayURL:  cfg.RelayURL,
-			LAN:       p.LAN,
-			Store:     p.Store,
-			OnRemoved: f.leave,
-			OnRemove:  f.pairingRemoved,
+			Domain:              keys.Domain(cfg.App.ID),
+			Signing:             p.Signing,
+			Secret:              cfg.Secret,
+			Previous:            before,
+			Identity:            cfg.Identity,
+			Self:                cfg.Self,
+			Relay:               cfg.Relay,
+			RelayURL:            cfg.RelayURL,
+			LAN:                 p.LAN,
+			Store:               p.Store,
+			OnRemoved:           f.leave,
+			OnRemove:            f.pairingRemoved,
+			MaxAnswerBytes:      cfg.MaxAnswerBytes,
+			MaxRelayAnswerBytes: cfg.MaxRelayAnswerBytes,
 		}, p.Serve)
 		if err != nil {
 			cancel()
@@ -328,18 +350,21 @@ func Open(cfg Config) (*Fortress, error) {
 		}
 	}
 	g, err := group.Open(group.Config{
-		Domain:       Domain,
-		Keys:         set,
-		Previous:     cfg.Previous,
-		JoinByPhrase: true,
-		Identity:     cfg.Identity,
-		Self:         cfg.Self,
-		Relay:        cfg.Relay,
-		RelayURL:     cfg.RelayURL,
-		LAN:          cfg.LAN,
-		Store:        store,
-		OnRemoved:    f.leave,
-		OnRemove:     f.fortressRemoved,
+		Domain:              Domain,
+		Keys:                set,
+		Previous:            cfg.Previous,
+		JoinByPhrase:        true,
+		Identity:            cfg.Identity,
+		Self:                cfg.Self,
+		Relay:               cfg.Relay,
+		RelayURL:            cfg.RelayURL,
+		LAN:                 cfg.LAN,
+		Store:               store,
+		OnRemoved:           f.leave,
+		OnRemove:            f.fortressRemoved,
+		MaxAnswerBytes:      cfg.MaxAnswerBytes,
+		MaxRelayAnswerBytes: cfg.MaxRelayAnswerBytes,
+		Stream:              http.HandlerFunc(f.serveExport),
 	}, http.HandlerFunc(f.serve))
 	if err != nil {
 		cancel()
