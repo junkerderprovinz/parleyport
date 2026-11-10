@@ -130,10 +130,11 @@ type Config struct {
 	// relay an answer stays within 4 MiB, which is what a relay frame carries
 	// sealed.
 	MaxAnswerBytes int
-	// OnChange runs whenever what Members lists changes: a member comes or
-	// goes, waits, is approved or taken out, or is reached another way. It
-	// runs on a goroutine of its own, never twice at once, a burst of changes
-	// coming as one call, and must not call Close.
+	// OnChange runs whenever what Members lists changes (a member comes or
+	// goes, waits, is approved or taken out, or is reached another way) and
+	// whenever the relay connection comes up or drops, as RelayConnected
+	// reports it. It runs on a goroutine of its own, never twice at once, a
+	// burst of changes coming as one call, and must not call Close.
 	OnChange func()
 }
 
@@ -436,7 +437,7 @@ func (g *Group) poke() {
 	g.stir()
 }
 
-// stir has the app told if what Members lists changed.
+// stir has the app told if what Members lists or the relay connection changed.
 func (g *Group) stir() {
 	select {
 	case g.stirred <- struct{}{}:
@@ -444,8 +445,8 @@ func (g *Group) stir() {
 	}
 }
 
-// watch calls onChange whenever Members lists something else than listed,
-// what it listed last, until Close.
+// watch calls onChange whenever digest says something else than listed, what
+// it said last, until Close.
 func (g *Group) watch(listed string) {
 	for {
 		select {
@@ -460,10 +461,11 @@ func (g *Group) watch(listed string) {
 	}
 }
 
-// digest is what Members lists, but for the last-seen times, which move
-// whenever a member is online.
+// digest is whether the relay is connected and what Members lists, but for the
+// last-seen times, which move whenever a member is online.
 func (g *Group) digest() string {
 	var b strings.Builder
+	fmt.Fprintf(&b, "relay %t\n", g.RelayConnected())
 	for _, m := range g.Members() {
 		fmt.Fprintf(&b, "%s %s %s %q %q %t %t %t\n", m.ID, m.Kind, m.State, m.Name, m.Deployment, m.Direct, m.Relay, m.Awaiting)
 	}

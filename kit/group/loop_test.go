@@ -69,6 +69,28 @@ func TestChangesAreReported(t *testing.T) {
 	})
 }
 
+// An instance alone on the relay lists nobody either way, so only the
+// connection itself can tell the app that something changed.
+func TestOnChangeFiresWhenTheRelayConnectionDropsAndComesBack(t *testing.T) {
+	url, drop := droppingRelay(t)
+	r := newReports()
+	a := open(t, "alpha", setup{relay: url, onChange: r.report})
+	waitFor(t, "alpha on the relay", a.g.RelayConnected)
+
+	r.after(t, "the relay connection drops", 5*time.Second, drop)
+	if a.g.RelayConnected() {
+		t.Error("alpha reported the drop but still says it is on the relay")
+	}
+	select {
+	case <-r:
+	case <-time.After(10 * time.Second):
+		t.Fatal("no change reported when the relay connection came back")
+	}
+	if !a.g.RelayConnected() {
+		t.Error("alpha reported the reconnect but says it is off the relay")
+	}
+}
+
 func TestCallsThatChangeNothingAreNotReported(t *testing.T) {
 	url := relayServer(t)
 	r := newReports()

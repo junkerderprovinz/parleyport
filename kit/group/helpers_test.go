@@ -213,6 +213,45 @@ func relayServer(t *testing.T) string {
 	return srv.URL
 }
 
+// droppingRelay is a relay whose drop cuts every live connection while it keeps
+// serving, as a network outage would. httptest cannot do that itself, since an
+// upgraded WebSocket is hijacked out of its bookkeeping.
+func droppingRelay(t *testing.T) (url string, drop func()) {
+	t.Helper()
+	srv := httptest.NewUnstartedServer(relay.New())
+	l := &tracking{Listener: srv.Listener}
+	srv.Listener = l
+	srv.Start()
+	t.Cleanup(srv.Close)
+	t.Cleanup(l.closeAll)
+	return srv.URL, l.closeAll
+}
+
+type tracking struct {
+	net.Listener
+	mu    sync.Mutex
+	conns []net.Conn
+}
+
+func (l *tracking) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err == nil {
+		l.mu.Lock()
+		l.conns = append(l.conns, c)
+		l.mu.Unlock()
+	}
+	return c, err
+}
+
+func (l *tracking) closeAll() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, c := range l.conns {
+		_ = c.Close()
+	}
+	l.conns = nil
+}
+
 // lanService is a multicast group no app uses on a port free right now, so
 // tests neither meet real instances nor each other.
 func lanService(t *testing.T, port uint16) *lan.Service {
