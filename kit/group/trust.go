@@ -583,6 +583,8 @@ func (g *Group) internal(caller Caller, call relay.ProxyCall) (int, []byte) {
 		return http.StatusOK, b
 	case strings.HasPrefix(call.Path, streamPrefix):
 		return http.StatusMisdirectedRequest, relay.RefusalBody("streamDirectOnly", "a stream goes only directly on the local network, never through the relay")
+	case strings.HasPrefix(call.Path, uploadPrefix):
+		return http.StatusMisdirectedRequest, relay.RefusalBody("uploadDirectOnly", "an upload goes only directly on the local network, as a stream of its own")
 	}
 	return http.StatusNotFound, nil
 }

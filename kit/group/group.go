@@ -144,6 +144,12 @@ type Config struct {
 	// with a Content-Length and then the body, of any size; any other status
 	// is a refusal, no larger than 64 KiB. nil sends no streams.
 	Stream http.Handler
+	// Upload answers the members' calls to Upload, which come on the direct
+	// route alone from instances, and sees each caller through CallerOf. The
+	// request's ContentLength is the announced length, and its body fails
+	// with ErrStreamBroken where it would end if the upload arrived damaged,
+	// so the app keeps it only after reading to io.EOF. nil takes no uploads.
+	Upload http.Handler
 }
 
 // State is where a member stands with this instance.
@@ -199,6 +205,7 @@ var (
 type Group struct {
 	serve     http.Handler
 	stream    http.Handler
+	upload    http.Handler
 	self      string
 	identity  member.Identity
 	signing   keys.Signing
@@ -222,8 +229,10 @@ type Group struct {
 	limits   *memberLimits
 	hc       *http.Client
 	streamer *http.Client
+	uploader *http.Client
 	slots    chan struct{}
 	streams  chan struct{}
+	uploads  chan struct{}
 	probing  chan struct{}
 	kick     chan struct{}
 	stirred  chan struct{}
@@ -291,6 +300,7 @@ func Open(cfg Config, serve http.Handler) (*Group, error) {
 	g := &Group{
 		serve:     serve,
 		stream:    cfg.Stream,
+		upload:    cfg.Upload,
 		self:      cfg.Identity.ID(),
 		identity:  cfg.Identity,
 		signing:   signing,
@@ -313,6 +323,7 @@ func Open(cfg Config, serve http.Handler) (*Group, error) {
 		hc:        directClient(),
 		slots:     make(chan struct{}, maxDirectCalls),
 		streams:   make(chan struct{}, maxStreams),
+		uploads:   make(chan struct{}, maxStreams),
 		probing:   make(chan struct{}, maxProbeBacks),
 		kick:      make(chan struct{}, 1),
 		stirred:   make(chan struct{}, 1),
@@ -330,6 +341,10 @@ func Open(cfg Config, serve http.Handler) (*Group, error) {
 	}
 	// A stream takes as long as it takes; its context bounds it.
 	g.streamer = &http.Client{Transport: g.hc.Transport, CheckRedirect: g.hc.CheckRedirect}
+	// An upload waits for the app to want its body before it sends it.
+	expecting := g.hc.Transport.(*http.Transport).Clone()
+	expecting.ExpectContinueTimeout = callTimeout
+	g.uploader = &http.Client{Transport: expecting, CheckRedirect: g.hc.CheckRedirect}
 	now := time.Now()
 	for id, rec := range st.Members {
 		// The ports may have changed since the address was kept.

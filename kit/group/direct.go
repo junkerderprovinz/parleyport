@@ -6,6 +6,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -62,11 +63,13 @@ const probeTarget = "*"
 // the domain so each app keeps the ones its instances already send.
 type headers struct {
 	peer, target, time, signature string
+	// call carries the call of an upload, whose body is the upload.
+	call string
 }
 
 func headersFor(d keys.Domain) headers {
 	name := func(s string) string { return http.CanonicalHeaderKey("X-" + string(d) + "-" + s) }
-	return headers{peer: name("Peer"), target: name("Target"), time: name("Time"), signature: name("Signature")}
+	return headers{peer: name("Peer"), target: name("Target"), time: name("Time"), signature: name("Signature"), call: name("Call")}
 }
 
 // announceTag signs everything an announce claims, its time included, so a
@@ -185,9 +188,10 @@ func (g *Group) serveDirect(w http.ResponseWriter, r *http.Request) {
 	// checked before the body is read.
 	h := g.headers
 	sender, target, unix := r.Header.Get(h.peer), r.Header.Get(h.target), r.Header.Get(h.time)
+	upload := r.Header.Get("Content-Type") == uploadType
 	sent, err := strconv.ParseInt(unix, 10, 64)
 	if err != nil || sender == "" || len(sender) > maxSenderBytes || (target != g.self && target != probeTarget) ||
-		r.ContentLength > maxDirectRequest || !recent(sent) {
+		!upload && r.ContentLength > maxDirectRequest || !recent(sent) {
 		forbid(w)
 		return
 	}
@@ -199,7 +203,13 @@ func (g *Group) serveDirect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(directReadTimeout))
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxDirectRequest))
+	var body []byte
+	if upload {
+		// The body of an upload is read by the app, once it wants it.
+		body, err = base64.StdEncoding.DecodeString(r.Header.Get(h.call))
+	} else {
+		body, err = io.ReadAll(http.MaxBytesReader(w, r.Body, maxDirectRequest))
+	}
 	if err != nil || !hmac.Equal([]byte(r.Header.Get(h.signature)), []byte(directSignature(g.peerAuth, sender, unix, body))) {
 		forbid(w)
 		return
@@ -231,6 +241,14 @@ func (g *Group) serveDirect(w http.ResponseWriter, r *http.Request) {
 			source = host
 		}
 		ctx := relay.WithSource(r.Context(), directSource+source)
+		if upload {
+			if !strings.HasPrefix(call.Path, uploadPrefix) {
+				forbid(w)
+				return
+			}
+			g.serveUpload(ctx, w, r, req, call)
+			return
+		}
 		if strings.HasPrefix(call.Path, streamPrefix) {
 			g.serveStream(ctx, w, req, call)
 			return

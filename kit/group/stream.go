@@ -41,7 +41,8 @@ const (
 	maxHeadBytes = 256 << 10
 	// maxRefusalBytes bounds what the app may refuse a stream with.
 	maxRefusalBytes = 64 << 10
-	// maxStreams is how many streams an instance sends at once.
+	// maxStreams is how many streams an instance sends at once, and how many
+	// uploads it takes.
 	maxStreams = 2
 	// streamWriteTimeout bounds how long one piece may wait for a reader that
 	// stopped reading.
@@ -239,8 +240,10 @@ type streamReader struct {
 	got    int64
 	sum    hash.Hash
 	verify func(end, sig []byte) bool
-	plain  []byte
-	err    error
+	// wait, if set, gives the connection time for the next piece.
+	wait  func()
+	plain []byte
+	err   error
 }
 
 func (r *streamReader) Read(p []byte) (int, error) {
@@ -256,6 +259,9 @@ func (r *streamReader) Read(p []byte) (int, error) {
 }
 
 func (r *streamReader) next() error {
+	if r.wait != nil {
+		r.wait()
+	}
 	kind, sealed, err := readAnyPiece(r.br, pieceBytes+r.aead.Overhead())
 	if err != nil {
 		return fmt.Errorf("%w: it ended after %d of %d bytes", ErrStreamBroken, r.got, r.length)
@@ -465,13 +471,17 @@ func (s *streamWriter) start() {
 
 func (s *streamWriter) send(kind byte, b []byte) error {
 	_ = s.rc.SetWriteDeadline(time.Now().Add(streamWriteTimeout))
+	return writePiece(s.w, kind, b)
+}
+
+func writePiece(w io.Writer, kind byte, b []byte) error {
 	var head [5]byte
 	head[0] = kind
 	binary.BigEndian.PutUint32(head[1:], uint32(len(b))) //nolint:gosec // G115: a piece is at most a few hundred KiB
-	if _, err := s.w.Write(head[:]); err != nil {
+	if _, err := w.Write(head[:]); err != nil {
 		return err
 	}
-	_, err := s.w.Write(b) //nolint:gosec // G705: sealed bytes, under a type no browser renders
+	_, err := w.Write(b) //nolint:gosec // G705: sealed bytes, under a type no browser renders
 	return err
 }
 
