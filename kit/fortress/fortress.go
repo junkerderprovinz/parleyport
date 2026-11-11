@@ -124,6 +124,9 @@ type Pairing struct {
 	// the fortress already paired. The pairing moves to the fortress phrase
 	// and keeps who was approved or taken out.
 	Previous []byte
+	// Kinds are the kinds of device the pairing takes, instances always; nil
+	// takes every kind.
+	Kinds []member.Kind
 }
 
 // Config is what a Fortress runs on. App, Secret or Keys, Identity and Store
@@ -188,6 +191,10 @@ type Config struct {
 	// group.Config.
 	MaxAnswerBytes      int
 	MaxRelayAnswerBytes int
+	// OnChange runs on a goroutine of its own, never twice at once, when what
+	// Members or the pairing's Members list changes, a member's app included.
+	// A burst of changes comes as one call. It must not close the fortress.
+	OnChange func()
 	// OnRemoved runs, at most once and on its own goroutine, when another
 	// member says this instance was taken out of the fortress or its pairing.
 	// The app leaves.
@@ -287,6 +294,10 @@ type Fortress struct {
 	greeted   map[string]time.Time
 	watched   map[string]time.Time
 
+	// changed carries a change for OnChange to hear, nil without one.
+	changed  chan struct{}
+	onChange func()
+
 	ctx       context.Context
 	cancel    context.CancelFunc
 	wg        sync.WaitGroup
@@ -336,6 +347,9 @@ func Open(cfg Config) (*Fortress, error) {
 		ctx:       ctx,
 		cancel:    cancel,
 	}
+	if cfg.OnChange != nil {
+		f.changed, f.onChange = make(chan struct{}, 1), cfg.OnChange
+	}
 	for _, a := range cfg.Actions {
 		f.actions[a.Name] = a
 		f.about.Actions = append(f.about.Actions, a.Name)
@@ -370,6 +384,8 @@ func Open(cfg Config) (*Fortress, error) {
 			RelayURL:            cfg.RelayURL,
 			LAN:                 p.LAN,
 			Store:               p.Store,
+			Kinds:               p.Kinds,
+			OnChange:            f.poke,
 			OnRemoved:           f.leave,
 			OnRemove:            f.pairingRemoved,
 			MaxAnswerBytes:      cfg.MaxAnswerBytes,
@@ -391,6 +407,7 @@ func Open(cfg Config) (*Fortress, error) {
 		RelayURL:            cfg.RelayURL,
 		LAN:                 cfg.LAN,
 		Store:               store,
+		OnChange:            f.poke,
 		OnRemoved:           f.leave,
 		OnRemove:            f.fortressRemoved,
 		MaxAnswerBytes:      cfg.MaxAnswerBytes,
@@ -414,6 +431,9 @@ func Open(cfg Config) (*Fortress, error) {
 		f.pairingRemoved(id)
 	}
 	f.wg.Go(f.run)
+	if f.onChange != nil {
+		f.wg.Go(f.tell)
+	}
 	return f, nil
 }
 
@@ -696,7 +716,31 @@ func (f *Fortress) describe(ctx context.Context, id string, now time.Time) bool 
 	}
 	f.book.Members[id] = a
 	f.dirty = true
+	f.poke()
 	return true
+}
+
+// poke says that what the members are changed, for OnChange to hear.
+func (f *Fortress) poke() {
+	if f.changed == nil {
+		return
+	}
+	select {
+	case f.changed <- struct{}{}:
+	default:
+	}
+}
+
+// tell runs OnChange for every change poked until Close.
+func (f *Fortress) tell() {
+	for {
+		select {
+		case <-f.ctx.Done():
+			return
+		case <-f.changed:
+			f.onChange()
+		}
+	}
 }
 
 // get calls GET path at member id and returns the body of a 200.
