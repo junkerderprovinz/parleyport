@@ -172,6 +172,14 @@ type Config struct {
 	// through the relay. A *Refusal says no with a code the member sees. nil
 	// offers no backup.
 	Export func(ctx context.Context, from Caller) (backup io.ReadCloser, n int64, err error)
+	// Import takes a backup, n bytes long, that another member hands back
+	// with Fortress.Import, if its app may run ImportAction here, which is
+	// off until somebody switches it on. It runs only for a member on this
+	// network. A read of backup fails with group.ErrStreamBroken where it
+	// would end if the backup arrived damaged, so the app keeps it only after
+	// reading it to io.EOF. A *Refusal says no with a code the member sees.
+	// nil takes no backup.
+	Import func(ctx context.Context, from Caller, backup io.Reader, n int64) error
 	// Events are what members whose app may run EventsAction here read of
 	// this instance; nil keeps none.
 	Events *events.Log
@@ -203,8 +211,8 @@ func (cfg Config) check() error {
 	}
 	seen := map[string]bool{}
 	for _, a := range cfg.Actions {
-		if a.Name == ExportAction || a.Name == EventsAction {
-			return fmt.Errorf("fortress: %s is offered through Config.Export or Config.Events, not as an action", a.Name)
+		if a.Name == ExportAction || a.Name == ImportAction || a.Name == EventsAction {
+			return fmt.Errorf("fortress: %s is offered through its own field of Config, not as an action", a.Name)
 		}
 		if !validAction(a.Name) || a.Run == nil || seen[a.Name] {
 			return fmt.Errorf("fortress: action %q needs a name of the form a.b, used once, and a Run", a.Name)
@@ -264,6 +272,7 @@ type Fortress struct {
 	pairing   *group.Group
 	keeper    Keeper
 	export    func(context.Context, Caller) (io.ReadCloser, int64, error)
+	importer  func(context.Context, Caller, io.Reader, int64) error
 	events    *events.Log
 	onRemoved func()
 	removed   sync.Once
@@ -316,6 +325,7 @@ func Open(cfg Config) (*Fortress, error) {
 		store:     store,
 		keeper:    cfg.Keeper,
 		export:    cfg.Export,
+		importer:  cfg.Import,
 		events:    cfg.Events,
 		onRemoved: cfg.OnRemoved,
 		book:      bk,
@@ -332,6 +342,9 @@ func Open(cfg Config) (*Fortress, error) {
 	}
 	if cfg.Export != nil {
 		f.about.Actions = append(f.about.Actions, ExportAction)
+	}
+	if cfg.Import != nil {
+		f.about.Actions = append(f.about.Actions, ImportAction)
 	}
 	if cfg.Events != nil {
 		f.actions[EventsAction] = Action{Name: EventsAction, Run: f.serveEvents}
@@ -383,6 +396,7 @@ func Open(cfg Config) (*Fortress, error) {
 		MaxAnswerBytes:      cfg.MaxAnswerBytes,
 		MaxRelayAnswerBytes: cfg.MaxRelayAnswerBytes,
 		Stream:              http.HandlerFunc(f.serveExport),
+		Upload:              http.HandlerFunc(f.serveImport),
 	}, http.HandlerFunc(f.serve))
 	if err != nil {
 		cancel()

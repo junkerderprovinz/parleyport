@@ -139,6 +139,7 @@ type setup struct {
 	maxAnswer int
 	maxRelay  int
 	export    func(context.Context, Caller) (io.ReadCloser, int64, error)
+	importer  func(context.Context, Caller, io.Reader, int64) error
 	actions   []Action
 	uses      []string
 	log       *events.Log
@@ -215,6 +216,7 @@ func config(t *testing.T, n *node, s setup) Config {
 		MaxAnswerBytes:      s.maxAnswer,
 		MaxRelayAnswerBytes: s.maxRelay,
 		Export:              s.export,
+		Import:              s.importer,
 	}
 	cfg.Actions = append(cfg.Actions, s.actions...)
 	if !s.noPair {

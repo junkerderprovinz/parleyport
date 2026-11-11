@@ -20,7 +20,8 @@ import (
 const maxPermissions = 1024
 
 // Permission is whether the app From may run Action at the app To. Changed is
-// when somebody last switched it, zero while nobody did and it is on.
+// when somebody last switched it, zero while nobody did and it stands as it
+// starts: on, but for ImportAction.
 type Permission struct {
 	From    string
 	To      string
@@ -131,7 +132,7 @@ func (f *Fortress) Permissions() []Permission {
 				if !offered[action] {
 					continue
 				}
-				p := Permission{From: from, To: to, Action: action, On: true}
+				p := Permission{From: from, To: to, Action: action, On: onByDefault(action)}
 				if s, ok := f.book.Permissions[permissionKey{From: from, To: to, Action: action}]; ok {
 					p.On, p.Changed = s.On, s.At
 				}
@@ -157,7 +158,10 @@ func (f *Fortress) permitted(app, action string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	s, ok := f.book.Permissions[permissionKey{From: app, To: f.app.ID, Action: action}]
-	return !ok || s.On
+	if !ok {
+		return onByDefault(action)
+	}
+	return s.On
 }
 
 // SetPermission switches whether the app from may run action at the app to,

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/junkerderprovinz/parleyport/kit/events"
+	"github.com/junkerderprovinz/parleyport/kit/group"
 	"github.com/junkerderprovinz/parleyport/kit/status"
 )
 
@@ -71,6 +72,8 @@ func refusal(status int, body []byte) error {
 		return ErrPermissionOff
 	case "no_such_action":
 		return ErrNoSuchAction
+	case "stream_broken":
+		return group.ErrStreamBroken
 	}
 	if len(code) > maxText {
 		code = code[:maxText]
