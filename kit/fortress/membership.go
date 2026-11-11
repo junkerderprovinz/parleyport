@@ -1,6 +1,7 @@
 package fortress
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -46,21 +47,28 @@ type membershipFormat struct {
 	PeerAuth string   `json:"peerAuth"`
 }
 
-// Join keeps m in dir under a new member key, with the keys the fortress
-// derives from secret. Neither the secret nor a key of any app's pairing is
-// kept, so whoever takes dir is this one member at most, until somebody
-// removes it. The files are readable by their owner alone; on a FAT stick the
-// mount decides.
+// Join keeps m in dir with the keys the fortress derives from secret, under
+// the member key dir holds for the same app, else a new one. So joining again
+// with a changed phrase comes back as the member the others know rather than
+// next to it. Neither the secret nor a key of any app's pairing is kept, so
+// whoever takes dir is this one member at most, until somebody removes it.
+// The files are readable by their owner alone; on a FAT stick the mount
+// decides.
 func Join(dir string, secret []byte, m Membership) error {
 	set := Domain.Keys(secret)
-	id, err := member.NewIdentity(member.KindInstance)
-	if err != nil {
-		return err
+	seed := ""
+	if held, err := readMembership(dir); err == nil && held.App == m.App {
+		seed = held.Seed
 	}
-	s := membershipFormat{
-		App: m.App, Name: m.Device, Relay: m.Relay, LAN: m.LAN, Uses: m.Uses,
-		Seed: hex.EncodeToString(id.Seed()), Group: set.Group, Frame: hex.EncodeToString(set.Frame), PeerAuth: hex.EncodeToString(set.PeerAuth),
+	if seed == "" {
+		id, err := member.NewIdentity(member.KindInstance)
+		if err != nil {
+			return err
+		}
+		seed = hex.EncodeToString(id.Seed())
 	}
+	s := membershipFormat{App: m.App, Name: m.Device, Relay: m.Relay, LAN: m.LAN, Uses: m.Uses, Seed: seed}
+	s.setKeys(set)
 	// Opening it once, off the network, checks the app id and the actions
 	// before anything is written.
 	offline := s
@@ -79,6 +87,34 @@ func Join(dir string, secret []byte, m Membership) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
+	return s.write(dir)
+}
+
+// Follow takes into the membership kept in dir the keys of the phrase the
+// fortress changed to, which f, opened from dir, fetches with NewKeys. It
+// reports whether it did; dir then opens under the new phrase as the same
+// member. Where no member in reach took a new phrase it changes nothing.
+func Follow(ctx context.Context, dir string, f *Fortress) (bool, error) {
+	set, err := f.NewKeys(ctx)
+	if errors.Is(err, ErrNoNewPhrase) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	s, err := readMembership(dir)
+	if err != nil {
+		return false, err
+	}
+	s.setKeys(set)
+	return true, s.write(dir)
+}
+
+func (s *membershipFormat) setKeys(set keys.Set) {
+	s.Group, s.Frame, s.PeerAuth = set.Group, hex.EncodeToString(set.Frame), hex.EncodeToString(set.PeerAuth)
+}
+
+func (s membershipFormat) write(dir string) error {
 	raw, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return err
@@ -86,23 +122,32 @@ func Join(dir string, secret []byte, m Membership) error {
 	return writeFile(filepath.Join(dir, membershipFile), raw)
 }
 
+// readMembership reads what Join kept in dir.
+func readMembership(dir string) (membershipFormat, error) {
+	path := filepath.Join(dir, membershipFile)
+	raw, err := os.ReadFile(path) //nolint:gosec // G304: the operator names the directory
+	if err != nil {
+		return membershipFormat{}, err
+	}
+	var s membershipFormat
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return membershipFormat{}, fmt.Errorf("%s is damaged: %w", path, err)
+	}
+	return s, nil
+}
+
 // Load reads the membership Join kept in dir as the Config to open it with.
 // The fortress keeps its state next to it. A membership on this network comes
 // with a LAN service on Multicast that the caller starts before Open and
 // closes after Close. Where nobody joined, the error is fs.ErrNotExist.
 func Load(dir string) (Config, error) {
-	path := filepath.Join(dir, membershipFile)
-	raw, err := os.ReadFile(path) //nolint:gosec // G304: the operator names the directory
+	s, err := readMembership(dir)
 	if err != nil {
 		return Config{}, err
 	}
-	var s membershipFormat
-	if err := json.Unmarshal(raw, &s); err != nil {
-		return Config{}, fmt.Errorf("%s is damaged: %w", path, err)
-	}
 	cfg, err := s.config(dir)
 	if err != nil {
-		return Config{}, fmt.Errorf("%s is damaged: %w", path, err)
+		return Config{}, fmt.Errorf("%s is damaged: %w", filepath.Join(dir, membershipFile), err)
 	}
 	if s.LAN {
 		cfg.LAN = lan.New(lan.Config{Group: Multicast})

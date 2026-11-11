@@ -2,6 +2,7 @@ package fortress
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -60,6 +61,12 @@ func MovedKeys(ctx context.Context, c *relay.Client, id string) (keys.Set, error
 	if err != nil {
 		return keys.Set{}, err
 	}
+	return movedSet(id, status, body)
+}
+
+// movedSet reads the keys instance id answered with status and body at
+// movedPath.
+func movedSet(id string, status int, body []byte) (keys.Set, error) {
 	if status != http.StatusOK {
 		return keys.Set{}, refusal(status, body)
 	}
@@ -168,5 +175,97 @@ func (f *Fortress) prune() {
 			delete(f.book.Behind, id)
 			f.dirty = true
 		}
+	}
+}
+
+// phraseChanged is the code a member answers on the phrase the fortress left.
+const phraseChanged = "phrase_changed"
+
+// ErrNoNewPhrase is what NewKeys returns when no member in reach says that
+// the fortress changed its phrase.
+var ErrNoNewPhrase = errors.New("fortress: no member in reach took a new phrase")
+
+// NewKeys fetches the keys the fortress runs on since its phrase changed,
+// for a member that holds only keys, such as a plugin: a member that took the
+// new phrase hands them, for 30 days, to every instance that was approved
+// before the change and has not been taken out. The member opens the
+// fortress with them under the same Identity, and the others keep it as the
+// member it was. Neither the secret nor the keys of any app's pairing come
+// with them.
+func (f *Fortress) NewKeys(ctx context.Context) (keys.Set, error) {
+	f.mu.Lock()
+	current := f.book.Group
+	var ids []string
+	for id, a := range f.book.Members {
+		if a.Moved {
+			ids = append(ids, id)
+		}
+	}
+	f.mu.Unlock()
+	sort.Strings(ids)
+	err := ErrNoNewPhrase
+	for _, id := range ids {
+		set, e := f.movedKeys(ctx, id)
+		switch {
+		case e != nil:
+			err = e
+		case set.Group != current:
+			return set, nil
+		}
+	}
+	return keys.Set{}, err
+}
+
+// movedKeys asks member id for the keys under the new phrase.
+func (f *Fortress) movedKeys(ctx context.Context, id string) (keys.Set, error) {
+	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+	status, body, err := f.group.Call(ctx, id, http.MethodGet, movedPath, nil)
+	if err != nil {
+		return keys.Set{}, err
+	}
+	return movedSet(id, status, body)
+}
+
+// openOld opens the fortress on cfg.Previous for the members from before the
+// change that hold only keys, which have no way to the new phrase but this.
+// The phrase lets nobody in there: only the instances the fortress approved
+// under the same key are, and set is what they are handed.
+func (f *Fortress) openOld(cfg Config, set keys.Set) error {
+	f.set = set
+	old, err := group.Open(group.Config{
+		Domain:   Domain,
+		Secret:   cfg.Previous,
+		Identity: cfg.Identity,
+		Self:     cfg.Self,
+		Relay:    cfg.Relay,
+		RelayURL: cfg.RelayURL,
+		Store:    &memory{},
+		Vouch:    func(id string, key ed25519.PublicKey) bool { return approvedIn(f.group, id, key) },
+	}, http.HandlerFunc(f.serveOld))
+	if err != nil {
+		return err
+	}
+	f.old = old
+	return nil
+}
+
+// serveOld answers the members still on the phrase before: what this
+// instance is, marked as moved, and the keys under the new phrase. Whatever
+// else they ask waits until they followed. Every call is checked against the
+// fortress as it stands, so a member taken out since the change gets nothing.
+func (f *Fortress) serveOld(w http.ResponseWriter, r *http.Request) {
+	caller, ok := group.CallerOf(r.Context())
+	switch {
+	case !ok || caller.Kind != member.KindInstance || !approvedIn(f.group, caller.ID, caller.Key):
+		writeError(w, http.StatusForbidden, "forbidden")
+	case r.URL.Path == aboutPath && r.Method == http.MethodGet:
+		a := f.about
+		a.Moved = true
+		writeJSON(w, a)
+	case r.URL.Path == movedPath && r.Method == http.MethodGet:
+		writeJSON(w, movedBody{Group: f.set.Group, Frame: f.set.Frame, PeerAuth: f.set.PeerAuth}) //nolint:gosec // G117: sealed to an approved member
+	default:
+		writeError(w, http.StatusGone, phraseChanged)
 	}
 }

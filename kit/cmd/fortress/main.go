@@ -11,9 +11,11 @@
 // join keeps no phrase: DIR holds the plugin's member key and the keys the
 // fortress derives for itself, readable by its owner alone, which open no
 // app's pairing and lead back to no phrase. Whoever takes DIR is this one
-// member at most, until somebody removes it. After the phrase changes, the
-// plugin joins again with the new one. Every command but join takes part for
-// as long as it runs, waits up to -wait for the members to show, and leaves.
+// member at most, until somebody removes it. After the phrase changes, every
+// command follows on its own, as the same member, for 30 days; joining again
+// with the new phrase does the same any time. Every command but join takes
+// part for as long as it runs, waits up to -wait for the members to show, and
+// leaves.
 package main
 
 import (
@@ -132,26 +134,45 @@ func join(dir string, m fortress.Membership, stdin io.Reader) error {
 }
 
 // withFortress joins the fortress kept in dir, waits for its members and runs
-// do.
+// do. When the phrase changed since the last run, it follows first.
 func withFortress(ctx context.Context, dir string, wait time.Duration, do func(*fortress.Fortress) error) error {
-	cfg, err := fortress.Load(dir)
-	if errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("%s holds no fortress yet; run fortress join first", dir)
-	}
+	f, leave, err := openDir(ctx, dir, wait)
 	if err != nil {
 		return err
 	}
-	leave := func() error { return nil }
+	// A member out of reach is asked for the new keys again on the next run,
+	// and do says what the old phrase still reaches.
+	if moved, _ := fortress.Follow(ctx, dir, f); moved {
+		if err := errors.Join(f.Close(), leave()); err != nil {
+			return err
+		}
+		if f, leave, err = openDir(ctx, dir, wait); err != nil {
+			return err
+		}
+	}
+	return errors.Join(do(f), f.Close(), leave())
+}
+
+// openDir joins the fortress kept in dir and waits for its members. leave
+// closes what it started besides the fortress.
+func openDir(ctx context.Context, dir string, wait time.Duration) (f *fortress.Fortress, leave func() error, err error) {
+	cfg, err := fortress.Load(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil, fmt.Errorf("%s holds no fortress yet; run fortress join first", dir)
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	leave = func() error { return nil }
 	if cfg.LAN != nil {
 		cfg.LAN.Start()
 		leave = cfg.LAN.Close
 	}
-	f, err := fortress.Open(cfg)
-	if err != nil {
-		return errors.Join(err, leave())
+	if f, err = fortress.Open(cfg); err != nil {
+		return nil, nil, errors.Join(err, leave())
 	}
 	settled(ctx, f, cfg.Relay != group.RelayOff, wait)
-	return errors.Join(do(f), f.Close(), leave())
+	return f, leave, nil
 }
 
 // settled waits until the relay lists the members and every instance in reach

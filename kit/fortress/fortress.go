@@ -22,9 +22,10 @@
 // The phrase is the proof: a device that holds it is a member at once, with
 // the permissions as they stand. A member taken out is refused by all the
 // others for good, but whoever still holds the phrase can come back under a
-// new key until the phrase is changed. A member names its app itself and
-// keeps the first name it gave, so the permissions keep apps apart, not
-// members that lie about their app.
+// new key until the phrase is changed. A member that holds only the keys,
+// such as a plugin, follows a change with NewKeys. A member names its app
+// itself and keeps the first name it gave, so the permissions keep apps
+// apart, not members that lie about their app.
 package fortress
 
 import (
@@ -153,7 +154,10 @@ type Config struct {
 	Store group.Store
 	// Previous is the secret of the phrase before ChangePhrase. Members,
 	// removals and permissions carry over to Secret, in the pairing as well
-	// unless Pairing.Group.Previous says otherwise.
+	// unless Pairing.Group.Previous says otherwise. For 30 days after the
+	// change the fortress also answers on Previous, so that the members that
+	// hold only keys can fetch the new ones with NewKeys; the app keeps giving
+	// it until then.
 	Previous []byte
 	// Keeper keeps a new phrase when the fortress changes it; nil for an app
 	// that has nowhere safe to keep one, which then enters the new phrase
@@ -306,6 +310,11 @@ type Fortress struct {
 	// paired is what the pairing derives from the secret, which a phone
 	// that follows a move is handed in its place.
 	paired keys.Set
+	// old is the fortress on the phrase before, open for moveWindow after
+	// the change so that its members that hold only keys can fetch set, the
+	// keys under the new one. nil when the phrase did not change lately.
+	old *group.Group
+	set keys.Set
 
 	mu        sync.Mutex
 	book      book
@@ -359,6 +368,9 @@ func Open(cfg Config) (*Fortress, error) {
 		events:    cfg.Events,
 		onRemoved: cfg.OnRemoved,
 		book:      bk,
+		// A book written at once tells a later change of phrase from a fresh
+		// start.
+		dirty:     true,
 		described: map[string]time.Time{},
 		synced:    map[string]time.Time{},
 		greeted:   map[string]time.Time{},
@@ -424,6 +436,16 @@ func Open(cfg Config) (*Fortress, error) {
 	early := f.early
 	f.early = nil
 	f.mu.Unlock()
+	if len(cfg.Secret) > 0 && len(cfg.Previous) > 0 && time.Since(bk.Changed) < moveWindow {
+		if err := f.openOld(cfg, set); err != nil {
+			cancel()
+			_ = g.Close()
+			if f.pairing != nil {
+				_ = f.pairing.Close()
+			}
+			return nil, err
+		}
+	}
 	for _, id := range early {
 		f.pairingRemoved(id)
 	}
@@ -442,6 +464,9 @@ func (f *Fortress) Close() error {
 		err := f.group.Close()
 		if f.pairing != nil {
 			err = errors.Join(err, f.pairing.Close())
+		}
+		if f.old != nil {
+			err = errors.Join(err, f.old.Close())
 		}
 		f.mu.Lock()
 		if f.dirty {
@@ -467,14 +492,18 @@ func (f *Fortress) NoteAddress(r *http.Request) {
 	if f.pairing != nil {
 		f.pairing.NoteAddress(r)
 	}
+	if f.old != nil {
+		f.old.NoteAddress(r)
+	}
 }
 
-// DirectHandler answers the direct calls of the fortress, the pairing and
-// the other groups given, which all arrive on the same path, such as the
-// app's group on its own phrase while its members move into the fortress.
-// The app mounts it at group.DirectPath.
+// DirectHandler answers the direct calls of the fortress, on the phrase
+// before as well for a while after a change, the pairing and the other groups
+// given, which all arrive on the same path, such as the app's group on its
+// own phrase while its members move into the fortress. The app mounts it at
+// group.DirectPath.
 func (f *Fortress) DirectHandler(others ...*group.Group) http.Handler {
-	return group.Direct(append([]*group.Group{f.group, f.pairing}, others...)...)
+	return group.Direct(append([]*group.Group{f.group, f.pairing, f.old}, others...)...)
 }
 
 // Members lists every other instance in the fortress this one knows, sorted
@@ -609,9 +638,11 @@ func (f *Fortress) vouch(id string, key ed25519.PublicKey) bool {
 	f.mu.Lock()
 	g, app := f.group, f.book.Members[id].App.ID
 	f.mu.Unlock()
-	if g == nil || app != f.app.ID {
-		return false
-	}
+	return g != nil && app == f.app.ID && approvedIn(g, id, key)
+}
+
+// approvedIn reports whether instance id is approved in g under key.
+func approvedIn(g *group.Group, id string, key ed25519.PublicKey) bool {
 	m, ok := listed(g, id)
 	return ok && m.Kind == member.KindInstance && m.State == group.StateApproved && bytes.Equal(m.Key, key)
 }
@@ -724,7 +755,7 @@ func (f *Fortress) get(ctx context.Context, id, path string) ([]byte, error) {
 		return nil, err
 	}
 	if status != http.StatusOK {
-		return nil, refusal(status, body)
+		return nil, f.refused(id, status, body)
 	}
 	return body, nil
 }

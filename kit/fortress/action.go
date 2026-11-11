@@ -96,9 +96,20 @@ func (f *Fortress) Act(ctx context.Context, id, action string, body []byte) ([]b
 		return nil, err
 	}
 	if status != http.StatusOK {
-		return nil, refusal(status, out)
+		return nil, f.refused(id, status, out)
 	}
 	return out, nil
+}
+
+// refused is the refusal member id answered with. A member that says the
+// phrase changed is asked again at once what it is, which tells NewKeys to
+// ask it for the new keys.
+func (f *Fortress) refused(id string, status int, body []byte) error {
+	err := refusal(status, body)
+	if no := (*Refusal)(nil); errors.As(err, &no) && no.Code == phraseChanged {
+		f.again(f.described, id, time.Time{})
+	}
+	return err
 }
 
 // serveAction runs action for the member caller, if its app may.

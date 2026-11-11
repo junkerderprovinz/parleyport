@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/junkerderprovinz/parleyport/kit/group"
 	"github.com/junkerderprovinz/parleyport/kit/member"
@@ -15,6 +16,9 @@ type about struct {
 	App     App      `json:"app"`
 	Actions []string `json:"actions,omitempty"`
 	Uses    []string `json:"uses,omitempty"`
+	// Moved says the member answers on a phrase the fortress has left, and
+	// hands the members from before the new keys at movedPath.
+	Moved bool `json:"moved,omitempty"`
 }
 
 func (a about) valid() bool {
@@ -36,7 +40,9 @@ func (a about) valid() bool {
 type book struct {
 	// Group is the fortress's group key, so a store written under another
 	// phrase starts over.
-	Group       string           `json:"group"`
+	Group string `json:"group"`
+	// Changed is when the book moved here from the phrase before.
+	Changed     time.Time        `json:"changed,omitzero"`
 	Members     map[string]about `json:"members,omitempty"`
 	Permissions permissionTable  `json:"permissions,omitempty"`
 	Rules       []Rule           `json:"rules,omitempty"`
@@ -66,12 +72,12 @@ func loadBook(raw []byte, groupKey, previous string) (book, error) {
 	}
 	switch {
 	case b.Group == groupKey:
+		return b, nil
 	case previous != "" && b.Group == previous:
-		b.Group = groupKey
-	default:
-		return fresh, nil
+		b.Group, b.Changed = groupKey, time.Now().Round(0)
+		return b, nil
 	}
-	return b, nil
+	return fresh, nil
 }
 
 func (f *Fortress) saveLocked() error {
@@ -83,6 +89,25 @@ func (f *Fortress) saveLocked() error {
 		return err
 	}
 	f.dirty = false
+	return nil
+}
+
+// memory keeps a group's state for as long as the fortress runs.
+type memory struct {
+	mu  sync.Mutex
+	raw []byte
+}
+
+func (m *memory) Load() ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return bytes.Clone(m.raw), nil
+}
+
+func (m *memory) Save(raw []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.raw = bytes.Clone(raw)
 	return nil
 }
 

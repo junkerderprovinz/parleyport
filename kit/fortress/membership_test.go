@@ -102,3 +102,96 @@ func TestJoinRefusesAnAppItCannotOpen(t *testing.T) {
 		t.Errorf("a refused Join left a membership behind: %v", err)
 	}
 }
+
+func TestJoiningAgainKeepsTheMemberOfTheSameApp(t *testing.T) {
+	dir := t.TempDir()
+	m := Membership{App: "alpha", Device: "cellar", Relay: "off"}
+	if err := Join(dir, testSecret, m); err != nil {
+		t.Fatal(err)
+	}
+	first, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Join(dir, oldSecret, m); err != nil {
+		t.Fatal(err)
+	}
+	again, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Identity.ID() != first.Identity.ID() || again.Keys.Group != Domain.GroupKey(oldSecret) {
+		t.Errorf("joining again gives member %s on %s, want %s on the new phrase", again.Identity.ID(), again.Keys.Group, first.Identity.ID())
+	}
+
+	m.App = "bravo"
+	if err := Join(dir, oldSecret, m); err != nil {
+		t.Fatal(err)
+	}
+	other, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other.Identity.ID() == first.Identity.ID() {
+		t.Error("joining for another app kept the member of the first, whose app the others keep")
+	}
+}
+
+func TestAMembershipFollowsANewPhraseInItsDirectory(t *testing.T) {
+	url := relayServer(t)
+	a := open(t, "alpha", "alpha-1", setup{relay: url})
+	b := open(t, "bravo", "bravo-1", setup{relay: url})
+	dir := t.TempDir()
+	if err := Join(dir, testSecret, Membership{App: "watcher", Device: "cellar", Relay: url}); err != nil {
+		t.Fatal(err)
+	}
+	openDir := func() *Fortress {
+		t.Helper()
+		cfg, err := Load(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f, err := Open(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = f.Close() })
+		return f
+	}
+	f := openDir()
+	waitFor(t, "the plugin to see both", func() bool { return len(f.Members()) == 2 })
+	if moved, err := Follow(ctx(t), dir, f); moved || err != nil {
+		t.Errorf("Follow before any change = %t %v", moved, err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	secret := changePhrase(t, url, a, b)
+
+	f = openDir()
+	waitFor(t, "the plugin to learn alpha moved", func() bool {
+		m, _ := memberOf(f, a.id)
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return m.Online() && f.book.Members[a.id].Moved
+	})
+	moved, err := Follow(ctx(t), dir, f)
+	if !moved || err != nil {
+		t.Fatalf("Follow after the change = %t %v", moved, err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Keys.Group != Domain.GroupKey(secret) {
+		t.Errorf("the membership holds %s, want the keys of the new phrase", cfg.Keys.Group)
+	}
+	f = openDir()
+	waitFor(t, "the plugin to reach alpha under the new phrase", func() bool { _, err := f.Status(ctx(t), a.id, ""); return err == nil })
+	if got := len(a.f.Members()); got != 2 {
+		t.Errorf("alpha lists %d members, want bravo and the plugin once", got)
+	}
+}

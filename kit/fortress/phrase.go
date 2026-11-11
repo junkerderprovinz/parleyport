@@ -104,9 +104,10 @@ func hand(ctx context.Context, g *group.Group, ids []string, path string, secret
 // it first, then every instance in reach gets it to keep and the ids of those
 // that did come back. A member taken out does not get it, and neither does
 // one that is away: it is out until the new phrase is entered there, and then
-// in again like any new member. The app opens the fortress again with the new
-// secret and the old one as Config.Previous; the old phrase opens nothing
-// from then on.
+// in again as the member it was. A member that holds only keys follows with
+// NewKeys instead. The app opens the fortress again with the new secret and
+// the old one as Config.Previous; the old phrase lets nobody new in from then
+// on.
 func (f *Fortress) ChangePhrase(ctx context.Context) ([]string, error) {
 	if f.keeper == nil {
 		return nil, errors.New("fortress: no keeper for a new phrase")

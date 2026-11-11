@@ -68,29 +68,48 @@ func (source) Log(context.Context, status.LogQuery) (status.LogPage, error) {
 // app is an instance of the app "alpha" in the fortress, which offers the
 // action "files.drop" and records who ran it.
 type app struct {
-	f  *fortress.Fortress
-	id string
+	f     *fortress.Fortress
+	id    string
+	store *memStore
 
-	mu    sync.Mutex
-	drops []string
+	mu     sync.Mutex
+	drops  []string
+	secret []byte
+}
+
+func (a *app) Keep(secret []byte) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.secret = bytes.Clone(secret)
+	return nil
 }
 
 func openApp(t *testing.T, url string) *app {
+	t.Helper()
+	a := &app{store: &memStore{}}
+	a.open(t, url, secret, nil)
+	return a
+}
+
+// open opens the app's fortress under secret, changed from previous.
+func (a *app) open(t *testing.T, url string, secret, previous []byte) {
 	t.Helper()
 	seed := sha256.Sum256([]byte("alpha-1"))
 	id, err := member.FromSeed(member.KindInstance, seed[:])
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := &app{id: id.ID()}
+	a.id = id.ID()
 	f, err := fortress.Open(fortress.Config{
 		App:      fortress.App{ID: "alpha", Name: "Alpha", Version: "2.0.0"},
 		Secret:   secret,
+		Previous: previous,
+		Keeper:   a,
 		Identity: id,
 		Self:     group.Self{Name: "tower", Deployment: "container"},
 		Relay:    group.RelayOwn,
 		RelayURL: url,
-		Store:    &memStore{},
+		Store:    a.store,
 		Status:   source{},
 		Actions: []fortress.Action{{Name: "files.drop", Run: func(_ context.Context, from fortress.Caller, body []byte) ([]byte, error) {
 			a.mu.Lock()
@@ -104,7 +123,6 @@ func openApp(t *testing.T, url string) *app {
 	}
 	t.Cleanup(func() { _ = f.Close() })
 	a.f = f
-	return a
 }
 
 func (a *app) dropped() []string {
@@ -267,5 +285,56 @@ func TestUsage(t *testing.T) {
 	}
 	if code, _, stderr := cli(t, "", "members", "-dir", dir); code != 1 || !strings.Contains(stderr, "join") {
 		t.Errorf("members before joining: %d %q", code, stderr)
+	}
+}
+
+func TestAPluginFollowsAChangedPhraseAsTheSameMember(t *testing.T) {
+	url := relayServer(t)
+	a := openApp(t, url)
+	dir := t.TempDir()
+	words, err := phrase.Encode(secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, _, stderr := cli(t, words+"\n", "join", "-dir", dir, "-app", "watcher", "-name", "tower", "-relay", url); code != 0 {
+		t.Fatalf("join: %d %s", code, stderr)
+	}
+	if code, _, stderr := cli(t, "", "members", "-dir", dir, "-wait", "3s"); code != 0 {
+		t.Fatalf("members: %d %s", code, stderr)
+	}
+	plugin, err := fortress.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The phrase changes while the plugin is not running.
+	if _, err := a.f.ChangePhrase(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	a.mu.Lock()
+	changed := a.secret
+	a.mu.Unlock()
+	a.open(t, url, changed, secret)
+
+	code, out, stderr := cli(t, "", "act", "-dir", dir, "-wait", "10s", "alpha", "files.drop", `"after"`)
+	if code != 0 || strings.TrimSpace(out) != `{"ok":true}` {
+		t.Fatalf("act after the change: %d %q %s", code, out, stderr)
+	}
+	cfg, err := fortress.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Keys.Group != fortress.Domain.GroupKey(changed) || cfg.Identity.ID() != plugin.Identity.ID() {
+		t.Errorf("the plugin is %s on %s, want %s on the new phrase", cfg.Identity.ID(), cfg.Keys.Group, plugin.Identity.ID())
+	}
+	var listed []string
+	for _, m := range a.f.Members() {
+		listed = append(listed, m.ID)
+	}
+	if !slices.Equal(listed, []string{plugin.Identity.ID()}) {
+		t.Errorf("alpha lists %v, want the plugin once", listed)
 	}
 }
