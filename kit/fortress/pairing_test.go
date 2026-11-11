@@ -3,6 +3,7 @@ package fortress
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -160,6 +161,7 @@ func TestAPairingCannotSetWhatTheFortressDecides(t *testing.T) {
 		"relay address":  func(c *group.Config) { c.RelayURL = "https://relay.example" },
 		"on removed":     func(c *group.Config) { c.OnRemoved = func() {} },
 		"on remove":      func(c *group.Config) { c.OnRemove = func(string) {} },
+		"vouch":          func(c *group.Config) { c.Vouch = func(string, ed25519.PublicKey) bool { return true } },
 		"no store":       func(c *group.Config) { c.Store = nil },
 	} {
 		t.Run(name, func(t *testing.T) {

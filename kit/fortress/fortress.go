@@ -31,6 +31,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -66,6 +67,7 @@ const (
 	permissionsPath = prefix + "permissions"
 	actPrefix       = prefix + "act/"
 	movePath        = prefix + "move"
+	movedPath       = prefix + "moved"
 	phrasePath      = prefix + "phrase"
 )
 
@@ -118,8 +120,9 @@ type Pairing struct {
 	// phrase when the instance joins the fortress already paired; the
 	// pairing moves to the fortress phrase and keeps who was approved or
 	// taken out. Who joins, as whom and where is the fortress's to set, so
-	// Domain, Secret, Keys, JoinByPhrase, Self, Relay, RelayURL, OnRemoved
-	// and OnRemove stay unset.
+	// Domain, Secret, Keys, JoinByPhrase, Self, Relay, RelayURL, OnRemoved,
+	// OnRemove and Vouch stay unset: an instance of the app that is in the
+	// fortress under the same key is paired without anybody approving it.
 	Group group.Config
 	// Serve answers the calls of the app's own instances and phones.
 	Serve http.Handler
@@ -213,7 +216,7 @@ func pairingConfig(cfg Config) group.Config {
 // pairing.
 func decided(c group.Config) bool {
 	return c.Domain != "" || len(c.Secret) > 0 || c.Keys.Group != "" || len(c.Keys.Frame) > 0 || len(c.Keys.PeerAuth) > 0 ||
-		c.JoinByPhrase || c.Self != (group.Self{}) || c.Relay != "" || c.RelayURL != "" || c.OnRemoved != nil || c.OnRemove != nil
+		c.JoinByPhrase || c.Self != (group.Self{}) || c.Relay != "" || c.RelayURL != "" || c.OnRemoved != nil || c.OnRemove != nil || c.Vouch != nil
 }
 
 func (cfg Config) check() error {
@@ -300,6 +303,9 @@ type Fortress struct {
 	events    *events.Log
 	onRemoved func()
 	removed   sync.Once
+	// paired is what the pairing derives from the secret, which a phone
+	// that follows a move is handed in its place.
+	paired keys.Set
 
 	mu        sync.Mutex
 	book      book
@@ -380,7 +386,8 @@ func Open(cfg Config) (*Fortress, error) {
 	}
 	if cfg.Pairing != nil {
 		pc := pairingConfig(cfg)
-		pc.OnRemoved, pc.OnRemove = f.leave, f.pairingRemoved
+		pc.OnRemoved, pc.OnRemove, pc.Vouch = f.leave, f.pairingRemoved, f.vouch
+		f.paired = pc.Domain.Keys(pc.Secret)
 		f.pairing, err = group.Open(pc, cfg.Pairing.Serve)
 		if err != nil {
 			cancel()
@@ -462,23 +469,12 @@ func (f *Fortress) NoteAddress(r *http.Request) {
 	}
 }
 
-// DirectHandler answers the direct calls of the fortress and the pairing,
-// which arrive on the same path. The app mounts it at group.DirectPath.
-func (f *Fortress) DirectHandler() http.Handler {
-	own := f.group.DirectHandler()
-	paired := http.NotFoundHandler()
-	if f.pairing != nil {
-		paired = f.pairing.DirectHandler()
-	}
-	// Every direct call names its sender in a header made from its domain.
-	header := http.CanonicalHeaderKey("X-" + string(Domain) + "-Peer")
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get(header) != "" {
-			own.ServeHTTP(w, r)
-			return
-		}
-		paired.ServeHTTP(w, r)
-	})
+// DirectHandler answers the direct calls of the fortress, the pairing and
+// the other groups given, which all arrive on the same path, such as the
+// app's group on its own phrase while its members move into the fortress.
+// The app mounts it at group.DirectPath.
+func (f *Fortress) DirectHandler(others ...*group.Group) http.Handler {
+	return group.Direct(append([]*group.Group{f.group, f.pairing}, others...)...)
 }
 
 // Members lists every other instance in the fortress this one knows, sorted
@@ -604,6 +600,20 @@ func (f *Fortress) follow(now time.Time) {
 			_ = f.pairing.Approve(m.ID)
 		}
 	}
+}
+
+// vouch lets into the pairing an instance that is a member of the fortress
+// under the same key and said it runs this app, as follow would approve it
+// a moment later.
+func (f *Fortress) vouch(id string, key ed25519.PublicKey) bool {
+	f.mu.Lock()
+	g, app := f.group, f.book.Members[id].App.ID
+	f.mu.Unlock()
+	if g == nil || app != f.app.ID {
+		return false
+	}
+	m, ok := listed(g, id)
+	return ok && m.Kind == member.KindInstance && m.State == group.StateApproved && bytes.Equal(m.Key, key)
 }
 
 // greet calls sibling id in the pairing. Any signed call pins this instance's

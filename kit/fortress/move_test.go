@@ -5,19 +5,23 @@ import (
 	"net/http"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/junkerderprovinz/parleyport/kit/group"
 	"github.com/junkerderprovinz/parleyport/kit/keys"
+	"github.com/junkerderprovinz/parleyport/kit/lan"
 )
 
 // paired is an instance of alpha paired with its siblings under the app's own
-// phrase, before any fortress: its group, and the secret Moving handed it.
+// phrase, before any fortress: its group, the secret Moving handed it and,
+// once it moved, its fortress.
 type paired struct {
 	name  string
 	id    string
 	g     *group.Group
 	store *memStore
+	in    atomic.Pointer[Fortress]
 
 	mu    sync.Mutex
 	moved []byte
@@ -38,11 +42,17 @@ func (p *paired) given() []byte {
 
 func openPaired(t *testing.T, url, name string) *paired {
 	t.Helper()
+	return openPairedOn(t, url, name, nil)
+}
+
+// openPairedOn opens a paired instance that also finds its siblings on l.
+func openPairedOn(t *testing.T, url, name string, l *lan.Service) *paired {
+	t.Helper()
 	p := &paired{name: name, id: identity(t, name).ID(), store: &memStore{}}
 	g, err := group.Open(group.Config{
 		Domain: keys.Domain("alpha"), Secret: oldSecret, Identity: identity(t, name),
-		Self: group.Self{Name: name}, Relay: group.RelayOwn, RelayURL: url, Store: p.store,
-	}, Moving(appRoutes(), p))
+		Self: group.Self{Name: name}, Relay: group.RelayOwn, RelayURL: url, Store: p.store, LAN: l,
+	}, Moved(Moving(appRoutes(), p), p.in.Load))
 	if err != nil {
 		t.Fatal(err)
 	}
