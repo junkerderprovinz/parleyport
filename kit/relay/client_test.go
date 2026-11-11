@@ -160,6 +160,30 @@ func TestClientAnswersASiblingsCall(t *testing.T) {
 	}
 }
 
+func TestAHandlerThatClosesItsClientStillAnswers(t *testing.T) {
+	addr, _ := relayOn(t, "127.0.0.1:0")
+	self := make(chan *Client, 1)
+	alpha := startClient(t, addr, "shared-relay-test-key-0123456789ab", alphaID, func(ctx context.Context, _ ProxyCall) (int, []byte) {
+		go func() { _ = (<-self).Close() }()
+		<-ctx.Done()
+		return http.StatusNoContent, nil
+	})
+	self <- alpha
+	waitFor(t, "alpha to connect", alpha.Connected)
+	bravo := dialInstance(t, "ws://"+addr+connectPath, "shared-relay-test-key-0123456789ab", bravoID)
+	readFrame(t, bravo, TypeAnnounce)
+
+	sealed := sealFor(t, "r1", alphaID, ProxyCall{Method: http.MethodPost, Path: "/api/move"})
+	writeFrame(t, bravo, TypeProxyRequest, ProxyRequest{RequestID: "r1", Target: alphaID, Sealed: sealed})
+	var resp ProxyResponse
+	if err := readFrame(t, bravo, TypeProxyResponse).Into(&resp); err != nil {
+		t.Fatalf("proxy-response: %v", err)
+	}
+	if res := openResultFrom(t, "r1", resp.Sealed); res.Status != http.StatusNoContent {
+		t.Errorf("got %+v, want the handler's 204", res)
+	}
+}
+
 // TestACallSentAgainOrLateIsNotRun has a handler drop what a ReplayGuard
 // refuses, and checks that a dropped call gets no answer at all.
 func TestACallSentAgainOrLateIsNotRun(t *testing.T) {

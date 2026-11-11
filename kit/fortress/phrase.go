@@ -36,7 +36,8 @@ func Move(ctx context.Context, old *group.Group, secret []byte) []string {
 // Moving serves next to the app's own pairing while the instance is in no
 // fortress, and hands the fortress secret an approved sibling passes on with
 // Move to keeper. The app then opens its Fortress with the pairing's secret as
-// Pairing.Previous.
+// Pairing.Previous. Keep may set off closing the old pairing; the sibling
+// still hears that the secret was kept.
 func Moving(next http.Handler, keeper Keeper) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != movePath {

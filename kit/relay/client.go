@@ -123,6 +123,13 @@ type Client struct {
 	older   map[string]Announce
 	pending map[string]*waiting
 	started bool
+	closing bool
+
+	// answering counts the calls being answered, whose answers Close lets go
+	// out before it drops the connection; serving ends their contexts.
+	answering   sync.WaitGroup
+	serving     context.Context
+	stopServing context.CancelFunc
 
 	// inbound is the read loop's state, moved when bytes last came in.
 	inbound atomic.Int32
@@ -163,25 +170,28 @@ func NewClient(opts ClientOptions) (*Client, error) {
 	if self.InstanceID == "" {
 		return nil, errors.New("relay: no instance id to announce")
 	}
+	serving, stopServing := context.WithCancel(context.Background())
 	return &Client{
-		url:        connect,
-		relayHost:  RelayHost(connect),
-		key:        opts.Key,
-		frameKey:   opts.FrameKey,
-		signing:    opts.Signing,
-		id:         self.InstanceID,
-		self:       self,
-		identity:   opts.Identity,
-		trusts:     opts.Trusts,
-		serve:      opts.Serve,
-		onChange:   opts.OnChange,
-		minBackoff: minBackoff,
-		maxBackoff: maxBackoff,
-		siblings:   map[string]Announce{},
-		older:      map[string]Announce{},
-		pending:    map[string]*waiting{},
-		stop:       make(chan struct{}),
-		done:       make(chan struct{}),
+		url:         connect,
+		relayHost:   RelayHost(connect),
+		key:         opts.Key,
+		frameKey:    opts.FrameKey,
+		signing:     opts.Signing,
+		id:          self.InstanceID,
+		self:        self,
+		identity:    opts.Identity,
+		trusts:      opts.Trusts,
+		serve:       opts.Serve,
+		onChange:    opts.OnChange,
+		minBackoff:  minBackoff,
+		maxBackoff:  maxBackoff,
+		siblings:    map[string]Announce{},
+		older:       map[string]Announce{},
+		pending:     map[string]*waiting{},
+		serving:     serving,
+		stopServing: stopServing,
+		stop:        make(chan struct{}),
+		done:        make(chan struct{}),
 	}, nil
 }
 
@@ -203,9 +213,19 @@ func (c *Client) Start() {
 }
 
 // Close ends the connection and the reconnect loop and waits for the loop to
-// finish, so the caller can tear down whatever Serve talks to.
+// finish, so the caller can tear down whatever Serve talks to. The calls Serve
+// is answering see their context end and are answered before the connection
+// goes, since a handler may set off closing the client and its caller still
+// has to hear the result. Serve itself never waits for Close.
 func (c *Client) Close() error {
-	c.closeOnce.Do(func() { close(c.stop) })
+	c.closeOnce.Do(func() {
+		c.mu.Lock()
+		c.closing = true
+		c.mu.Unlock()
+		c.stopServing()
+		c.answering.Wait()
+		close(c.stop)
+	})
 	c.mu.Lock()
 	conn, started := c.conn, c.started
 	c.mu.Unlock()
@@ -550,9 +570,19 @@ func (c *Client) handle(ctx context.Context, conn *websocket.Conn, frame []byte)
 		if env.intoStrict(&req) != nil || req.RequestID == "" {
 			return
 		}
+		c.mu.Lock()
+		if c.closing {
+			c.mu.Unlock()
+			return
+		}
+		c.answering.Add(1)
+		c.mu.Unlock()
 		// The read loop has to stay free for the next frame, possibly the
 		// answer to a call of our own.
-		go c.answer(ctx, conn, req)
+		go func() {
+			defer c.answering.Done()
+			c.answer(ctx, conn, req)
+		}()
 	}
 }
 
@@ -571,10 +601,12 @@ func (c *Client) answer(ctx context.Context, conn *websocket.Conn, req ProxyRequ
 		return
 	case c.serve != nil:
 		serveCtx, cancel := context.WithTimeout(ctx, proxyTimeout)
+		unhook := context.AfterFunc(c.serving, cancel)
 		if req.Sender != "" {
 			serveCtx = WithSource(serveCtx, "relay\x00"+req.Sender)
 		}
 		result.Status, result.Body = c.serve(serveCtx, call)
+		unhook()
 		cancel()
 		if result.Status == StatusDrop {
 			return

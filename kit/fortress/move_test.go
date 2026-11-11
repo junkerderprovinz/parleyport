@@ -25,13 +25,25 @@ type paired struct {
 
 	mu    sync.Mutex
 	moved []byte
+	// leave is the group the instance closes as soon as it keeps a secret,
+	// the way an app hurries into the fortress.
+	leave *group.Group
 }
 
 func (p *paired) Keep(secret []byte) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.moved = bytes.Clone(secret)
+	if p.leave != nil {
+		go func(g *group.Group) { _ = g.Close() }(p.leave)
+	}
 	return nil
+}
+
+func (p *paired) leaveOnKeep() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.leave = p.g
 }
 
 func (p *paired) given() []byte {
@@ -114,6 +126,20 @@ func TestTheMoveTakesThePairingIntoTheFortress(t *testing.T) {
 	status, body, err := n1.f.Pairing().Call(ctx(t), n2.id, http.MethodGet, "/api/whoami", nil)
 	if err != nil || status != http.StatusOK || string(body) != n1.id {
 		t.Errorf("the moved pairing: %d %s %v", status, body, err)
+	}
+}
+
+func TestMoveCountsAnInstanceThatLeavesTheOldGroupAsItTakesTheSecret(t *testing.T) {
+	url := relayServer(t)
+	a, b := openPaired(t, url, "alpha-1"), openPaired(t, url, "alpha-2")
+	pairUp(t, a, b)
+	b.leaveOnKeep()
+
+	if moved := Move(ctx(t), a.g, testSecret); !slices.Equal(moved, []string{b.id}) {
+		t.Fatalf("Move reached %v, want alpha-2, which took the secret", moved)
+	}
+	if !bytes.Equal(b.given(), testSecret) {
+		t.Fatalf("alpha-2 was given %x", b.given())
 	}
 }
 
