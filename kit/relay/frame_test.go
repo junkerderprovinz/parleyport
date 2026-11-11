@@ -22,6 +22,14 @@ type pacedConn struct {
 	got    bytes.Buffer
 	chunks int
 	closed bool
+	down   bool
+}
+
+func (p *pacedConn) CloseNow() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.down = true
+	return nil
 }
 
 func (p *pacedConn) Writer(ctx context.Context, _ websocket.MessageType) (io.WriteCloser, error) {
@@ -82,8 +90,11 @@ func TestAFrameStopsWhenTheLinkStalls(t *testing.T) {
 	go func() { done <- sendFrame(context.Background(), conn, frame, 50*time.Millisecond) }()
 	select {
 	case err := <-done:
-		if err == nil {
-			t.Error("a stalled link took the frame")
+		conn.mu.Lock()
+		down := conn.down
+		conn.mu.Unlock()
+		if err == nil || !down {
+			t.Errorf("a stalled link: %v, connection closed %v", err, down)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("a stalled link held the write")

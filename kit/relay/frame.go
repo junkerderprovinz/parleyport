@@ -12,15 +12,20 @@ import (
 // chunkBytes is how much of a frame goes out between two looks at the link.
 const chunkBytes = 64 << 10
 
-// messageWriter starts a message, as *websocket.Conn does.
+// messageWriter starts a message and drops the connection, as
+// *websocket.Conn does.
 type messageWriter interface {
 	Writer(ctx context.Context, typ websocket.MessageType) (io.WriteCloser, error)
+	CloseNow() error
 }
 
 // sendFrame writes frame to conn in chunks and gives up once one chunk takes
 // longer than stall. A deadline for the whole frame would cut a large answer
 // off on a slow link or a busy machine, and the connection with it, while the
-// link was still moving. Pings go out between the chunks.
+// link was still moving. Pings go out between the chunks. A message cut off
+// halfway can never be finished and keeps the connection's writer to itself,
+// so every later frame would wait for it; the connection goes instead, and
+// the client dials again.
 func sendFrame(ctx context.Context, conn messageWriter, frame []byte, stall time.Duration) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -34,13 +39,18 @@ func sendFrame(ctx context.Context, conn messageWriter, frame []byte, stall time
 		_, err := w.Write(frame[:n])
 		timer.Stop()
 		if err != nil {
+			_ = conn.CloseNow()
 			return err
 		}
 		frame = frame[n:]
 	}
 	timer := time.AfterFunc(stall, cancel)
 	defer timer.Stop()
-	return w.Close()
+	if err := w.Close(); err != nil {
+		_ = conn.CloseNow()
+		return err
+	}
+	return nil
 }
 
 // The states of a client's read loop, which a call waiting for its answer
