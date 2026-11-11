@@ -37,7 +37,8 @@ type Caller struct {
 
 // Refusal is an answer that says no, with the code the other member or its
 // app gave and the HTTP status it came with. An action's Run returns one to
-// say no in its own words.
+// say no in its own words, with a Status from 400 to 599 or none for 409
+// Conflict.
 type Refusal struct {
 	Status int
 	Code   string
@@ -151,12 +152,16 @@ func (f *Fortress) allowed(w http.ResponseWriter, r *http.Request, caller, actio
 	return Caller{ID: caller, App: app, Device: device}, true
 }
 
-// failed answers w for an action that returned err: a *Refusal with its code,
-// anything else as "internal", which is logged.
+// failed answers w for an action that returned err: a *Refusal with its code
+// and status, anything else as "internal", which is logged.
 func failed(w http.ResponseWriter, r *http.Request, action, app string, err error) {
 	var no *Refusal
 	if errors.As(err, &no) {
-		writeError(w, http.StatusConflict, no.Code)
+		status := no.Status
+		if status < 400 || status > 599 {
+			status = http.StatusConflict
+		}
+		writeError(w, status, no.Code)
 		return
 	}
 	slog.ErrorContext(r.Context(), "fortress: an action failed", "action", action, "app", app, "err", err)

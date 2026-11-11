@@ -1,7 +1,9 @@
 package fortress
 
 import (
+	"context"
 	"errors"
+	"net/http"
 	"slices"
 	"sync"
 	"testing"
@@ -134,5 +136,30 @@ func TestManyActionsAtOnce(t *testing.T) {
 	wg.Wait()
 	if got := len(b.drops()); got != 8 {
 		t.Errorf("bravo ran %d drops, want 8", got)
+	}
+}
+
+func TestAnActionsRefusalKeepsItsStatus(t *testing.T) {
+	url := relayServer(t)
+	lookup := Action{Name: "containers.find", Run: func(_ context.Context, _ Caller, body []byte) ([]byte, error) {
+		if string(body) == `"gone"` {
+			return nil, &Refusal{Status: http.StatusNotFound, Code: "unknown_container"}
+		}
+		return nil, &Refusal{Code: "busy"}
+	}}
+	a := open(t, "alpha", "alpha-1", setup{relay: url})
+	b := open(t, "bravo", "bravo-1", setup{relay: url, actions: []Action{lookup}})
+	waitFor(t, "both on the relay", func() bool { return len(a.f.Members()) == 1 && len(b.f.Members()) == 1 })
+	meet(t, a, b)
+
+	for body, want := range map[string]Refusal{
+		`"gone"`: {Status: http.StatusNotFound, Code: "unknown_container"},
+		`"x"`:    {Status: http.StatusConflict, Code: "busy"},
+	} {
+		_, err := a.f.Act(ctx(t), b.id, lookup.Name, []byte(body))
+		var got *Refusal
+		if !errors.As(err, &got) || *got != want {
+			t.Errorf("the action refusing %s arrives as %v, want %+v", body, err, want)
+		}
 	}
 }
