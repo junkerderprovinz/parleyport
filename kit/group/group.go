@@ -557,6 +557,21 @@ func (g *Group) Older() []string {
 	return out
 }
 
+// Retire notes, the first time it runs, that the members of the group are
+// moving to another phrase, and returns when that was. The store keeps it,
+// and the group the members move to starts without it.
+func (g *Group) Retire() time.Time {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.st.Retired.IsZero() {
+		g.st.Retired = time.Now().Round(0)
+		if g.saveLocked() != nil {
+			g.dirty = true
+		}
+	}
+	return g.st.Retired
+}
+
 // RelayConnected reports whether the relay socket is up, which an empty member
 // list cannot tell.
 func (g *Group) RelayConnected() bool {

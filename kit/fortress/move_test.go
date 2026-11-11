@@ -61,16 +61,22 @@ func openPaired(t *testing.T, url, name string) *paired {
 func openPairedOn(t *testing.T, url, name string, l *lan.Service) *paired {
 	t.Helper()
 	p := &paired{name: name, id: identity(t, name).ID(), store: &memStore{}}
+	p.open(t, url, l)
+	return p
+}
+
+// open opens p's group on the app's own phrase from what its store keeps.
+func (p *paired) open(t *testing.T, url string, l *lan.Service) {
+	t.Helper()
 	g, err := group.Open(group.Config{
-		Domain: keys.Domain("alpha"), Secret: oldSecret, Identity: identity(t, name),
-		Self: group.Self{Name: name}, Relay: group.RelayOwn, RelayURL: url, Store: p.store, LAN: l,
+		Domain: keys.Domain("alpha"), Secret: oldSecret, Identity: identity(t, p.name),
+		Self: group.Self{Name: p.name}, Relay: group.RelayOwn, RelayURL: url, Store: p.store, LAN: l,
 	}, Moved(Moving(appRoutes(), p), p.in.Load))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = g.Close() })
 	p.g = g
-	return p
 }
 
 func pairUp(t *testing.T, a, b *paired) {

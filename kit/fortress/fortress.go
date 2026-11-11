@@ -671,6 +671,7 @@ func (f *Fortress) tick(now time.Time) {
 	}
 	f.follow(now)
 	f.watch(now)
+	f.prune()
 	f.mu.Lock()
 	if f.dirty {
 		_ = f.saveLocked()

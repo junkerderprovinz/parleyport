@@ -180,3 +180,31 @@ func TestAnAnswerFromAnInstanceVouchedForCounts(t *testing.T) {
 		t.Errorf("alpha calls bravo = %d %s %v, want its answer to count", status, body, err)
 	}
 }
+
+func TestAGroupKeepsWhenItWasRetiredUntilItMovesOn(t *testing.T) {
+	a := open(t, "alpha", setup{})
+	first := a.g.Retire()
+	if first.IsZero() || time.Since(first) > time.Minute {
+		t.Fatalf("retired at %v", first)
+	}
+	if again := a.g.Retire(); !again.Equal(first) {
+		t.Errorf("retired again at %v, want %v", again, first)
+	}
+
+	if err := a.g.Close(); err != nil {
+		t.Fatal(err)
+	}
+	a.g = openGroup(t, a, setup{store: a.store})
+	if after := a.g.Retire(); !after.Equal(first) {
+		t.Errorf("after a restart retired at %v, want %v", after, first)
+	}
+
+	if err := a.g.Close(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	a.g = openGroup(t, a, setup{store: a.store, secret: movedSecret, previous: testSecret})
+	if moved := a.g.Retire(); !moved.After(first) {
+		t.Errorf("the group on the new phrase was retired at %v, as the one it moved from", moved)
+	}
+}

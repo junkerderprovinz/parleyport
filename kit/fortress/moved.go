@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
+	"time"
 
 	"github.com/junkerderprovinz/parleyport/kit/group"
 	"github.com/junkerderprovinz/parleyport/kit/keys"
@@ -76,7 +78,6 @@ func MovedKeys(ctx context.Context, c *relay.Client, id string) (keys.Set, error
 // in the fortress has not met since it moved there: instances that have not
 // followed with Move, and phones and viewers that have not with MovedKeys.
 // What the pairing met is kept in its store, so a restart forgets nobody.
-// Once none is left, the app closes old and forgets its phrase.
 func (f *Fortress) Left(old *group.Group) []group.Member {
 	met := map[string]bool{}
 	if f.pairing != nil {
@@ -93,4 +94,79 @@ func (f *Fortress) Left(old *group.Group) []group.Member {
 		}
 	}
 	return out
+}
+
+// moveWindow is how long the app's own pairing stays open for the members
+// that have not followed it into the fortress.
+const moveWindow = 30 * 24 * time.Hour
+
+// Settle reports whether the app closes old, its own pairing from before the
+// fortress, now and forgets its phrase: every member old let in has followed,
+// or 30 days have passed since Settle first looked at old, which the app does
+// as soon as it opens the fortress. The members that had not followed by then
+// are listed by Behind.
+func (f *Fortress) Settle(old *group.Group) bool {
+	left := f.Left(old)
+	if len(left) == 0 {
+		return true
+	}
+	if time.Since(old.Retire()) < moveWindow {
+		return false
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.book.Behind == nil {
+		f.book.Behind = map[string]straggler{}
+	}
+	for _, m := range left {
+		f.book.Behind[m.ID] = straggler{Kind: m.Kind, Name: m.Name, Deployment: m.Deployment}
+	}
+	f.dirty = true
+	_ = f.saveLocked()
+	return true
+}
+
+// Behind lists the members the app's own pairing let in that had not followed
+// it into the fortress when Settle closed it, sorted by name, until they come
+// along under their key or are taken out with Remove. Each carries its ID,
+// Kind, Name and Deployment, and nothing else.
+func (f *Fortress) Behind() []group.Member {
+	f.prune()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]group.Member, 0, len(f.book.Behind))
+	for id, s := range f.book.Behind {
+		out = append(out, group.Member{ID: id, Kind: s.Kind, Name: s.Name, Deployment: s.Deployment})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Name != out[j].Name {
+			return out[i].Name < out[j].Name
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out
+}
+
+// prune forgets the members left behind that the pairing has met since, or
+// lists no more. A pairing that moves to a changed phrase meets everybody
+// anew, so one that came along is forgotten rather than skipped.
+func (f *Fortress) prune() {
+	f.mu.Lock()
+	none := len(f.book.Behind) == 0
+	f.mu.Unlock()
+	if none || f.pairing == nil {
+		return
+	}
+	listed := map[string]group.Member{}
+	for _, m := range f.pairing.Members() {
+		listed[m.ID] = m
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for id := range f.book.Behind {
+		if m, ok := listed[id]; !ok || !m.Met.IsZero() {
+			delete(f.book.Behind, id)
+			f.dirty = true
+		}
+	}
 }

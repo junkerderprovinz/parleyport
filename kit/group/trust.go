@@ -69,6 +69,8 @@ type state struct {
 	Revoked map[string]time.Time `json:"revoked,omitempty"`
 	// Address is this instance's direct address as NoteAddress learned it.
 	Address string `json:"address,omitempty"`
+	// Retired is when Retire first ran under this group key.
+	Retired time.Time `json:"retired,omitzero"`
 }
 
 // record is a member whose key is pinned here.
@@ -139,7 +141,7 @@ func loadState(raw []byte, groupKey, previous string) (state, bool, error) {
 		return st, false, nil
 	case previous:
 		if previous != "" {
-			st.Group = groupKey
+			st.Group, st.Retired = groupKey, time.Time{}
 			// Nobody signed anything under the new phrase yet.
 			for id, rec := range st.Members {
 				rec.Met = time.Time{}

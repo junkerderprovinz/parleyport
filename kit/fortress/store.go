@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/junkerderprovinz/parleyport/kit/group"
+	"github.com/junkerderprovinz/parleyport/kit/member"
 )
 
 // about is what a member says it is.
@@ -41,6 +42,15 @@ type book struct {
 	Rules       []Rule           `json:"rules,omitempty"`
 	// Cursors are where the rules stand in each member's events.
 	Cursors map[string]string `json:"cursors,omitempty"`
+	// Behind are the members the app's own pairing let in that had not
+	// followed it when Settle closed it.
+	Behind map[string]straggler `json:"behind,omitempty"`
+}
+
+type straggler struct {
+	Kind       member.Kind `json:"kind"`
+	Name       string      `json:"name,omitempty"`
+	Deployment string      `json:"deployment,omitempty"`
 }
 
 // loadBook reads the book kept under groupKey, or under previous, the group
