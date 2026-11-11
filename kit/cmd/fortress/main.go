@@ -61,7 +61,9 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		_, _ = fmt.Fprintln(stderr, err)
 		return 2
 	default:
-		_, _ = fmt.Fprintln(stderr, "fortress:", err)
+		// The fortress package already starts its errors with the command's
+		// name.
+		_, _ = fmt.Fprintln(stderr, "fortress:", strings.TrimPrefix(err.Error(), "fortress: "))
 		return 1
 	}
 }

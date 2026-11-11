@@ -173,7 +173,7 @@ func TestAPluginJoinsReadsAndActs(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, _, stderr = cli(t, "", "act", "-dir", dir, "-wait", "10s", a.id, "files.drop", `"again"`)
-	if code != 1 || !strings.Contains(stderr, "switched off") {
+	if code != 1 || !strings.Contains(stderr, "switched off") || strings.Count(stderr, "fortress:") != 1 {
 		t.Errorf("act with the permission off: %d %s", code, stderr)
 	}
 }
