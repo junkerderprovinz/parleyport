@@ -760,3 +760,26 @@ func TestRevokeWithoutAdmitKeepsEveryConnection(t *testing.T) {
 		t.Error("Revoke closed a connection although every key is admitted")
 	}
 }
+
+func TestTheRelayKeepsACallOpenUntilItsLastPart(t *testing.T) {
+	s := New()
+	a := join(t, s, "key-1", "alpha")
+	b := join(t, s, "key-1", "bravo")
+	next(t, a, "no arrival announce")
+	next(t, b, "no sibling announce")
+
+	send(t, s, a, TypeProxyRequest, ProxyRequest{RequestID: "r1", Target: "bravo", Framing: framingParts})
+	var req ProxyRequest
+	if err := next(t, b, "the target never received the request").Into(&req); err != nil || req.Framing != framingParts {
+		t.Fatalf("the target received %+v: %v", req, err)
+	}
+	for i := range 3 {
+		send(t, s, b, TypeProxyResponse, ProxyResponse{RequestID: "r1", Sealed: []byte{byte(i)}, Part: i, Parts: 3})
+		var resp ProxyResponse
+		if err := next(t, a, "a part never reached the caller").Into(&resp); err != nil || resp.Part != i {
+			t.Fatalf("part %d arrived as %+v: %v", i, resp, err)
+		}
+	}
+	send(t, s, b, TypeProxyResponse, ProxyResponse{RequestID: "r1", Sealed: []byte("late")})
+	nothing(t, a, "a frame after the last part reached the caller")
+}

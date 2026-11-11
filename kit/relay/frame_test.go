@@ -92,7 +92,7 @@ func TestAFrameStopsWhenTheLinkStalls(t *testing.T) {
 
 func TestACallWaitsForAnAnswerThatIsStillArriving(t *testing.T) {
 	c := &Client{}
-	answer := make(chan ProxyResponse, 1)
+	w := newWaiting()
 	c.inbound.Store(reading)
 	go func() {
 		for range 20 {
@@ -101,10 +101,10 @@ func TestACallWaitsForAnAnswerThatIsStillArriving(t *testing.T) {
 		}
 		c.inbound.Store(handling)
 		time.Sleep(80 * time.Millisecond)
-		answer <- ProxyResponse{RequestID: "r1"}
+		w.answer <- ProxyResponse{RequestID: "r1"}
 		c.inbound.Store(idle)
 	}()
-	resp, err := c.await(context.Background(), answer, 50*time.Millisecond, 40*time.Millisecond)
+	resp, err := c.await(context.Background(), w, 50*time.Millisecond, 40*time.Millisecond)
 	if err != nil || resp.RequestID != "r1" {
 		t.Errorf("got %+v, %v", resp, err)
 	}
@@ -117,7 +117,7 @@ func TestACallGivesUpWhenNothingComes(t *testing.T) {
 			c.inbound.Store(state)
 			c.moved.Store(time.Now().UnixNano())
 			start := time.Now()
-			_, err := c.await(context.Background(), make(chan ProxyResponse), 50*time.Millisecond, 40*time.Millisecond)
+			_, err := c.await(context.Background(), newWaiting(), 50*time.Millisecond, 40*time.Millisecond)
 			if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > 2*time.Second {
 				t.Errorf("after %v: %v", time.Since(start), err)
 			}
@@ -130,7 +130,7 @@ func TestACallEndsWithItsContext(t *testing.T) {
 	c.inbound.Store(handling)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := c.await(ctx, make(chan ProxyResponse), time.Hour, time.Hour); !errors.Is(err, context.Canceled) {
+	if _, err := c.await(ctx, newWaiting(), time.Hour, time.Hour); !errors.Is(err, context.Canceled) {
 		t.Errorf("got %v", err)
 	}
 }

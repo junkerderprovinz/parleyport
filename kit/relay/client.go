@@ -118,7 +118,7 @@ type Client struct {
 	self     Announce
 	conn     *websocket.Conn
 	siblings map[string]Announce
-	pending  map[string]chan ProxyResponse
+	pending  map[string]*waiting
 	started  bool
 
 	// inbound is the read loop's state, moved when bytes last came in.
@@ -175,7 +175,7 @@ func NewClient(opts ClientOptions) (*Client, error) {
 		minBackoff: minBackoff,
 		maxBackoff: maxBackoff,
 		siblings:   map[string]Announce{},
-		pending:    map[string]chan ProxyResponse{},
+		pending:    map[string]*waiting{},
 		stop:       make(chan struct{}),
 		done:       make(chan struct{}),
 	}, nil
@@ -264,9 +264,9 @@ func (c *Client) Proxy(ctx context.Context, target, method, path string, body []
 
 	c.mu.Lock()
 	conn := c.conn
-	answer := make(chan ProxyResponse, 1)
+	w := newWaiting()
 	if conn != nil {
-		c.pending[id] = answer
+		c.pending[id] = w
 	}
 	c.mu.Unlock()
 	if conn == nil {
@@ -282,12 +282,12 @@ func (c *Client) Proxy(ctx context.Context, target, method, path string, body []
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	frame := frameOf(TypeProxyRequest, ProxyRequest{RequestID: id, Target: target, Sealed: sealed})
+	frame := frameOf(TypeProxyRequest, ProxyRequest{RequestID: id, Target: target, Sealed: sealed, Framing: framingParts})
 	if err := sendFrame(ctx, conn, frame, writeTimeout); err != nil {
 		return nil, http.StatusBadGateway, fmt.Errorf("relay: %w", err)
 	}
 
-	resp, err := c.await(ctx, answer, proxyTimeout, writeTimeout)
+	resp, err := c.await(ctx, w, proxyTimeout, writeTimeout)
 	if err != nil {
 		return nil, http.StatusGatewayTimeout, fmt.Errorf("relay: %s did not answer: %w", target, err)
 	}
@@ -549,19 +549,37 @@ func (c *Client) answer(ctx context.Context, conn *websocket.Conn, req ProxyRequ
 	if err != nil {
 		return
 	}
-	_ = sendFrame(ctx, conn, frameOf(TypeProxyResponse, ProxyResponse{
-		RequestID: req.RequestID, Sealed: sealed,
-	}), writeTimeout)
+	for _, part := range split(ProxyResponse{RequestID: req.RequestID, Sealed: sealed}, req.Framing) {
+		if sendFrame(ctx, conn, frameOf(TypeProxyResponse, part), writeTimeout) != nil {
+			return
+		}
+	}
 }
 
-// deliver hands a response to the Proxy call waiting on it, or drops it.
+// deliver hands a response, or a part of one, to the Proxy call waiting on
+// it, or drops it. A broken answer in parts fails the call at once.
 func (c *Client) deliver(resp ProxyResponse) {
 	c.mu.Lock()
-	answer := c.pending[resp.RequestID]
-	delete(c.pending, resp.RequestID)
+	w := c.pending[resp.RequestID]
+	if w == nil {
+		c.mu.Unlock()
+		return
+	}
+	whole, done, err := w.take(resp)
+	if done || err != nil {
+		delete(c.pending, resp.RequestID)
+	}
 	c.mu.Unlock()
-	if answer != nil {
-		answer <- resp
+	switch {
+	case err != nil:
+		w.answer <- ProxyResponse{RequestID: resp.RequestID, Error: err.Error()}
+	case done:
+		w.answer <- whole
+	default:
+		select {
+		case w.moved <- struct{}{}:
+		default:
+		}
 	}
 }
 
@@ -579,14 +597,14 @@ func (c *Client) disconnected() {
 	c.mu.Lock()
 	c.conn = nil
 	c.siblings = map[string]Announce{}
-	waiting := make([]chan ProxyResponse, 0, len(c.pending))
-	for id, answer := range c.pending {
-		waiting = append(waiting, answer)
+	calls := make([]*waiting, 0, len(c.pending))
+	for id, w := range c.pending {
+		calls = append(calls, w)
 		delete(c.pending, id)
 	}
 	c.mu.Unlock()
-	for _, answer := range waiting {
-		answer <- ProxyResponse{
+	for _, w := range calls {
+		w.answer <- ProxyResponse{
 			Error: "the relay connection dropped before the answer arrived",
 		}
 	}

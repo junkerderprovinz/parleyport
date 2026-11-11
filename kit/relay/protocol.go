@@ -265,6 +265,11 @@ type ProxyRequest struct {
 	// over whatever the sender put there. It is not sealed, so the receiver
 	// only spreads its limits by it (see WithSource).
 	Sender string `json:"sender,omitempty"`
+	// Framing is how the caller takes the answer: 0 in one frame,
+	// framingParts in parts. A relay passes it on only if it keeps a call
+	// open for every part, and one that does not know the field drops it, so
+	// every older side gets an answer it can read.
+	Framing int `json:"framing,omitempty"`
 }
 
 // ProxyCall is what a ProxyRequest asks once opened. It only ever travels
@@ -297,6 +302,23 @@ type ProxyResponse struct {
 	// when nobody is connected under its id. The relay holds no frame key, so
 	// a hostile one can fake "nobody is there" but never an answer.
 	Error string `json:"error,omitempty"`
+	// Part counts from 0 to Parts-1 when the answer comes in parts. Sealed
+	// holds the part, and the caller opens the parts joined in order.
+	Part  int `json:"part,omitempty"`
+	Parts int `json:"parts,omitempty"`
+}
+
+// framingParts is the Framing of a caller that takes the answer in parts.
+const framingParts = 1
+
+// partBytes is how much of a sealed answer one part carries. Every part is a
+// frame of its own, so the caller hears from the answer while it travels and
+// nobody reads or decodes a large frame in one piece.
+const partBytes = 1 << 20
+
+// last reports whether r ends its answer.
+func (r ProxyResponse) last() bool {
+	return r.Parts == 0 || r.Part >= r.Parts-1
 }
 
 // ProxyResult is what a ProxyResponse answers once opened.

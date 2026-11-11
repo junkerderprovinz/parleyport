@@ -65,24 +65,28 @@ func (m moving) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// await waits for answer. It gives up after wait without one, but not while a
-// frame is being handled or still coming in and moved within stall: that
-// frame may be the answer, and a large one takes a while to cross a slow link
-// or to be read on a busy machine.
-func (c *Client) await(ctx context.Context, answer <-chan ProxyResponse, wait, stall time.Duration) (ProxyResponse, error) {
+// await waits for w's answer. It gives up after wait without one, and every
+// part of the answer gives it wait again. It does not give up while a frame
+// is being handled or still coming in and moved within stall: that frame may
+// be the answer, and a large one takes a while to cross a slow link or to be
+// read on a busy machine.
+func (c *Client) await(ctx context.Context, w *waiting, wait, stall time.Duration) (ProxyResponse, error) {
 	t := time.NewTimer(wait)
 	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return ProxyResponse{}, ctx.Err()
-		case resp := <-answer:
+		case resp := <-w.answer:
 			return resp, nil
+		case <-w.moved:
+			t.Reset(wait)
+			continue
 		case <-t.C:
 		}
 		if !c.receiving(stall) {
 			select {
-			case resp := <-answer:
+			case resp := <-w.answer:
 				return resp, nil
 			default:
 				return ProxyResponse{}, context.DeadlineExceeded

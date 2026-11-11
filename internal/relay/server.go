@@ -382,7 +382,7 @@ func (s *Server) Route(c Conn, frame []byte) {
 		if env.Into(&resp) != nil || resp.RequestID == "" {
 			return
 		}
-		s.routeResponse(c, resp.RequestID, frame)
+		s.routeResponse(c, resp, frame)
 	}
 }
 
@@ -443,8 +443,9 @@ func (s *Server) routeRequest(c Conn, req ProxyRequest) {
 // record of the request rather than trusting the responder. The frame is
 // dropped unless it arrived on the connection the request was routed to, so a
 // connection that learns a live request ID, even on another key, cannot forge
-// the answer.
-func (s *Server) routeResponse(c Conn, requestID string, frame []byte) {
+// the answer. An answer in parts keeps the call open until its last part, and
+// every part gives it pendingTTL again.
+func (s *Server) routeResponse(c Conn, resp ProxyResponse, frame []byte) {
 	s.mu.Lock()
 	cl := s.clients[c]
 	if cl == nil {
@@ -452,12 +453,17 @@ func (s *Server) routeResponse(c Conn, requestID string, frame []byte) {
 		return
 	}
 	keyPending := s.pending[cl.key]
-	p, ok := keyPending[requestID]
+	p, ok := keyPending[resp.RequestID]
 	if !ok || p.target != c {
 		s.mu.Unlock()
 		return
 	}
-	delete(keyPending, requestID)
+	if resp.last() {
+		delete(keyPending, resp.RequestID)
+	} else {
+		p.expires = time.Now().Add(pendingTTL)
+		keyPending[resp.RequestID] = p
+	}
 	from := s.clients[p.from]
 	s.mu.Unlock()
 	if from == nil {
@@ -618,7 +624,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// every BombVault does, connects without ever looking at it.
 	challenge := make([]byte, challengeSize)
 	if _, err := rand.Read(challenge); err != nil {
-		c.Close(websocket.StatusInternalError, "the relay has no randomness for a challenge")
+		_ = c.Close(websocket.StatusInternalError, "the relay has no randomness for a challenge")
 		return
 	}
 	writeCtx, cancel := context.WithTimeout(r.Context(), writeTimeout)
@@ -632,19 +638,19 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	hello, err := readHello(r.Context(), c)
 	if err != nil {
 		s.limiter.fail(addr)
-		c.Close(websocket.StatusPolicyViolation, "the first frame must be a hello with a relay key of at least 32 characters and an instance id")
+		_ = c.Close(websocket.StatusPolicyViolation, "the first frame must be a hello with a relay key of at least 32 characters and an instance id")
 		return
 	}
 	// Checked before Join, so an unserved key never enters the registry. The
 	// close reason tells an instance whose key stopped matching what happened.
 	if !s.admits(hello.Key) {
 		s.limiter.fail(addr)
-		c.Close(websocket.StatusPolicyViolation, "this relay does not serve that relay key")
+		_ = c.Close(websocket.StatusPolicyViolation, "this relay does not serve that relay key")
 		return
 	}
 	s.limiter.succeed(addr)
 	if err := s.Join(hello.Key, c, hello.Announce, hello.proves(challenge, s.names(r))); err != nil {
-		c.Close(websocket.StatusPolicyViolation, err.Error())
+		_ = c.Close(websocket.StatusPolicyViolation, err.Error())
 		return
 	}
 	c.SetReadLimit(readLimit)

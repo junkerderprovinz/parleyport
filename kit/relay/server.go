@@ -373,7 +373,7 @@ func (s *Server) Route(c Conn, frame []byte) {
 		if env.Into(&resp) != nil || resp.RequestID == "" {
 			return
 		}
-		s.routeResponse(c, resp.RequestID, frame)
+		s.routeResponse(c, resp, frame)
 	}
 }
 
@@ -434,8 +434,9 @@ func (s *Server) routeRequest(c Conn, req ProxyRequest) {
 // record of the request rather than trusting the responder. The frame is
 // dropped unless it arrived on the connection the request was routed to, so a
 // connection that learns a live request ID, even on another key, cannot forge
-// the answer.
-func (s *Server) routeResponse(c Conn, requestID string, frame []byte) {
+// the answer. An answer in parts keeps the call open until its last part, and
+// every part gives it pendingTTL again.
+func (s *Server) routeResponse(c Conn, resp ProxyResponse, frame []byte) {
 	s.mu.Lock()
 	cl := s.clients[c]
 	if cl == nil {
@@ -443,12 +444,17 @@ func (s *Server) routeResponse(c Conn, requestID string, frame []byte) {
 		return
 	}
 	keyPending := s.pending[cl.key]
-	p, ok := keyPending[requestID]
+	p, ok := keyPending[resp.RequestID]
 	if !ok || p.target != c {
 		s.mu.Unlock()
 		return
 	}
-	delete(keyPending, requestID)
+	if resp.last() {
+		delete(keyPending, resp.RequestID)
+	} else {
+		p.expires = time.Now().Add(pendingTTL)
+		keyPending[resp.RequestID] = p
+	}
 	from := s.clients[p.from]
 	s.mu.Unlock()
 	if from == nil {
