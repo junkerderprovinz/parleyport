@@ -112,11 +112,16 @@ func TestARelayedAnswerMayBeAsLargeAsTheAppAllows(t *testing.T) {
 		a, b := open(t, "alpha", s), open(t, "bravo", s)
 		waitFor(t, "alpha to see bravo", func() bool { _, ok := memberOf(a.g, b.id); return ok })
 		meet(t, a, b)
-		status, body, err := call(t, a, b, http.MethodGet, "/api/size/"+strconv.Itoa(fits), nil)
+		// No deadline of its own: how long a large answer takes depends on the
+		// machine, and the relay client stops waiting once nothing comes in.
+		size := func(n int) (int, []byte, error) {
+			return a.g.Call(context.Background(), b.id, http.MethodGet, "/api/size/"+strconv.Itoa(n), nil)
+		}
+		status, body, err := size(fits)
 		if err != nil || status != http.StatusOK || len(body) != fits {
 			t.Errorf("a relayed answer of %d bytes = %d, %d bytes, %v", fits, status, len(body), err)
 		}
-		status, body, err = call(t, a, b, http.MethodGet, "/api/size/"+strconv.Itoa(fits+1), nil)
+		status, body, err = size(fits + 1)
 		if err != nil || status != http.StatusInternalServerError || !bytes.Contains(body, []byte("answerTooLarge")) {
 			t.Errorf("a relayed answer of %d bytes = %d %.80q %v, want answerTooLarge", fits+1, status, body, err)
 		}

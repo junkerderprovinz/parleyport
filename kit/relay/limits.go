@@ -2,7 +2,7 @@ package relay
 
 import "time"
 
-// writeTimeout bounds one frame write.
+// writeTimeout bounds how long one chunk of a frame may take to go out.
 const writeTimeout = 5 * time.Second
 
 // helloTimeout bounds how long a connection may stay open without saying who

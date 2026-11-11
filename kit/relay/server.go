@@ -12,6 +12,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"net/netip"
@@ -51,7 +52,7 @@ const maxTotalClients = 2048
 // the registry can be tested without real sockets; the dynamic type has to be
 // comparable, since connections are map keys.
 type Conn interface {
-	Write(ctx context.Context, typ websocket.MessageType, p []byte) error
+	Writer(ctx context.Context, typ websocket.MessageType) (io.WriteCloser, error)
 	CloseNow() error
 }
 
@@ -562,10 +563,7 @@ func (s *Server) writeLoop(cl *client) {
 		case <-cl.quit:
 			return
 		case frame := <-cl.send:
-			ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
-			err := cl.conn.Write(ctx, websocket.MessageText, frame)
-			cancel()
-			if err != nil {
+			if err := sendFrame(context.Background(), cl.conn, frame, writeTimeout); err != nil {
 				s.Leave(cl.conn)
 				return
 			}

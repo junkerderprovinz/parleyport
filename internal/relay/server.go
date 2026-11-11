@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"io"
 	"net/http"
 	"net/netip"
 	"sync"
@@ -31,8 +32,9 @@ import (
 // while one connection briefly stalls.
 const queueDepth = 64
 
-// writeTimeout bounds one frame write. It only ever delays its own
-// connection, because each connection has its own writer.
+// writeTimeout bounds how long one chunk of a frame may take to go out. It
+// only ever delays its own connection, because each connection has its own
+// writer.
 const writeTimeout = 5 * time.Second
 
 // helloTimeout bounds how long a connection may stay open without having said
@@ -83,7 +85,7 @@ const maxTotalClients = 2048
 // the registry can be tested without real sockets; the dynamic type has to be
 // comparable, since connections are map keys.
 type Conn interface {
-	Write(ctx context.Context, typ websocket.MessageType, p []byte) error
+	Writer(ctx context.Context, typ websocket.MessageType) (io.WriteCloser, error)
 	CloseNow() error
 }
 
@@ -570,10 +572,7 @@ func (s *Server) writeLoop(cl *client) {
 		case <-cl.quit:
 			return
 		case frame := <-cl.send:
-			ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
-			err := cl.conn.Write(ctx, websocket.MessageText, frame)
-			cancel()
-			if err != nil {
+			if err := sendFrame(context.Background(), cl.conn, frame, writeTimeout); err != nil {
 				s.Leave(cl.conn)
 				return
 			}

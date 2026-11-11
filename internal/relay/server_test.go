@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -23,15 +24,31 @@ func newFakeConn() *fakeConn {
 	return &fakeConn{writes: make(chan []byte, 4*queueDepth)}
 }
 
-func (f *fakeConn) Write(ctx context.Context, _ websocket.MessageType, p []byte) error {
-	if f.block != nil {
+func (f *fakeConn) Writer(ctx context.Context, _ websocket.MessageType) (io.WriteCloser, error) {
+	return &fakeWriter{conn: f, ctx: ctx}, nil
+}
+
+// fakeWriter hands its message to the connection's writes when it closes.
+type fakeWriter struct {
+	conn *fakeConn
+	ctx  context.Context
+	msg  []byte
+}
+
+func (w *fakeWriter) Write(p []byte) (int, error) {
+	if w.conn.block != nil {
 		select {
-		case <-f.block:
-		case <-ctx.Done():
-			return ctx.Err()
+		case <-w.conn.block:
+		case <-w.ctx.Done():
+			return 0, w.ctx.Err()
 		}
 	}
-	f.writes <- append([]byte(nil), p...)
+	w.msg = append(w.msg, p...)
+	return len(p), nil
+}
+
+func (w *fakeWriter) Close() error {
+	w.conn.writes <- w.msg
 	return nil
 }
 

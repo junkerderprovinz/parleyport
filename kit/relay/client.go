@@ -7,11 +7,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -20,7 +22,8 @@ import (
 	"github.com/junkerderprovinz/parleyport/kit/member"
 )
 
-// proxyTimeout bounds one call to a sibling over the relay.
+// proxyTimeout is how long a call to a sibling over the relay waits with
+// nothing coming in, and how long the sibling may take to serve it.
 const proxyTimeout = 15 * time.Second
 
 // dialTimeout bounds one connection attempt, for a relay that accepts TCP and
@@ -117,6 +120,10 @@ type Client struct {
 	siblings map[string]Announce
 	pending  map[string]chan ProxyResponse
 	started  bool
+
+	// inbound is the read loop's state, moved when bytes last came in.
+	inbound atomic.Int32
+	moved   atomic.Int64
 
 	startOnce sync.Once
 	closeOnce sync.Once
@@ -271,38 +278,35 @@ func (c *Client) Proxy(ctx context.Context, target, method, path string, body []
 		c.mu.Unlock()
 	}()
 
-	ctx, cancel := context.WithTimeout(ctx, proxyTimeout)
-	defer cancel()
 	sealed, err := SealSignedCall(c.frameKey, c.signing, c.identity, id, target, ProxyCall{Method: method, Path: path, Body: body})
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
 	frame := frameOf(TypeProxyRequest, ProxyRequest{RequestID: id, Target: target, Sealed: sealed})
-	if err := writeFrameTo(ctx, conn, frame); err != nil {
+	if err := sendFrame(ctx, conn, frame, writeTimeout); err != nil {
 		return nil, http.StatusBadGateway, fmt.Errorf("relay: %w", err)
 	}
 
-	select {
-	case <-ctx.Done():
-		return nil, http.StatusGatewayTimeout, fmt.Errorf("relay: %s did not answer: %w", target, ctx.Err())
-	case resp := <-answer:
-		// Error is the one field a hostile relay can write, so an unsealed
-		// response is never taken as a result.
-		if resp.Error != "" {
-			return nil, http.StatusBadGateway, errors.New("relay: " + resp.Error)
-		}
-		result, err := OpenResult(c.frameKey, id, resp.Sealed)
-		if err != nil {
-			return nil, http.StatusBadGateway, fmt.Errorf("relay: %s answered unreadably: %w", target, err)
-		}
-		if !VerifyResult(c.signing, id, target, sealed, result) {
-			return nil, http.StatusBadGateway, fmt.Errorf("relay: %s's answer is not signed by its key", target)
-		}
-		if c.trusts != nil && !c.trusts(target, result.Key) {
-			return nil, http.StatusBadGateway, &UntrustedAnswer{Target: target, Status: result.Status, Body: result.Body}
-		}
-		return result.Body, result.Status, nil
+	resp, err := c.await(ctx, answer, proxyTimeout, writeTimeout)
+	if err != nil {
+		return nil, http.StatusGatewayTimeout, fmt.Errorf("relay: %s did not answer: %w", target, err)
 	}
+	// Error is the one field a hostile relay can write, so an unsealed
+	// response is never taken as a result.
+	if resp.Error != "" {
+		return nil, http.StatusBadGateway, errors.New("relay: " + resp.Error)
+	}
+	result, err := OpenResult(c.frameKey, id, resp.Sealed)
+	if err != nil {
+		return nil, http.StatusBadGateway, fmt.Errorf("relay: %s answered unreadably: %w", target, err)
+	}
+	if !VerifyResult(c.signing, id, target, sealed, result) {
+		return nil, http.StatusBadGateway, fmt.Errorf("relay: %s's answer is not signed by its key", target)
+	}
+	if c.trusts != nil && !c.trusts(target, result.Key) {
+		return nil, http.StatusBadGateway, &UntrustedAnswer{Target: target, Status: result.Status, Body: result.Body}
+	}
+	return result.Body, result.Status, nil
 }
 
 // UntrustedAnswer is the error for an answer target signed with the key its id
@@ -394,14 +398,11 @@ func (c *Client) session() {
 	// The hello goes out before the connection is published, so nothing is
 	// called over a socket that has not introduced itself. A refused key
 	// shows only as the relay closing the socket right after.
-	helloCtx, helloCancel := context.WithTimeout(ctx, writeTimeout)
 	hello := Hello{Key: c.key, Announce: self}
 	if c.identity != nil {
 		hello.Proof = c.identity.ProveHello(c.key, c.relayHost, challenge)
 	}
-	err = writeFrameTo(helloCtx, conn, frameOf(TypeHello, hello))
-	helloCancel()
-	if err != nil {
+	if err := sendFrame(ctx, conn, frameOf(TypeHello, hello), writeTimeout); err != nil {
 		return
 	}
 
@@ -410,11 +411,20 @@ func (c *Client) session() {
 	go c.keepalive(ctx, conn)
 
 	for {
-		_, frame, err := conn.Read(ctx)
+		_, r, err := conn.Reader(ctx)
 		if err != nil {
 			return
 		}
+		c.moved.Store(time.Now().UnixNano())
+		c.inbound.Store(reading)
+		frame, err := io.ReadAll(moving{r: r, moved: &c.moved})
+		if err != nil {
+			c.inbound.Store(idle)
+			return
+		}
+		c.inbound.Store(handling)
 		c.handle(ctx, conn, frame)
+		c.inbound.Store(idle)
 	}
 }
 
@@ -539,11 +549,9 @@ func (c *Client) answer(ctx context.Context, conn *websocket.Conn, req ProxyRequ
 	if err != nil {
 		return
 	}
-	writeCtx, cancel := context.WithTimeout(ctx, writeTimeout)
-	defer cancel()
-	_ = writeFrameTo(writeCtx, conn, frameOf(TypeProxyResponse, ProxyResponse{
+	_ = sendFrame(ctx, conn, frameOf(TypeProxyResponse, ProxyResponse{
 		RequestID: req.RequestID, Sealed: sealed,
-	}))
+	}), writeTimeout)
 }
 
 // deliver hands a response to the Proxy call waiting on it, or drops it.
@@ -591,14 +599,6 @@ func (c *Client) changed() {
 	if c.onChange != nil {
 		c.onChange()
 	}
-}
-
-// writeFrameTo writes one frame under the caller's deadline, capped by
-// writeTimeout.
-func writeFrameTo(ctx context.Context, conn *websocket.Conn, frame []byte) error {
-	ctx, cancel := context.WithTimeout(ctx, writeTimeout)
-	defer cancel()
-	return conn.Write(ctx, websocket.MessageText, frame)
 }
 
 // requestID is the token an answer is matched by. It is random rather than
