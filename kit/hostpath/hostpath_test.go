@@ -141,3 +141,17 @@ func TestBrokenMountinfoIsAnError(t *testing.T) {
 		}
 	}
 }
+
+func TestSharedListsTheMountsThatHoldHostFolders(t *testing.T) {
+	var points []string
+	for _, m := range table(t, unraid).Shared() {
+		points = append(points, m.Point)
+	}
+	want := []string{"/config", "/downloads", "/downloads/incoming", "/backups", "/films", "/etc/hostname"}
+	if strings.Join(points, " ") != strings.Join(want, " ") {
+		t.Errorf("Shared lists %v, want %v", points, want)
+	}
+	if got := table(t, native).Shared(); len(got) != 0 {
+		t.Errorf("on the host itself Shared lists %v", got)
+	}
+}

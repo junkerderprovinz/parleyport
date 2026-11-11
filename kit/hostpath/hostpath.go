@@ -149,6 +149,22 @@ func (t Table) onHost() bool {
 	return false
 }
 
+// Shared lists the mounts that bring folders of the host into the container,
+// in the table's order. On the host itself there are none: every folder is
+// the host's.
+func (t Table) Shared() []Mount {
+	if t.onHost() {
+		return nil
+	}
+	var out []Mount
+	for _, m := range t.Mounts {
+		if !virtual[m.FSType] {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
 // hostOf is where m's mount point is on the host.
 func hostOf(m Mount) string {
 	if m.FSType == "fuse.shfs" {
