@@ -417,6 +417,19 @@ func (g *Group) newDirectRequest(ctx context.Context, base, target string, call 
 	return req, sealed, id, nil
 }
 
+// directRefusal is the error for a direct call that base answered with status
+// instead of 200. A group refuses whatever is not tagged with its key with 403,
+// and a closed one, like an address without a group, with 404.
+func directRefusal(base string, status int) error {
+	switch status {
+	case http.StatusServiceUnavailable:
+		return fmt.Errorf("%w directly at %s: it is busy", ErrUnreachable, base)
+	case http.StatusForbidden, http.StatusNotFound:
+		return fmt.Errorf("%w: %s refused the direct call with HTTP %d", ErrStranger, base, status)
+	}
+	return &StatusError{Address: base, Status: status}
+}
+
 // exchange makes one direct call and opens the answer, without asking yet
 // whose key signed it.
 func (g *Group) exchange(ctx context.Context, base, target string, call relay.ProxyCall) (relay.ProxyResult, []byte, string, error) {
@@ -435,10 +448,8 @@ func (g *Group) exchange(ctx context.Context, base, target string, call relay.Pr
 	switch {
 	case err != nil:
 		return relay.ProxyResult{}, nil, "", fmt.Errorf("%w directly at %s: %w", ErrUnreachable, base, err)
-	case resp.StatusCode == http.StatusServiceUnavailable:
-		return relay.ProxyResult{}, nil, "", fmt.Errorf("%w directly at %s: it is busy", ErrUnreachable, base)
 	case resp.StatusCode != http.StatusOK:
-		return relay.ProxyResult{}, nil, "", fmt.Errorf("%w: %s refused the direct call with HTTP %d", ErrStranger, base, resp.StatusCode)
+		return relay.ProxyResult{}, nil, "", directRefusal(base, resp.StatusCode)
 	}
 	res, err := g.openResponse(raw, id, base)
 	if err != nil {

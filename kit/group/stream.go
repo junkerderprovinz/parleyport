@@ -148,11 +148,8 @@ func (g *Group) streamFrom(ctx context.Context, base, target string, call relay.
 		cancel()
 		return 0, nil, err
 	}
-	switch {
-	case resp.StatusCode == http.StatusServiceUnavailable:
-		return fail(fmt.Errorf("%w directly at %s: it is busy", ErrUnreachable, base))
-	case resp.StatusCode != http.StatusOK:
-		return fail(fmt.Errorf("%w: %s refused the direct call with HTTP %d", ErrStranger, base, resp.StatusCode))
+	if resp.StatusCode != http.StatusOK {
+		return fail(directRefusal(base, resp.StatusCode))
 	}
 	br := bufio.NewReaderSize(resp.Body, pieceBytes+1024)
 	streamed := resp.Header.Get("Content-Type") == streamType

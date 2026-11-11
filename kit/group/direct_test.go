@@ -5,10 +5,12 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -341,5 +343,27 @@ func TestTheLearnedAddressIsAnnouncedAndKept(t *testing.T) {
 	a.g = openGroup(t, a, setup{store: a.store})
 	if got := a.g.directURL(); got != "https://192.168.1.10:3443" {
 		t.Errorf("direct address after a restart = %s", got)
+	}
+}
+
+func TestAnUnexpectedDirectStatusIsNoStranger(t *testing.T) {
+	a := open(t, "alpha", setup{})
+	b := identity(t, "bravo").ID()
+	for status, stranger := range map[int]bool{
+		http.StatusForbidden:            true,
+		http.StatusNotFound:             true,
+		http.StatusUnsupportedMediaType: false,
+		http.StatusBadGateway:           false,
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(status) }))
+		_, err := a.g.callDirect(context.Background(), srv.URL, b, relay.ProxyCall{Method: http.MethodGet, Path: "/api/whoami"})
+		srv.Close()
+		var got *StatusError
+		switch {
+		case stranger && !errors.Is(err, ErrStranger):
+			t.Errorf("HTTP %d: %v, want ErrStranger", status, err)
+		case !stranger && (errors.Is(err, ErrStranger) || !errors.As(err, &got) || got.Status != status || !strings.Contains(err.Error(), strconv.Itoa(status))):
+			t.Errorf("HTTP %d: %v, want a StatusError that names it", status, err)
+		}
 	}
 }

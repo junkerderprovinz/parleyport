@@ -210,6 +210,18 @@ var (
 	ErrStranger = errors.New("group: what answers there is no member of this group")
 )
 
+// StatusError is a direct call answered with an HTTP status that no group
+// sends, such as a guard of the app in front of DirectPath that turned the
+// call away before it reached the group.
+type StatusError struct {
+	Address string
+	Status  int
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("group: %s answered the direct call with HTTP %d", e.Address, e.Status)
+}
+
 // Group is this instance's side of its group.
 type Group struct {
 	serve     http.Handler

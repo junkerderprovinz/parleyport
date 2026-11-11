@@ -151,11 +151,8 @@ func (g *Group) uploadTo(ctx context.Context, base, target, path string, body io
 		return 0, nil, fmt.Errorf("%w directly at %s: %w", ErrUnreachable, base, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	switch {
-	case resp.StatusCode == http.StatusServiceUnavailable:
-		return 0, nil, fmt.Errorf("%w directly at %s: it is busy", ErrUnreachable, base)
-	case resp.StatusCode != http.StatusOK:
-		return 0, nil, fmt.Errorf("%w: %s refused the direct call with HTTP %d", ErrStranger, base, resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		return 0, nil, directRefusal(base, resp.StatusCode)
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, int64(2*g.maxAnswer+64<<10)))
 	if err != nil {
