@@ -5,10 +5,11 @@
 // The translation reads the container's own mount table. A folder's host path
 // is the root field of the mount that holds it, followed by the rest of the
 // folder below the mount point. Unraid's user shares are one FUSE file system
-// mounted on the host at /mnt/user, so their roots are taken from there. Disks
-// and pools mounted elsewhere on the host name only the folder on the disk.
-// Outside a container, and on systems without a mount table, a path is its
-// own host path.
+// mounted on the host at /mnt/user, so their roots are taken from there. Where
+// any other file system sits on the host the table does not say, so its
+// folders go under the device's link /dev/block/<major>:<minor>, and two disks
+// holding a folder of the same name never look alike. Outside a container,
+// and on systems without a mount table, a path is its own host path.
 package hostpath
 
 import (
@@ -20,6 +21,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -35,6 +37,8 @@ type Mount struct {
 	Root   string
 	Point  string
 	FSType string
+	// Device is the file system's major:minor on the host.
+	Device string
 }
 
 // Table is a mount table. The zero Table translates every path to itself.
@@ -95,9 +99,12 @@ func Parse(r io.Reader) (Table, error) {
 		if len(fields) < 6 || sep < 0 || sep+1 >= len(fields) {
 			return Table{}, fmt.Errorf("hostpath: a mount table line without its fields: %q", line)
 		}
-		m := Mount{Root: unescape(fields[3]), Point: unescape(fields[4]), FSType: fields[sep+1]}
+		m := Mount{Root: unescape(fields[3]), Point: unescape(fields[4]), FSType: fields[sep+1], Device: fields[2]}
 		if !path.IsAbs(m.Root) || !path.IsAbs(m.Point) {
 			return Table{}, fmt.Errorf("hostpath: a mount table line with a relative path: %q", line)
+		}
+		if !device(m.Device) {
+			return Table{}, fmt.Errorf("hostpath: a mount table line without a device: %q", line)
 		}
 		t.Mounts = append(t.Mounts, m)
 	}
@@ -170,7 +177,15 @@ func hostOf(m Mount) string {
 	if m.FSType == "fuse.shfs" {
 		return path.Join("/mnt/user", m.Root)
 	}
-	return m.Root
+	return path.Join("/dev/block", m.Device, m.Root)
+}
+
+// device reports whether s is a major:minor pair.
+func device(s string) bool {
+	major, minor, ok := strings.Cut(s, ":")
+	_, errMajor := strconv.ParseUint(major, 10, 32)
+	_, errMinor := strconv.ParseUint(minor, 10, 32)
+	return ok && errMajor == nil && errMinor == nil
 }
 
 // below returns the rest of p under dir, and whether p is dir or below it.

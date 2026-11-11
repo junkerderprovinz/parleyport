@@ -46,7 +46,7 @@ func TestAFolderInTheContainerHasItsHostPath(t *testing.T) {
 		"/downloads/tv/Show S01":    "/mnt/user/downloads/tv/Show S01",
 		"/downloads/incoming/a.iso": "/mnt/user/isos/a.iso",
 		"/config":                   "/mnt/user/appdata/loader",
-		"/backups/2026":             "/backups/2026",
+		"/backups/2026":             "/dev/block/9:1/backups/2026",
 		"/films/Heat (1995)":        "/mnt/user/media/My Films/Heat (1995)",
 		"/downloadsextra":           "",
 		"/app/data":                 "",
@@ -70,7 +70,8 @@ func TestAHostPathHasItsFolderInTheContainer(t *testing.T) {
 		"/mnt/user/downloads/tv":               "/downloads/tv",
 		"/mnt/user/isos/a.iso":                 "/downloads/incoming/a.iso",
 		"/mnt/user/appdata/loader/state":       "/config/state",
-		"/backups":                             "/backups",
+		"/dev/block/9:1/backups":               "/backups",
+		"/backups":                             "",
 		"/mnt/user/media/My Films/Heat (1995)": "/films/Heat (1995)",
 		// Hidden under the share mounted inside it.
 		"/mnt/user/downloads/incoming/a.iso": "",
@@ -135,6 +136,7 @@ func TestBrokenMountinfoIsAnError(t *testing.T) {
 		"1210 1203 0:46 /appdata /config rw,noatime fuse.shfs shfs rw",
 		"1210 1203 0:46 /appdata",
 		"1210 1203 0:46 appdata /config rw - fuse.shfs shfs rw",
+		"1210 1203 sdb1 /appdata /config rw - xfs /dev/sdb1 rw",
 	} {
 		if _, err := Parse(strings.NewReader(line + "\n")); err == nil {
 			t.Errorf("Parse took %q", line)
@@ -153,5 +155,41 @@ func TestSharedListsTheMountsThatHoldHostFolders(t *testing.T) {
 	}
 	if got := table(t, native).Shared(); len(got) != 0 {
 		t.Errorf("on the host itself Shared lists %v", got)
+	}
+}
+
+// twoDisks mounts a folder of the same name from two disks of one host.
+const twoDisks = `1203 1012 0:345 / / rw,relatime - overlay overlay rw
+1213 1203 9:1 /backups /backups1 rw,noatime - xfs /dev/md1p1 rw
+1214 1203 9:2 /backups /backups2 rw,noatime - xfs /dev/md2p1 rw
+`
+
+func TestTwoDisksWithTheSamePathStayApart(t *testing.T) {
+	tab := table(t, twoDisks)
+	one, err := tab.ToHost("/backups1/a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	two, err := tab.ToHost("/backups2/a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if one == two {
+		t.Fatalf("both disks give %q", one)
+	}
+	for host, want := range map[string]string{one: "/backups1/a", two: "/backups2/a"} {
+		if got, err := tab.FromHost(host); err != nil || got != want {
+			t.Errorf("FromHost(%q) = %q, %v; want %q", host, got, err, want)
+		}
+	}
+
+	// A container with only the first disk does not take the second disk's
+	// folder for its own.
+	first := table(t, unraid)
+	if _, err := first.FromHost(two); !errors.Is(err, ErrNotMounted) {
+		t.Errorf("a container without the second disk finds %q: %v", two, err)
+	}
+	if got, err := first.FromHost(strings.TrimSuffix(one, "/a")); err != nil || got != "/backups" {
+		t.Errorf("a container with the first disk finds %q at %q, %v", one, got, err)
 	}
 }
