@@ -3,6 +3,7 @@ package group
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -108,6 +109,7 @@ type setup struct {
 	ports     []int
 	stream    http.Handler
 	upload    http.Handler
+	vouch     func(id string, key ed25519.PublicKey) bool
 	// noListener opens the instance the way a desktop app runs: it calls
 	// others directly but takes no direct calls itself.
 	noListener bool
@@ -174,6 +176,7 @@ func openGroup(t *testing.T, n *node, s setup) *Group {
 		OnChange:            s.onChange,
 		Stream:              s.stream,
 		Upload:              s.upload,
+		Vouch:               s.vouch,
 	}, appRoutes())
 	if err != nil {
 		t.Fatalf("open %s: %v", n.name, err)

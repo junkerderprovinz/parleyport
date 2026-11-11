@@ -150,6 +150,11 @@ type Config struct {
 	// with ErrStreamBroken where it would end if the upload arrived damaged,
 	// so the app keeps it only after reading to io.EOF. nil takes no uploads.
 	Upload http.Handler
+	// Vouch reports whether an instance this one has not approved is a
+	// member already by some other account, such as the fortress the group
+	// runs in. Such an instance is approved on its first signed call or
+	// answer, without anybody approving it. A member taken out stays out.
+	Vouch func(id string, key ed25519.PublicKey) bool
 }
 
 // State is where a member stands with this instance.
@@ -185,6 +190,10 @@ type Member struct {
 	// approval there.
 	Awaiting bool
 	LastSeen time.Time
+	// Met is when it first signed a call or an answer here under the
+	// group's phrase, zero for a member that came over from Previous and has
+	// not done so since.
+	Met time.Time
 }
 
 // Online reports whether m can be called now.
@@ -219,6 +228,7 @@ type Group struct {
 	onRemoved func()
 	onRemove  func(id string)
 	onChange  func()
+	vouch     func(string, ed25519.PublicKey) bool
 	byPhrase  bool
 	kinds     []member.Kind
 	ports     []string
@@ -313,6 +323,7 @@ func Open(cfg Config, serve http.Handler) (*Group, error) {
 		onRemoved: cfg.OnRemoved,
 		onRemove:  cfg.OnRemove,
 		onChange:  cfg.OnChange,
+		vouch:     cfg.Vouch,
 		byPhrase:  cfg.JoinByPhrase,
 		kinds:     slices.Clone(cfg.Kinds),
 		ports:     portNames(cfg.Ports),
@@ -624,7 +635,7 @@ func (g *Group) look(now time.Time) map[string]*Member {
 	}
 	for id, rec := range g.st.Members {
 		m := get(id, rec.Kind)
-		m.Key, m.State = rec.Key, rec.state()
+		m.Key, m.State, m.Met = rec.Key, rec.state(), rec.Met
 		if m.Online() {
 			if rec.seenAs(m, now) {
 				g.st.Members[id] = rec

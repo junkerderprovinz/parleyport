@@ -173,6 +173,118 @@ func forbid(w http.ResponseWriter) {
 	http.Error(w, "forbidden", http.StatusForbidden)
 }
 
+// envelope is what a direct request says about itself in its headers.
+type envelope struct {
+	sender, target, unix, signature string
+	// upload means the call travels in a header and the body is the upload.
+	upload bool
+	call   string
+}
+
+// envelopeOf reads the headers of a direct request to this instance, and
+// reports false where they cannot be a member's. The route is open, so
+// whatever a stranger can send without the key is checked before the body is
+// read.
+func (g *Group) envelopeOf(r *http.Request) (envelope, bool) {
+	h := g.headers
+	e := envelope{
+		sender: r.Header.Get(h.peer), target: r.Header.Get(h.target), unix: r.Header.Get(h.time),
+		signature: r.Header.Get(h.signature), upload: r.Header.Get("Content-Type") == uploadType, call: r.Header.Get(h.call),
+	}
+	sent, err := strconv.ParseInt(e.unix, 10, 64)
+	ok := err == nil && e.sender != "" && len(e.sender) <= maxSenderBytes && (e.target == g.self || e.target == probeTarget) &&
+		(e.upload || r.ContentLength <= maxDirectRequest) && recent(sent)
+	return e, ok
+}
+
+// signed reads what the signature of e covers: the call of an upload, else
+// the body, which the request gives up to.
+func (e envelope) signed(w http.ResponseWriter, r *http.Request) ([]byte, error) {
+	if e.upload {
+		// The body of an upload is read by the app, once it wants it.
+		return base64.StdEncoding.DecodeString(e.call)
+	}
+	return io.ReadAll(http.MaxBytesReader(w, r.Body, maxDirectRequest))
+}
+
+// tags reports whether body is signed under peerAuth as e says.
+func (e envelope) tags(peerAuth, body []byte) bool {
+	return hmac.Equal([]byte(e.signature), []byte(directSignature(peerAuth, e.sender, e.unix, body)))
+}
+
+// Direct answers at DirectPath the direct calls of several groups this
+// instance is in, such as an app's group on its old phrase and the one it
+// moves to, which go by the same domain and so send the same headers. Each
+// call goes to the group whose key it is tagged with; one tagged with none is
+// refused as a single group would refuse it.
+func Direct(groups ...*Group) http.Handler {
+	var gs []*Group
+	for _, g := range groups {
+		if g != nil {
+			gs = append(gs, g)
+		}
+	}
+	switch len(gs) {
+	case 0:
+		return http.NotFoundHandler()
+	case 1:
+		return gs[0].DirectHandler()
+	}
+	slots := make(chan struct{}, maxDirectCalls)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		type fit struct {
+			g *Group
+			e envelope
+		}
+		var fits []fit
+		for _, g := range gs {
+			if e, ok := g.envelopeOf(r); ok && r.Method == http.MethodPost {
+				fits = append(fits, fit{g, e})
+			}
+		}
+		switch len(fits) {
+		case 0:
+			gs[0].serveDirect(w, r)
+			return
+		case 1:
+			fits[0].g.serveDirect(w, r)
+			return
+		}
+		select {
+		case slots <- struct{}{}:
+			defer func() { <-slots }()
+		default:
+			http.Error(w, "busy", http.StatusServiceUnavailable)
+			return
+		}
+		// Only the tag tells the groups apart, and it covers the body, which
+		// is read once here and handed on.
+		_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(directReadTimeout))
+		upload := fits[0].e.upload
+		var body []byte
+		if !upload {
+			var err error
+			if body, err = fits[0].e.signed(w, r); err != nil {
+				forbid(w)
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(body))
+		}
+		for _, f := range fits {
+			signed := body
+			if upload {
+				// A call header that does not decode tags nothing.
+				signed, _ = f.e.signed(w, r)
+			}
+			if f.e.tags(f.g.peerAuth, signed) {
+				f.g.serveDirect(w, r)
+				return
+			}
+		}
+		forbid(w)
+	})
+}
+
 func (g *Group) serveDirect(w http.ResponseWriter, r *http.Request) {
 	if !g.enter() {
 		http.NotFound(w, r)
@@ -184,14 +296,8 @@ func (g *Group) serveDirect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	// The route is open, so whatever a stranger can send without the key is
-	// checked before the body is read.
-	h := g.headers
-	sender, target, unix := r.Header.Get(h.peer), r.Header.Get(h.target), r.Header.Get(h.time)
-	upload := r.Header.Get("Content-Type") == uploadType
-	sent, err := strconv.ParseInt(unix, 10, 64)
-	if err != nil || sender == "" || len(sender) > maxSenderBytes || (target != g.self && target != probeTarget) ||
-		!upload && r.ContentLength > maxDirectRequest || !recent(sent) {
+	e, ok := g.envelopeOf(r)
+	if !ok {
 		forbid(w)
 		return
 	}
@@ -203,17 +309,12 @@ func (g *Group) serveDirect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(directReadTimeout))
-	var body []byte
-	if upload {
-		// The body of an upload is read by the app, once it wants it.
-		body, err = base64.StdEncoding.DecodeString(r.Header.Get(h.call))
-	} else {
-		body, err = io.ReadAll(http.MaxBytesReader(w, r.Body, maxDirectRequest))
-	}
-	if err != nil || !hmac.Equal([]byte(r.Header.Get(h.signature)), []byte(directSignature(g.peerAuth, sender, unix, body))) {
+	body, err := e.signed(w, r)
+	if err != nil || !e.tags(g.peerAuth, body) {
 		forbid(w)
 		return
 	}
+	target, upload := e.target, e.upload
 	var req relay.ProxyRequest
 	if json.Unmarshal(body, &req) != nil || req.RequestID == "" || req.Target != target {
 		forbid(w)
@@ -399,9 +500,10 @@ func (g *Group) probe(ctx context.Context, base string) (hello, error) {
 	if h.ID == g.self {
 		return hello{}, fmt.Errorf("group: %s is this instance's own address", base)
 	}
+	vouched := g.vouched(h.ID, member.KindInstance, res.Key)
 	g.mu.Lock()
 	if _, pinned := g.st.Members[h.ID]; !pinned {
-		g.pinAnswerLocked(h.ID, res.Key)
+		g.pinAnswerLocked(h.ID, res.Key, vouched)
 	}
 	g.mu.Unlock()
 	g.confirm(h.ID, base, h.Name, h.Deployment, time.Now())

@@ -305,7 +305,7 @@ func (r *streamReader) Close() error {
 
 // serveStream answers a stream call that came directly.
 func (g *Group) serveStream(ctx context.Context, w http.ResponseWriter, req relay.ProxyRequest, call relay.ProxyCall) {
-	caller, refused := g.admit(call, relay.SourceOf(ctx), time.Now())
+	caller, refused := g.admit(call, relay.SourceOf(ctx), g.vouched(call.From, call.Kind, call.Key), time.Now())
 	if refused != nil {
 		if refused.status == relay.StatusDrop {
 			forbid(w)

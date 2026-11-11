@@ -208,7 +208,7 @@ func (g *Group) sendUpload(w io.Writer, aead cipher.AEAD, body io.Reader, n int6
 
 // serveUpload hands an upload that came directly to the app.
 func (g *Group) serveUpload(ctx context.Context, w http.ResponseWriter, r *http.Request, req relay.ProxyRequest, call relay.ProxyCall) {
-	caller, refused := g.admit(call, relay.SourceOf(ctx), time.Now())
+	caller, refused := g.admit(call, relay.SourceOf(ctx), g.vouched(call.From, call.Kind, call.Key), time.Now())
 	switch {
 	case refused != nil && refused.status == relay.StatusDrop:
 		forbid(w)

@@ -86,6 +86,18 @@ type record struct {
 	// Direct is where the member last answered a direct call, tried first
 	// when the group opens again.
 	Direct string `json:"direct,omitempty"`
+	// Met is when the key first signed a call or an answer here under the
+	// group key the state is kept under.
+	Met time.Time `json:"met,omitzero"`
+}
+
+// meet records that the key pinned in r signed something here at now.
+func (r *record) meet(now time.Time) bool {
+	if !r.Met.IsZero() {
+		return false
+	}
+	r.Met = now
+	return true
 }
 
 // seenAs records what m says of the member it is for and reports whether the
@@ -128,6 +140,11 @@ func loadState(raw []byte, groupKey, previous string) (state, bool, error) {
 	case previous:
 		if previous != "" {
 			st.Group = groupKey
+			// Nobody signed anything under the new phrase yet.
+			for id, rec := range st.Members {
+				rec.Met = time.Time{}
+				st.Members[id] = rec
+			}
 			return st, true, nil
 		}
 	}
@@ -271,7 +288,7 @@ func (g *Group) handle(ctx context.Context, call relay.ProxyCall) (int, []byte) 
 		return relay.StatusDrop, nil
 	}
 	defer g.wg.Done()
-	caller, r := g.admit(call, relay.SourceOf(ctx), time.Now())
+	caller, r := g.admit(call, relay.SourceOf(ctx), g.vouched(call.From, call.Kind, call.Key), time.Now())
 	if r != nil {
 		return r.status, r.body
 	}
@@ -286,11 +303,28 @@ func (g *Group) handle(ctx context.Context, call relay.ProxyCall) (int, []byte) 
 	return g.serveApp(context.WithValue(ctx, callerKey{}, caller), call)
 }
 
+// vouched reports whether Vouch lets in instance id under key, which is
+// asked only of an instance not approved here yet. It runs without g.mu, so
+// Vouch may look at another group.
+func (g *Group) vouched(id string, kind member.Kind, key ed25519.PublicKey) bool {
+	if g.vouch == nil || kind != member.KindInstance || !claimFits(id, kind, key) {
+		return false
+	}
+	g.mu.Lock()
+	rec, ok := g.st.Members[id]
+	g.mu.Unlock()
+	if ok && rec.Approved {
+		return false
+	}
+	return g.vouch(id, key)
+}
+
 // admit decides whose call this is: whether the id it names is the one its
 // key makes, whether that key is approved, and whether the call ran before. A
 // call's id is used up only once it is known to come from a pinned key, so a
-// stranger fills no record a member needs.
-func (g *Group) admit(call relay.ProxyCall, source string, now time.Time) (Caller, *refusal) {
+// stranger fills no record a member needs. An instance vouched for is
+// approved here as it calls.
+func (g *Group) admit(call relay.ProxyCall, source string, vouched bool, now time.Time) (Caller, *refusal) {
 	if !relay.Recent(call, now) {
 		return Caller{}, dropped
 	}
@@ -317,8 +351,14 @@ func (g *Group) admit(call relay.ProxyCall, source string, now time.Time) (Calle
 		if !g.replay.Admit(call) {
 			return Caller{}, dropped
 		}
+		changed := rec.meet(now)
 		if now.Sub(rec.Used) >= lastSeenStep {
-			rec.Used = now
+			rec.Used, changed = now, true
+		}
+		if !rec.Approved && vouched {
+			rec.Approved, changed = true, true
+		}
+		if changed {
 			st.Members[call.From] = rec
 			g.dirty = true
 		}
@@ -344,11 +384,12 @@ func (g *Group) admit(call relay.ProxyCall, source string, now time.Time) (Calle
 	if !g.limits.mayPin(source, now) {
 		return Caller{}, refuse(http.StatusTooManyRequests, "groupJoinsBusy", "too many new devices joined this group within the hour")
 	}
-	if err := g.pinLocked(call.From, record{Kind: call.Kind, Key: bytes.Clone(call.Key), Approved: g.byPhrase, Used: now}, idle); err != nil {
+	approved := g.byPhrase || vouched
+	if err := g.pinLocked(call.From, record{Kind: call.Kind, Key: bytes.Clone(call.Key), Approved: approved, Used: now, Met: now}, idle); err != nil {
 		return Caller{}, refuse(http.StatusInternalServerError, "memberNotPinned", "this instance could not record the device's key")
 	}
 	g.replay.Admit(call)
-	if g.byPhrase {
+	if approved {
 		return Caller{ID: call.From, Kind: call.Kind, Key: bytes.Clone(call.Key)}, nil
 	}
 	return Caller{}, pendingRefusal
@@ -403,21 +444,33 @@ func waitingLocked(st *state) int {
 // target's: target is approved here as an instance, under that key. An
 // instance not pinned yet is pinned by its answer.
 func (g *Group) trustsAnswer(target string, key ed25519.PublicKey) bool {
+	vouched := g.vouched(target, member.KindInstance, key)
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	rec, ok := g.st.Members[target]
 	if !ok {
-		rec, ok = g.pinAnswerLocked(target, key)
+		rec, ok = g.pinAnswerLocked(target, key, vouched)
 	}
-	return ok && rec.Approved && rec.Kind == member.KindInstance && bytes.Equal(rec.Key, key)
+	if !ok || rec.Kind != member.KindInstance || !bytes.Equal(rec.Key, key) {
+		return false
+	}
+	changed := rec.meet(time.Now())
+	if !rec.Approved && vouched {
+		rec.Approved, changed = true, true
+	}
+	if changed {
+		g.st.Members[target] = rec
+		g.dirty = true
+	}
+	return rec.Approved
 }
 
 // pinAnswerLocked pins key for instance id, as an answer id signed with it
 // shows, so an instance that cannot be called back still learns of the other:
-// approved where the phrase is enough, else waiting for approval. It pins
-// nothing that was taken out, a key that speaks for another member, or past
-// the room there is and the new keys of the hour.
-func (g *Group) pinAnswerLocked(id string, key []byte) (record, bool) {
+// approved where the phrase is enough or the instance is vouched for, else
+// waiting for approval. It pins nothing that was taken out, a key that speaks
+// for another member, or past the room there is and the new keys of the hour.
+func (g *Group) pinAnswerLocked(id string, key []byte, vouched bool) (record, bool) {
 	st := &g.st
 	now := time.Now()
 	_, removed := st.Removed[id]
@@ -434,7 +487,7 @@ func (g *Group) pinAnswerLocked(id string, key []byte) (record, bool) {
 	if !g.limits.mayPin("", now) {
 		return record{}, false
 	}
-	rec := record{Kind: member.KindInstance, Key: bytes.Clone(key), Approved: g.byPhrase, Used: now}
+	rec := record{Kind: member.KindInstance, Key: bytes.Clone(key), Approved: g.byPhrase || vouched, Used: now, Met: now}
 	if g.pinLocked(id, rec, "") != nil {
 		return record{}, false
 	}
