@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -128,9 +129,11 @@ func (n *node) drops() []string {
 }
 
 type setup struct {
-	relay    string
-	lan      *lan.Service
-	pairLAN  *lan.Service
+	relay   string
+	lan     *lan.Service
+	pairLAN *lan.Service
+	// pairing is what the app sets for its own pairing.
+	pairing  group.Config
 	secret   []byte
 	previous []byte
 	// moved is the secret of the fortress before ChangePhrase.
@@ -220,7 +223,9 @@ func config(t *testing.T, n *node, s setup) Config {
 	}
 	cfg.Actions = append(cfg.Actions, s.actions...)
 	if !s.noPair {
-		cfg.Pairing = &Pairing{LAN: s.pairLAN, Store: n.pairStore, Serve: appRoutes(), Previous: s.previous}
+		own := s.pairing
+		own.LAN, own.Store, own.Previous = s.pairLAN, n.pairStore, s.previous
+		cfg.Pairing = &Pairing{Group: own, Serve: appRoutes()}
 	}
 	return cfg
 }
@@ -228,6 +233,10 @@ func config(t *testing.T, n *node, s setup) Config {
 // appRoutes are the routes an app's own instances call each other on.
 func appRoutes() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/big/{n}", func(w http.ResponseWriter, r *http.Request) {
+		n, _ := strconv.Atoi(r.PathValue("n"))
+		_, _ = w.Write(make([]byte, n))
+	})
 	mux.HandleFunc("GET /api/whoami", func(w http.ResponseWriter, r *http.Request) {
 		c, _ := group.CallerOf(r.Context())
 		_, _ = w.Write([]byte(c.ID))

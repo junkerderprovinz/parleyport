@@ -32,7 +32,7 @@ func TestOpenRefusesAnIncompleteConfig(t *testing.T) {
 			c.Actions = []Action{{Name: "files.drop"}}
 		},
 		"a use named badly":                  func(c *Config) { c.Uses = []string{"run"} },
-		"a pairing with no store":            func(c *Config) { c.Pairing.Store = nil },
+		"a pairing with no store":            func(c *Config) { c.Pairing.Group.Store = nil },
 		"keys but no secret for the pairing": func(c *Config) { c.Secret, c.Keys = nil, Domain.Keys(testSecret) },
 		"half the keys": func(c *Config) {
 			c.Secret, c.Pairing, c.Keys = nil, nil, keys.Set{Group: Domain.GroupKey(testSecret)}

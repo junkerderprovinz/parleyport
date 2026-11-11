@@ -29,6 +29,7 @@ package fortress
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -111,19 +112,17 @@ type App struct {
 // Pairing is how the app pairs its own instances. Its keys come from the
 // fortress phrase under the app's ID.
 type Pairing struct {
-	// Signing names the labels the app's instances sign under; the zero value
-	// means the domain's own.
-	Signing keys.Signing
-	// LAN is where the app's instances announce themselves; nil reaches them
-	// through the relay alone.
-	LAN   *lan.Service
-	Store group.Store
+	// Group is the pairing as the app would open it with group.Open: Store,
+	// and as it needs them Signing, LAN, Kinds, Ports, the answer sizes,
+	// OnChange, Stream and Upload. Previous is the secret of the app's own
+	// phrase when the instance joins the fortress already paired; the
+	// pairing moves to the fortress phrase and keeps who was approved or
+	// taken out. Who joins, as whom and where is the fortress's to set, so
+	// Domain, Secret, Keys, JoinByPhrase, Self, Relay, RelayURL, OnRemoved
+	// and OnRemove stay unset.
+	Group group.Config
 	// Serve answers the calls of the app's own instances and phones.
 	Serve http.Handler
-	// Previous is the secret of the app's own phrase, when the instance joins
-	// the fortress already paired. The pairing moves to the fortress phrase
-	// and keeps who was approved or taken out.
-	Previous []byte
 }
 
 // Config is what a Fortress runs on. App, Secret or Keys, Identity and Store
@@ -151,7 +150,7 @@ type Config struct {
 	Store group.Store
 	// Previous is the secret of the phrase before ChangePhrase. Members,
 	// removals and permissions carry over to Secret, in the pairing as well
-	// unless Pairing.Previous says otherwise.
+	// unless Pairing.Group.Previous says otherwise.
 	Previous []byte
 	// Keeper keeps a new phrase when the fortress changes it; nil for an app
 	// that has nowhere safe to keep one, which then enters the new phrase
@@ -184,14 +183,37 @@ type Config struct {
 	// this instance; nil keeps none.
 	Events *events.Log
 	// MaxAnswerBytes and MaxRelayAnswerBytes bound what an action answers,
-	// directly and through the relay, here and in the pairing, as in
-	// group.Config.
+	// directly and through the relay, here and in the pairing unless
+	// Pairing.Group sets its own, as in group.Config.
 	MaxAnswerBytes      int
 	MaxRelayAnswerBytes int
 	// OnRemoved runs, at most once and on its own goroutine, when another
 	// member says this instance was taken out of the fortress or its pairing.
 	// The app leaves.
 	OnRemoved func()
+}
+
+// pairingConfig is the app's own settings for its pairing, with who joins,
+// as whom and where taken from cfg.
+func pairingConfig(cfg Config) group.Config {
+	pc := cfg.Pairing.Group
+	pc.Domain = keys.Domain(cfg.App.ID)
+	pc.Secret = cfg.Secret
+	if len(pc.Previous) == 0 {
+		pc.Previous = cfg.Previous
+	}
+	pc.Identity, pc.Self = cfg.Identity, cfg.Self
+	pc.Relay, pc.RelayURL = cfg.Relay, cfg.RelayURL
+	pc.MaxAnswerBytes = cmp.Or(pc.MaxAnswerBytes, cfg.MaxAnswerBytes)
+	pc.MaxRelayAnswerBytes = cmp.Or(pc.MaxRelayAnswerBytes, cfg.MaxRelayAnswerBytes)
+	return pc
+}
+
+// decided reports whether c sets anything the fortress decides for the
+// pairing.
+func decided(c group.Config) bool {
+	return c.Domain != "" || len(c.Secret) > 0 || c.Keys.Group != "" || len(c.Keys.Frame) > 0 || len(c.Keys.PeerAuth) > 0 ||
+		c.JoinByPhrase || c.Self != (group.Self{}) || c.Relay != "" || c.RelayURL != "" || c.OnRemoved != nil || c.OnRemove != nil
 }
 
 func (cfg Config) check() error {
@@ -204,8 +226,10 @@ func (cfg Config) check() error {
 		return errors.New("fortress: a pairing needs the secret")
 	case cfg.Store == nil:
 		return errors.New("fortress: no store")
-	case cfg.Pairing != nil && (cfg.Pairing.Store == nil || cfg.Pairing.Serve == nil):
+	case cfg.Pairing != nil && (cfg.Pairing.Group.Store == nil || cfg.Pairing.Serve == nil):
 		return errors.New("fortress: a pairing needs a store and a handler")
+	case cfg.Pairing != nil && decided(cfg.Pairing.Group):
+		return errors.New("fortress: the pairing sets who joins, as whom or where, which is the fortress's to set")
 	case len(cfg.Actions) > maxNames || len(cfg.Uses) > maxNames:
 		return errors.New("fortress: too many actions")
 	}
@@ -354,27 +378,10 @@ func Open(cfg Config) (*Fortress, error) {
 	if cfg.Status != nil {
 		f.status = status.Handler(cfg.Status, func(*http.Request) error { return nil })
 	}
-	if p := cfg.Pairing; p != nil {
-		before := p.Previous
-		if len(before) == 0 {
-			before = cfg.Previous
-		}
-		f.pairing, err = group.Open(group.Config{
-			Domain:              keys.Domain(cfg.App.ID),
-			Signing:             p.Signing,
-			Secret:              cfg.Secret,
-			Previous:            before,
-			Identity:            cfg.Identity,
-			Self:                cfg.Self,
-			Relay:               cfg.Relay,
-			RelayURL:            cfg.RelayURL,
-			LAN:                 p.LAN,
-			Store:               p.Store,
-			OnRemoved:           f.leave,
-			OnRemove:            f.pairingRemoved,
-			MaxAnswerBytes:      cfg.MaxAnswerBytes,
-			MaxRelayAnswerBytes: cfg.MaxRelayAnswerBytes,
-		}, p.Serve)
+	if cfg.Pairing != nil {
+		pc := pairingConfig(cfg)
+		pc.OnRemoved, pc.OnRemove = f.leave, f.pairingRemoved
+		f.pairing, err = group.Open(pc, cfg.Pairing.Serve)
 		if err != nil {
 			cancel()
 			return nil, err
