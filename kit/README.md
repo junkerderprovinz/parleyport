@@ -6,7 +6,7 @@ The client side of ParleyPort, as a Go module of its own:
 go get github.com/junkerderprovinz/parleyport/kit
 ```
 
-Apps that pair their instances import it for the pieces they would otherwise each keep a copy of: the pairing phrase, member keys, the relay client, finding the other instances on the network, the group with its approvals, the fortress that ties apps together, the events and rules that let one app act on what happened in another, notifications, the status report and the Home Assistant bridge. Like the server, it names no app.
+Apps that pair their instances import it for the pieces they would otherwise each keep a copy of: the pairing phrase, member keys, the relay client, finding the other instances on the network, the group with its approvals, the fortress that ties apps together, the events and rules that let one app act on what happened in another, notifications, the status report, the Home Assistant bridge, and the tools that let an app's MCP server show and call the rest of its fortress. Like the server, it names no app.
 
 `cmd/fortress` is a small command for apps without Go code, such as a plugin written in shell: it joins a fortress with the phrase, lists the members, reads their status and asks one of them to run an action.
 
