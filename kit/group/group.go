@@ -481,11 +481,12 @@ func (g *Group) watch(listed string) {
 	}
 }
 
-// digest is whether the relay is connected and what Members lists, but for the
-// last-seen times, which move whenever a member is online.
+// digest is whether the relay is connected, who on it runs an older version
+// and what Members lists, but for the last-seen times, which move whenever a
+// member is online.
 func (g *Group) digest() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "relay %t\n", g.RelayConnected())
+	fmt.Fprintf(&b, "relay %t %q\n", g.RelayConnected(), g.Older())
 	for _, m := range g.Members() {
 		fmt.Fprintf(&b, "%s %s %s %q %q %t %t %t\n", m.ID, m.Kind, m.State, m.Name, m.Deployment, m.Direct, m.Relay, m.Awaiting)
 	}
@@ -513,6 +514,21 @@ func (g *Group) selfInfo() Self {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.info
+}
+
+// Older lists the names of the devices on the relay that hold the phrase but
+// run a version of the app from before its group moved to this package. They
+// cannot reach the members, nor the members them, until they are updated.
+func (g *Group) Older() []string {
+	if g.client == nil {
+		return nil
+	}
+	var out []string
+	for _, a := range g.client.Older() {
+		out = append(out, a.Name)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // RelayConnected reports whether the relay socket is up, which an empty member
