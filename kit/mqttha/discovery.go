@@ -27,6 +27,18 @@ func (c Config) availabilityTopic() string    { return c.Topic + "/availability"
 func (c Config) stateTopic() string           { return c.Topic + "/state" }
 func (c Config) pressTopic(key string) string { return c.Topic + "/press/" + key }
 
+// commandTopic is where button e is pressed. A command of its own may not
+// fall on the state, the availability or the press topics.
+func (c Config) commandTopic(e Entity) (string, error) {
+	if e.Command == "" {
+		return c.pressTopic(e.Key), nil
+	}
+	if !topicRe.MatchString(e.Command) || e.Command == "state" || e.Command == "availability" || strings.HasPrefix(e.Command, "press/") {
+		return "", fmt.Errorf("mqttha: button %s cannot be pressed on %q", e.Key, e.Command)
+	}
+	return c.Topic + "/" + e.Command, nil
+}
+
 func (c Config) discoveryTopic(kind Kind, key string) string {
 	return DiscoveryPrefix + "/" + string(kind) + "/" + c.ID + "/" + key + "/config"
 }
@@ -70,12 +82,14 @@ type announcement struct {
 	discovery map[string][]byte
 	state     []byte
 	buttons   map[string]bool
+	// commands holds the key of the button each command topic presses.
+	commands map[string]string
 	// unlisted holds the enum values left out because their options lack them.
 	unlisted map[string]any
 }
 
 func announce(cfg Config, r Reading) (announcement, error) {
-	a := announcement{discovery: map[string][]byte{}, buttons: map[string]bool{}, unlisted: map[string]any{}}
+	a := announcement{discovery: map[string][]byte{}, buttons: map[string]bool{}, commands: map[string]string{}, unlisted: map[string]any{}}
 	device := map[string]any{"identifiers": []string{cfg.ID}}
 	setIf(device, "name", r.Device.Name)
 	setIf(device, "manufacturer", r.Device.Manufacturer)
@@ -99,6 +113,9 @@ func announce(cfg Config, r Reading) (announcement, error) {
 		c["unique_id"] = cfg.ID + "_" + e.Key
 		c["availability_topic"] = cfg.availabilityTopic()
 		c["device"] = device
+		if e.Command != "" && e.Kind != Button {
+			return announcement{}, fmt.Errorf("mqttha: entity %s is no button and takes no command topic", e.Key)
+		}
 		switch e.Kind {
 		case Sensor:
 			c["state_topic"] = cfg.stateTopic()
@@ -116,9 +133,17 @@ func announce(cfg Config, r Reading) (announcement, error) {
 			}
 			state[e.Key] = v
 		case Button:
-			c["command_topic"] = cfg.pressTopic(e.Key)
+			topic, err := cfg.commandTopic(e)
+			if err != nil {
+				return announcement{}, err
+			}
+			if _, dup := a.commands[topic]; dup {
+				return announcement{}, fmt.Errorf("mqttha: two buttons are pressed on %s", topic)
+			}
+			c["command_topic"] = topic
 			c["payload_press"] = pressPayload
 			a.buttons[e.Key] = true
+			a.commands[topic] = e.Key
 		default:
 			return announcement{}, fmt.Errorf("mqttha: entity %s is a %q, not a sensor or a button", e.Key, e.Kind)
 		}

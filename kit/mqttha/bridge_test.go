@@ -955,3 +955,86 @@ func TestAFailedReadPublishesNothing(t *testing.T) {
 		t.Fatalf("published %v from a failed read", got)
 	}
 }
+
+func legacyReading() Reading {
+	r := alphaReading()
+	r.Entities = append(r.Entities, Entity{Kind: Button, Key: "files_backup", Name: "Back up files", Command: "backup/files"})
+	return r
+}
+
+func TestAButtonWithACommandIsPressedThere(t *testing.T) {
+	t.Parallel()
+	tb := startBroker(t)
+	src := newSource()
+	src.set(legacyReading())
+	b := newTestBridge(t, src)
+	cfg := alphaConfig(tb)
+	if err := b.Apply(cfg); err != nil {
+		t.Fatal(err)
+	}
+	waitAnnounced(t, tb, cfg)
+	c := discoveryOf(t, tb, "homeassistant/button/alpha_a1b2c3d4/files_backup/config")
+	if c["command_topic"] != "alpha/a1b2c3d4/backup/files" || c["unique_id"] != "alpha_a1b2c3d4_files_backup" {
+		t.Fatalf("button config %v", c)
+	}
+	waitUntil(t, "a press on the button's own topic runs it", func() bool {
+		tb.publish(cfg.Topic+"/backup/files", "PRESS", false)
+		select {
+		case key := <-src.presses:
+			return key == "files_backup"
+		case <-time.After(200 * time.Millisecond):
+			return false
+		}
+	})
+	tb.publish(cfg.Topic+"/press/files_backup", "PRESS", false)
+	expectNoPress(t, src, "a press on the topic the button does not use")
+	tb.publish(cfg.Topic+"/press/run", "PRESS", false)
+	expectPress(t, src, "run")
+}
+
+func TestAButtonWithACommandIsPressedThereAfterAReconnect(t *testing.T) {
+	t.Parallel()
+	tb := startBroker(t)
+	src := newSource()
+	src.set(legacyReading())
+	b := newTestBridge(t, src)
+	cfg := alphaConfig(tb)
+	if err := b.Apply(cfg); err != nil {
+		t.Fatal(err)
+	}
+	waitAnnounced(t, tb, cfg)
+	tb.restart()
+	waitOnline(t, tb, cfg)
+	waitUntil(t, "a press on the button's own topic runs it again", func() bool {
+		tb.publish(cfg.Topic+"/backup/files", "PRESS", false)
+		select {
+		case key := <-src.presses:
+			return key == "files_backup"
+		case <-time.After(200 * time.Millisecond):
+			return false
+		}
+	})
+}
+
+func TestACommandMustStayClearOfTheOtherTopics(t *testing.T) {
+	t.Parallel()
+	for _, command := range []string{"state", "availability", "press/run", "press/x", "/backup", "backup/", "a//b", "a/+", "a/#", "x y"} {
+		r := alphaReading()
+		r.Entities = append(r.Entities, Entity{Kind: Button, Key: "other", Command: command})
+		if _, err := announce(Config{ID: "alpha_a1b2c3d4", Topic: "alpha/a1b2c3d4"}, r); err == nil {
+			t.Errorf("command %q was taken", command)
+		}
+	}
+	r := alphaReading()
+	r.Entities = append(r.Entities,
+		Entity{Kind: Button, Key: "one", Command: "backup/files"},
+		Entity{Kind: Button, Key: "two", Command: "backup/files"})
+	if _, err := announce(Config{ID: "alpha_a1b2c3d4", Topic: "alpha/a1b2c3d4"}, r); err == nil {
+		t.Error("two buttons share one command topic")
+	}
+	r = alphaReading()
+	r.Entities = append(r.Entities, Entity{Kind: Sensor, Key: "s", Command: "backup/files"})
+	if _, err := announce(Config{ID: "alpha_a1b2c3d4", Topic: "alpha/a1b2c3d4"}, r); err == nil {
+		t.Error("a sensor took a command topic")
+	}
+}
