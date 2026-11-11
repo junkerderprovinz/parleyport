@@ -96,6 +96,26 @@ jobs:
           cat /tmp/parleyport.log
           exit 1
 
+  lint:
+    name: golangci-lint (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [".", "kit"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.15.0
+          working-directory: ${{ matrix.module }}
+
   image:
     name: build and boot the image (amd64, no push)
     runs-on: ubuntu-latest

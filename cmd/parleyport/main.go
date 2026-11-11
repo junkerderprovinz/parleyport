@@ -206,12 +206,12 @@ func parseArgs(args []string, stdout, stderr io.Writer) (versionOnly bool, err e
 	}
 	if fs.NArg() > 0 {
 		err := fmt.Errorf("unexpected argument %q", fs.Arg(0))
-		fmt.Fprintln(stderr, err)
+		_, _ = fmt.Fprintln(stderr, err)
 		fs.Usage()
 		return false, err
 	}
 	if *version {
-		fmt.Fprintln(stdout, buildinfo.Describe("parleyport"))
+		_, _ = fmt.Fprintln(stdout, buildinfo.Describe("parleyport"))
 	}
 	return *version, nil
 }
