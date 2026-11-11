@@ -77,15 +77,17 @@ jobs:
           echo "exit ${code}: ${out}"
           [ "$code" -eq 1 ] && echo "$out" | grep -q "holds no fortress yet"
 
+      # The port sits below Linux's range for outgoing connections, which
+      # could otherwise hold it when the smoke starts.
       - name: Native boot smoke
         run: |
           set -euo pipefail
           go build -o /tmp/parleyport ./cmd/parleyport
-          PARLEYPORT_ADDR=:38760 /tmp/parleyport > /tmp/parleyport.log 2>&1 &
+          PARLEYPORT_ADDR=:18760 /tmp/parleyport > /tmp/parleyport.log 2>&1 &
           pid=$!
           trap 'kill "$pid" 2>/dev/null || true' EXIT
           for i in $(seq 1 20); do
-            if body="$(curl -fsS http://127.0.0.1:38760/health)"; then
+            if body="$(curl -fsS http://127.0.0.1:18760/health)"; then
               echo "health after ${i}s: $body"
               echo "$body" | grep -q '"status":"ok"'
               grep -q "ParleyPort ·" /tmp/parleyport.log
