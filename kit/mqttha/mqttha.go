@@ -65,6 +65,10 @@ type Entity struct {
 	// above do not cover. They cannot replace the topics, the device or the
 	// unique_id.
 	Fields map[string]any
+	// Command is where, below the instance's Topic, a button is pressed, such
+	// as the topic an app's buttons had before it moved to this package.
+	// Empty means press/<Key>.
+	Command string
 }
 
 // Reading is the device as it stands now. Values holds each sensor's value by

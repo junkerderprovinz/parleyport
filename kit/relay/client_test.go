@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/junkerderprovinz/parleyport/kit/keys"
 	"github.com/junkerderprovinz/parleyport/kit/member"
 )
@@ -463,4 +464,48 @@ func TestAnAnswerNotSignedByTheTargetIsNoAnswer(t *testing.T) {
 			t.Errorf("an answer %s: err %v, want it taken %v", name, err, want)
 		}
 	}
+}
+
+// A member of an app's version from before it moved to this package seals its
+// announce under the same frame key but goes by an id of another shape.
+func TestAnOlderMemberOnTheKeyIsNamedApart(t *testing.T) {
+	addr, _ := relayOn(t, "127.0.0.1:0")
+	const key = "shared-relay-test-key-0123456789ab"
+	alpha := startClient(t, addr, key, alphaID, nil)
+	waitFor(t, "alpha to connect", alpha.Connected)
+
+	const older = "0123456789abcdef0123456789abcdef"
+	conn := dialOlder(t, "ws://"+addr+connectPath, key, older, testFrameKey)
+	waitFor(t, "alpha to name the older member", func() bool {
+		o := alpha.Older()
+		return len(o) == 1 && o[0].InstanceID == older && o[0].Name == "attic"
+	})
+	if len(alpha.Siblings()) != 0 {
+		t.Fatalf("the older member is listed as a sibling: %+v", alpha.Siblings())
+	}
+
+	// A connection on the key whose announce does not open is somebody else.
+	dialOlder(t, "ws://"+addr+connectPath, key, strings.Repeat("e", 32), []byte("0123456789abcdef0123456789abcdef"))
+	_ = conn.CloseNow()
+	waitFor(t, "alpha to see the older member go and name nobody else", func() bool { return len(alpha.Older()) == 0 })
+}
+
+// dialOlder connects the way an older app did: an id of its own shape and its
+// name sealed under frameKey, without a proof.
+func dialOlder(t *testing.T, url, key, id string, frameKey []byte) *websocket.Conn {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), wsTimeout)
+	defer cancel()
+	c, _, err := websocket.Dial(ctx, url, nil)
+	if err != nil {
+		t.Fatalf("dial %s as %s: %v", url, id, err)
+	}
+	t.Cleanup(func() { _ = c.CloseNow() })
+	readFrame(t, c, TypeChallenge)
+	sealed, err := SealIdentity(frameKey, id, Identity{Name: "attic"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFrame(t, c, TypeHello, Hello{Key: key, Announce: Announce{InstanceID: id, Sealed: sealed}})
+	return c
 }

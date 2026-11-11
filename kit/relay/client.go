@@ -118,8 +118,11 @@ type Client struct {
 	self     Announce
 	conn     *websocket.Conn
 	siblings map[string]Announce
-	pending  map[string]*waiting
-	started  bool
+	// older holds the announces on the key that open under the frame key
+	// but carry an id no member of this protocol goes by.
+	older   map[string]Announce
+	pending map[string]*waiting
+	started bool
 
 	// inbound is the read loop's state, moved when bytes last came in.
 	inbound atomic.Int32
@@ -175,6 +178,7 @@ func NewClient(opts ClientOptions) (*Client, error) {
 		minBackoff: minBackoff,
 		maxBackoff: maxBackoff,
 		siblings:   map[string]Announce{},
+		older:      map[string]Announce{},
 		pending:    map[string]*waiting{},
 		stop:       make(chan struct{}),
 		done:       make(chan struct{}),
@@ -234,6 +238,33 @@ func (c *Client) Connected() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.conn != nil
+}
+
+func (c *Client) noteOlder(a Announce) {
+	c.mu.Lock()
+	_, known := c.older[a.InstanceID]
+	if !known && len(c.older) >= maxClientsPerKey {
+		c.mu.Unlock()
+		return
+	}
+	c.older[a.InstanceID] = a
+	c.mu.Unlock()
+	c.changed()
+}
+
+// Older lists the connections on the key that seal their announce under the
+// frame key but go by an id of another shape, such as an app's version from
+// before its group moved to this package. They hold the phrase and cannot be
+// called.
+func (c *Client) Older() []Announce {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]Announce, 0, len(c.older))
+	for _, a := range c.older {
+		out = append(out, a)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].InstanceID < out[j].InstanceID })
+	return out
 }
 
 // Siblings returns the instances visible through the relay, sorted by id. It
@@ -479,8 +510,12 @@ func (c *Client) handle(ctx context.Context, conn *websocket.Conn, frame []byte)
 		if env.Into(&a) != nil {
 			return
 		}
+		wire := a
 		a = openAnnounce(c.frameKey, a)
 		if !listable(a) {
+			if _, err := OpenIdentity(c.frameKey, wire.InstanceID, wire.Sealed); err == nil && !a.Client && a.InstanceID != "" {
+				c.noteOlder(a)
+			}
 			return
 		}
 		// An honest relay never introduces more siblings than it admits on
@@ -501,6 +536,7 @@ func (c *Client) handle(ctx context.Context, conn *websocket.Conn, frame []byte)
 		}
 		c.mu.Lock()
 		delete(c.siblings, p.InstanceID)
+		delete(c.older, p.InstanceID)
 		c.mu.Unlock()
 		c.changed()
 	case TypeProxyResponse:
@@ -597,6 +633,7 @@ func (c *Client) disconnected() {
 	c.mu.Lock()
 	c.conn = nil
 	c.siblings = map[string]Announce{}
+	c.older = map[string]Announce{}
 	calls := make([]*waiting, 0, len(c.pending))
 	for id, w := range c.pending {
 		calls = append(calls, w)

@@ -80,8 +80,12 @@ type session struct {
 	retained  map[string]bool
 	state     []byte
 	buttons   map[string]bool
-	pending   map[string]bool
-	pressed   []time.Time
+	commands  map[string]string
+	// subscribed are the command topics of their own the buttons are
+	// subscribed on since the last connect.
+	subscribed map[string]bool
+	pending    map[string]bool
+	pressed    []time.Time
 }
 
 // goUnlessStopped runs f in the session, unless it has stopped already.
@@ -197,7 +201,21 @@ func (b *Bridge) refresh(ctx context.Context, s *session) error {
 		b.log.Warn("a sensor's options lack its value, so it shows unknown", "sensor", key, "value", v)
 	}
 
-	// Publishing under the lock keeps a removal from overtaking it.
+	for _, topic := range b.publish(s, a) {
+		t := s.client.Subscribe(topic, 1, func(_ mqtt.Client, m mqtt.Message) { b.onPress(s, m) })
+		if t.WaitTimeout(waitFor) && t.Error() == nil {
+			s.mu.Lock()
+			s.subscribed[topic] = true
+			s.mu.Unlock()
+		}
+	}
+	return nil
+}
+
+// publish sends what changed of a and returns the command topics of their
+// own the buttons still need a subscription on. Publishing under the lock
+// keeps a removal from overtaking it.
+func (b *Bridge) publish(s *session, a announcement) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.stopped {
@@ -220,20 +238,28 @@ func (b *Bridge) refresh(ctx context.Context, s *session) error {
 		s.client.Publish(s.cfg.stateTopic(), 1, true, a.state)
 		s.state = a.state
 	}
-	s.buttons = a.buttons
-	return nil
+	s.buttons, s.commands = a.buttons, a.commands
+	var subscribe []string
+	for topic := range a.commands {
+		if !strings.HasPrefix(topic, s.cfg.Topic+"/press/") && !s.subscribed[topic] {
+			subscribe = append(subscribe, topic)
+		}
+	}
+	return subscribe
 }
 
 func (b *Bridge) connect(cfg Config) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &session{
-		cfg:       cfg,
-		ctx:       ctx,
-		cancel:    cancel,
-		published: map[string][]byte{},
-		retained:  map[string]bool{},
-		buttons:   map[string]bool{},
-		pending:   map[string]bool{},
+		cfg:        cfg,
+		ctx:        ctx,
+		cancel:     cancel,
+		published:  map[string][]byte{},
+		retained:   map[string]bool{},
+		buttons:    map[string]bool{},
+		commands:   map[string]string{},
+		subscribed: map[string]bool{},
+		pending:    map[string]bool{},
 	}
 	scheme := "tcp://"
 	if cfg.Broker.TLS {
@@ -290,6 +316,7 @@ func (b *Bridge) onConnect(s *session, c mqtt.Client) {
 	// A broker without persistence has forgotten the retained messages, so
 	// a reconnect sends everything again.
 	s.published, s.state = map[string][]byte{}, nil
+	s.subscribed = map[string]bool{}
 	c.Publish(s.cfg.availabilityTopic(), 1, true, "online")
 	s.mu.Unlock()
 
@@ -339,7 +366,9 @@ func (b *Bridge) setStatus(s *session, st Status) {
 }
 
 func (b *Bridge) onPress(s *session, m mqtt.Message) {
-	key, ok := strings.CutPrefix(m.Topic(), s.cfg.Topic+"/press/")
+	s.mu.Lock()
+	key, ok := s.commands[m.Topic()]
+	s.mu.Unlock()
 	if !ok || string(m.Payload()) != pressPayload {
 		return
 	}
@@ -418,7 +447,13 @@ func (b *Bridge) remove(s *session) error {
 	// Echoes of the clears to our own subscriptions would still be unread
 	// when the connection closes. The socket then resets, the broker never
 	// sees the DISCONNECT and publishes the will onto the cleared topic.
-	unsub := s.client.Unsubscribe(s.cfg.pressTopic("+"), s.cfg.discoveryFilter())
+	s.mu.Lock()
+	filters := []string{s.cfg.pressTopic("+"), s.cfg.discoveryFilter()}
+	for topic := range s.subscribed {
+		filters = append(filters, topic)
+	}
+	s.mu.Unlock()
+	unsub := s.client.Unsubscribe(filters...)
 	if !unsub.WaitTimeout(time.Until(deadline)) || unsub.Error() != nil {
 		return ErrNotConnected
 	}
