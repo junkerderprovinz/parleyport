@@ -287,7 +287,7 @@ func (f *Fortress) serveShell(w http.ResponseWriter, r *http.Request, t *ticket,
 	h.Set("Cache-Control", "no-store")
 	_ = shellPage.Execute(w, map[string]any{
 		"App": cmp.Or(a.App.Name, a.App.ID), "Device": m.Device, "ID": t.member, "Print": short,
-		"Icon": template.URL(a.App.Icon), "Back": cmp.Or(t.back, "/"), "Frame": OpenPath + t.id + "/",
+		"Icon": template.URL(a.App.Icon), "Back": cmp.Or(t.back, "/"), "Frame": t.id + "/",
 	})
 }
 
@@ -369,7 +369,7 @@ func (f *Fortress) tunnel(w http.ResponseWriter, r *http.Request, t *ticket, pat
 	if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
 		header.Set("Accept-Encoding", "gzip")
 	}
-	prefix := OpenPath + t.id
+	prefix := tabPath(r, t)
 	ask := uiAsk{Method: r.Method, Target: target, Header: header, Jar: t.jar, Prefix: prefix + "/"}
 	status, out, err := f.group.Call(r.Context(), t.member, http.MethodPost, uiPath, ask.encode(body))
 	switch {
@@ -441,6 +441,17 @@ func refusedCode(status int, body []byte) (string, int) {
 		return "removed", http.StatusGone
 	}
 	return "unreachable", http.StatusBadGateway
+}
+
+// tabPath is where the browser sees the tab: OpenPath and the ticket, behind
+// the path prefix a reverse proxy in front of the app names. A forged prefix
+// only misleads the browser that sent it.
+func tabPath(r *http.Request, t *ticket) string {
+	base := strings.TrimSuffix(r.Header.Get("X-Forwarded-Prefix"), "/")
+	if base != "" && !prefixPattern.MatchString(base+"/") {
+		base = ""
+	}
+	return base + OpenPath + t.id
 }
 
 // within places a redirect the opened app answered under the tab's prefix.

@@ -419,7 +419,7 @@ func TestTheShellNeedsTheOpenersOwnSignIn(t *testing.T) {
 	}
 	shell := br.get(path, "Cookie", "own=own")
 	html := read(t, shell)
-	if shell.StatusCode != http.StatusOK || !strings.Contains(html, `<iframe`) || !strings.Contains(html, `src="`+path+`/"`) ||
+	if shell.StatusCode != http.StatusOK || !strings.Contains(html, `<iframe`) || !strings.Contains(html, `src="`+strings.TrimPrefix(path, OpenPath)+`/"`) ||
 		!strings.Contains(html, `sandbox="allow-scripts allow-forms allow-popups allow-downloads"`) || !strings.Contains(html, "App bravo") || !strings.Contains(html, "bravo-1") {
 		t.Fatalf("shell: %d %s", shell.StatusCode, html)
 	}
@@ -607,5 +607,28 @@ func TestUIAskRoundTrips(t *testing.T) {
 	}
 	if _, _, err := decodeAsk([]byte{0, 0, 0, 200, '{'}); err == nil {
 		t.Fatal("an ask shorter than it says was read")
+	}
+}
+
+func TestATabBehindAProxyPrefixKeepsThePrefix(t *testing.T) {
+	a, b, app := opening(t, true)
+	path, err := a.f.Open(ctx(t), visit(a, b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	br := browse(t, a)
+	if res := br.get(path+"/", "X-Forwarded-Prefix", "/loader"); res.StatusCode != http.StatusOK {
+		t.Fatalf("page: %d", res.StatusCode)
+	}
+	if got := app.last().Header.Get("X-Forwarded-Prefix"); got != "/loader"+path+"/" {
+		t.Fatalf("the opened app sees the tab at %q", got)
+	}
+	res := br.get(path+"/away?to=/private", "X-Forwarded-Prefix", "/loader/")
+	if loc := res.Header.Get("Location"); loc != "/loader"+path+"/private" {
+		t.Fatalf("a redirect behind the prefix went to %q", loc)
+	}
+	br.get(path+"/", "X-Forwarded-Prefix", `/"><x`)
+	if got := app.last().Header.Get("X-Forwarded-Prefix"); got != path+"/" {
+		t.Fatalf("a prefix that is no path reached the opened app as %q", got)
 	}
 }

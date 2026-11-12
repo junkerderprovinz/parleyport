@@ -516,7 +516,7 @@ func (f *Fortress) tunnelStream(w http.ResponseWriter, r *http.Request, t *ticke
 	}
 	defer t.unstream()
 	header := only(r.Header, headersIn)
-	ask := &uiAsk{Method: http.MethodGet, Target: target, Header: header, Jar: t.jar, Prefix: OpenPath + t.id + "/"}
+	ask := &uiAsk{Method: http.MethodGet, Target: target, Header: header, Jar: t.jar, Prefix: tabPath(r, t) + "/"}
 	first, err := f.streamCall(r.Context(), t.member, streamOp{Op: "open", Socket: socket, Ask: ask}, nil)
 	if err != nil || first.Stream == "" {
 		code, status := "unreachable", http.StatusBadGateway
