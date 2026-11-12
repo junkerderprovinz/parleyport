@@ -127,7 +127,10 @@ func TestOnlyAMemberFromBeforeTheChangeGetsTheNewKeys(t *testing.T) {
 	// A member taken out before, and one that holds the old phrase but came
 	// only after the change, both get nothing.
 	late := openKeysOnly(t, url, "watcher", "watcher-late", Domain.Keys(testSecret))
-	waitFor(t, "the late plugin to see alpha", func() bool { _, ok := memberOf(late.f, a.id); return ok })
+	waitFor(t, "alpha to answer the late plugin", func() bool {
+		status, _, _ := late.f.group.Call(ctx(t), a.id, http.MethodGet, movedPath, nil)
+		return status != 0
+	})
 	for _, n := range []*node{out, late} {
 		status, body, err := n.f.group.Call(ctx(t), a.id, http.MethodGet, movedPath, nil)
 		if err == nil && status == http.StatusOK {
@@ -213,5 +216,64 @@ func TestTheOldPhraseClosesThirtyDaysAfterTheChange(t *testing.T) {
 	a.f = reopen(t, a, setup{relay: url, secret: secret, moved: testSecret})
 	if a.f.old != nil {
 		t.Error("alpha still answers on the old phrase 30 days after the change")
+	}
+}
+
+func TestANewcomerOnTheOldPhraseLearnsNobody(t *testing.T) {
+	url := relayServer(t)
+	a := open(t, "alpha", "alpha-1", setup{relay: url})
+	b := open(t, "bravo", "bravo-1", setup{relay: url})
+	waitFor(t, "alpha to see bravo", func() bool { return len(a.f.Members()) == 1 })
+	changePhrase(t, url, a, b)
+
+	late := open(t, "charlie", "charlie-1", setup{relay: url})
+	waitFor(t, "alpha to refuse charlie on the old phrase", func() bool {
+		status, _, _ := late.f.group.Call(ctx(t), a.id, http.MethodGet, aboutPath, nil)
+		return status == http.StatusForbidden
+	})
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, m := range late.f.Members() {
+			if m.Device != "" || m.ID == a.id {
+				t.Fatalf("charlie, new on the old phrase, lists %+v", m)
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if _, err := late.f.NewKeys(ctx(t)); err == nil {
+		t.Error("charlie got the new keys")
+	}
+}
+
+func TestAMemberTakenOutAfterTheChangeGetsNoNewKeys(t *testing.T) {
+	url := relayServer(t)
+	a := open(t, "alpha", "alpha-1", setup{relay: url})
+	b := open(t, "bravo", "bravo-1", setup{relay: url})
+	p := openKeysOnly(t, url, "watcher", "watcher-1", Domain.Keys(testSecret))
+	for _, n := range []*node{a, b, p} {
+		waitFor(t, n.name+" to see everybody", func() bool { return len(n.f.Members()) == 2 })
+	}
+	meet(t, a, p)
+	if err := p.f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	changePhrase(t, url, a, b)
+	if err := a.f.Remove(p.id); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "bravo to take the plugin out", func() bool { _, ok := memberOf(b.f, p.id); return !ok })
+
+	p.f = reopenKeysOnly(t, p, url, Domain.Keys(testSecret))
+	for _, n := range []*node{a, b} {
+		waitFor(t, n.name+" to answer the plugin", func() bool {
+			status, _, _ := p.f.group.Call(ctx(t), n.id, http.MethodGet, movedPath, nil)
+			return status != 0
+		})
+		if status, body, _ := p.f.group.Call(ctx(t), n.id, http.MethodGet, movedPath, nil); status == http.StatusOK {
+			t.Errorf("%s handed the plugin, taken out, %s", n.name, body)
+		}
+	}
+	if _, err := p.f.NewKeys(ctx(t)); err == nil {
+		t.Error("the plugin, taken out, got the new keys")
 	}
 }

@@ -223,6 +223,7 @@ var (
 	// kindNotTakenRefusal answers a device of a kind the app keeps out of its
 	// group, such as a phone where only instances pair.
 	kindNotTakenRefusal = refuse(http.StatusForbidden, "memberKindRefused", "this group takes no devices of this kind")
+	strangerRefusal     = refuse(http.StatusForbidden, "groupClosed", "this instance takes no new members on this phrase")
 )
 
 // memberLimits counts what each member key has in flight and when keys were
@@ -364,10 +365,16 @@ func (g *Group) admit(call relay.ProxyCall, source string, vouched bool, now tim
 			st.Members[call.From] = rec
 			g.dirty = true
 		}
-		if !rec.Approved && !g.byPhrase {
+		switch {
+		case !rec.Approved && g.vouchedOnly:
+			return Caller{}, strangerRefusal
+		case !rec.Approved && !g.byPhrase:
 			return Caller{}, pendingRefusal
 		}
 		return Caller{ID: call.From, Kind: rec.Kind, Key: rec.Key}, nil
+	}
+	if g.vouchedOnly && !vouched {
+		return Caller{}, strangerRefusal
 	}
 	for _, rec := range st.Members {
 		if bytes.Equal(rec.Key, call.Key) {
@@ -477,7 +484,7 @@ func (g *Group) pinAnswerLocked(id string, key []byte, vouched bool) (record, bo
 	now := time.Now()
 	_, removed := st.Removed[id]
 	_, revoked := st.Revoked[hex.EncodeToString(key)]
-	if removed || revoked || !claimFits(id, member.KindInstance, key) || len(st.Members) >= maxPinned ||
+	if removed || revoked || g.vouchedOnly && !vouched || !claimFits(id, member.KindInstance, key) || len(st.Members) >= maxPinned ||
 		(!g.byPhrase && waitingLocked(st) >= maxWaiting) {
 		return record{}, false
 	}

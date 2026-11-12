@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"time"
 
@@ -52,7 +53,19 @@ func (r *Refusal) Error() string {
 var (
 	ErrPermissionOff = errors.New("fortress: the permission for this action is switched off")
 	ErrNoSuchAction  = errors.New("fortress: the app does not offer this action")
+	// ErrNotUsed is a call from an app that does not list the action in
+	// Config.Uses, for which there is no permission to switch on. It is an
+	// ErrPermissionOff as well.
+	ErrNotUsed error = notUsed{}
 )
+
+type notUsed struct{}
+
+func (notUsed) Error() string {
+	return "fortress: the app does not say it uses this action, so no permission lets it run it"
+}
+
+func (notUsed) Is(target error) bool { return target == ErrPermissionOff }
 
 // refusal reads the answer status with body as an error: the fortress's own
 // codes and the group's, which name the code apart from the text.
@@ -73,6 +86,8 @@ func refusal(status int, body []byte) error {
 		return ErrPermissionOff
 	case "no_such_action":
 		return ErrNoSuchAction
+	case "not_used":
+		return ErrNotUsed
 	case "stream_broken":
 		return group.ErrStreamBroken
 	}
@@ -114,13 +129,17 @@ func (f *Fortress) refused(id string, status int, body []byte) error {
 
 // serveAction runs action for the member caller, if its app may.
 func (f *Fortress) serveAction(w http.ResponseWriter, r *http.Request, caller, action string) {
-	a, ok := f.actions[action]
-	if !ok {
+	if !slices.Contains(f.about.Actions, action) {
 		writeError(w, http.StatusNotFound, "no_such_action")
 		return
 	}
 	from, ok := f.allowed(w, r, caller, action)
 	if !ok {
+		return
+	}
+	a, ok := f.actions[action]
+	if !ok {
+		writeError(w, http.StatusMisdirectedRequest, "stream_only")
 		return
 	}
 	body, err := io.ReadAll(r.Body)
@@ -142,17 +161,22 @@ func (f *Fortress) serveAction(w http.ResponseWriter, r *http.Request, caller, a
 }
 
 // allowed is the member caller as an action runs for it, once its app may run
-// action here. Otherwise it answers w with why not.
+// action here. Otherwise it answers w with why not. An app runs only what it
+// lists in Config.Uses, since Permissions has a switch for nothing else.
 func (f *Fortress) allowed(w http.ResponseWriter, r *http.Request, caller, action string) (Caller, bool) {
-	app := f.appOf(caller)
-	if app == "" && f.describe(r.Context(), caller, time.Now()) {
-		app = f.appOf(caller)
+	a := f.aboutOf(caller)
+	if (a.App.ID == "" || !slices.Contains(a.Uses, action)) && f.describe(r.Context(), caller, time.Now()) {
+		a = f.aboutOf(caller)
 	}
-	if app == "" {
+	app := a.App.ID
+	switch {
+	case app == "":
 		writeError(w, http.StatusForbidden, "unknown_app")
 		return Caller{}, false
-	}
-	if !f.permitted(app, action) {
+	case !slices.Contains(a.Uses, action):
+		writeError(w, http.StatusForbidden, "not_used")
+		return Caller{}, false
+	case !f.permitted(app, action):
 		writeError(w, http.StatusForbidden, "permission_off")
 		return Caller{}, false
 	}

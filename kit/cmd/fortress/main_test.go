@@ -296,7 +296,7 @@ func TestAPluginFollowsAChangedPhraseAsTheSameMember(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if code, _, stderr := cli(t, words+"\n", "join", "-dir", dir, "-app", "watcher", "-name", "tower", "-relay", url); code != 0 {
+	if code, _, stderr := cli(t, words+"\n", "join", "-dir", dir, "-app", "watcher", "-name", "tower", "-relay", url, "-uses", "files.drop"); code != 0 {
 		t.Fatalf("join: %d %s", code, stderr)
 	}
 	if code, _, stderr := cli(t, "", "members", "-dir", dir, "-wait", "3s"); code != 0 {

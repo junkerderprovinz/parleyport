@@ -155,6 +155,10 @@ type Config struct {
 	// runs in. Such an instance is approved on its first signed call or
 	// answer, without anybody approving it. A member taken out stays out.
 	Vouch func(id string, key ed25519.PublicKey) bool
+	// VouchedOnly serves the instances Vouch vouches for and nobody else,
+	// whatever the phrase says: a stranger is refused without its key being
+	// pinned, and stops listing this instance once it has been refused.
+	VouchedOnly bool
 }
 
 // State is where a member stands with this instance.
@@ -224,28 +228,29 @@ func (e *StatusError) Error() string {
 
 // Group is this instance's side of its group.
 type Group struct {
-	serve     http.Handler
-	stream    http.Handler
-	upload    http.Handler
-	self      string
-	identity  member.Identity
-	signing   keys.Signing
-	frameKey  []byte
-	peerAuth  []byte
-	headers   headers
-	info      Self
-	store     Store
-	lan       *lan.Service
-	client    *relay.Client
-	onRemoved func()
-	onRemove  func(id string)
-	onChange  func()
-	vouch     func(string, ed25519.PublicKey) bool
-	byPhrase  bool
-	kinds     []member.Kind
-	ports     []string
-	maxAnswer int
-	maxRelay  int
+	serve       http.Handler
+	stream      http.Handler
+	upload      http.Handler
+	self        string
+	identity    member.Identity
+	signing     keys.Signing
+	frameKey    []byte
+	peerAuth    []byte
+	headers     headers
+	info        Self
+	store       Store
+	lan         *lan.Service
+	client      *relay.Client
+	onRemoved   func()
+	onRemove    func(id string)
+	onChange    func()
+	vouch       func(string, ed25519.PublicKey) bool
+	byPhrase    bool
+	vouchedOnly bool
+	kinds       []member.Kind
+	ports       []string
+	maxAnswer   int
+	maxRelay    int
 
 	replay   *relay.ReplayGuard
 	limits   *memberLimits
@@ -267,11 +272,13 @@ type Group struct {
 	addrs    map[string]*remoteAddr
 	failed   map[string]time.Time
 	awaiting map[string]time.Time
-	heard    map[string]bool
-	greeted  map[string]time.Time
-	synced   map[string]time.Time
-	arrived  map[string]time.Time
-	swept    time.Time
+	// strangerTo are the instances that refused this one as a stranger.
+	strangerTo map[string]bool
+	heard      map[string]bool
+	greeted    map[string]time.Time
+	synced     map[string]time.Time
+	arrived    map[string]time.Time
+	swept      time.Time
 
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -320,47 +327,49 @@ func Open(cfg Config, serve http.Handler) (*Group, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	g := &Group{
-		serve:     serve,
-		stream:    cfg.Stream,
-		upload:    cfg.Upload,
-		self:      cfg.Identity.ID(),
-		identity:  cfg.Identity,
-		signing:   signing,
-		frameKey:  bytes.Clone(set.Frame),
-		peerAuth:  bytes.Clone(set.PeerAuth),
-		headers:   headersFor(cfg.Domain),
-		info:      cfg.Self,
-		store:     cfg.Store,
-		lan:       cfg.LAN,
-		onRemoved: cfg.OnRemoved,
-		onRemove:  cfg.OnRemove,
-		onChange:  cfg.OnChange,
-		vouch:     cfg.Vouch,
-		byPhrase:  cfg.JoinByPhrase,
-		kinds:     slices.Clone(cfg.Kinds),
-		ports:     portNames(cfg.Ports),
-		maxAnswer: cmp.Or(cfg.MaxAnswerBytes, maxAnswerBytes),
-		maxRelay:  min(cmp.Or(cfg.MaxRelayAnswerBytes, maxAnswerBytes), relay.MaxAnswerBytes),
-		replay:    relay.NewReplayGuard(),
-		limits:    newMemberLimits(),
-		hc:        directClient(),
-		slots:     make(chan struct{}, maxDirectCalls),
-		streams:   make(chan struct{}, maxStreams),
-		uploads:   make(chan struct{}, maxStreams),
-		probing:   make(chan struct{}, maxProbeBacks),
-		kick:      make(chan struct{}, 1),
-		stirred:   make(chan struct{}, 1),
-		st:        st,
-		dirty:     moved,
-		addrs:     map[string]*remoteAddr{},
-		failed:    map[string]time.Time{},
-		awaiting:  map[string]time.Time{},
-		heard:     map[string]bool{},
-		greeted:   map[string]time.Time{},
-		synced:    map[string]time.Time{},
-		arrived:   map[string]time.Time{},
-		ctx:       ctx,
-		cancel:    cancel,
+		serve:       serve,
+		stream:      cfg.Stream,
+		upload:      cfg.Upload,
+		self:        cfg.Identity.ID(),
+		identity:    cfg.Identity,
+		signing:     signing,
+		frameKey:    bytes.Clone(set.Frame),
+		peerAuth:    bytes.Clone(set.PeerAuth),
+		headers:     headersFor(cfg.Domain),
+		info:        cfg.Self,
+		store:       cfg.Store,
+		lan:         cfg.LAN,
+		onRemoved:   cfg.OnRemoved,
+		onRemove:    cfg.OnRemove,
+		onChange:    cfg.OnChange,
+		vouch:       cfg.Vouch,
+		byPhrase:    cfg.JoinByPhrase,
+		vouchedOnly: cfg.VouchedOnly,
+		kinds:       slices.Clone(cfg.Kinds),
+		ports:       portNames(cfg.Ports),
+		maxAnswer:   cmp.Or(cfg.MaxAnswerBytes, maxAnswerBytes),
+		maxRelay:    min(cmp.Or(cfg.MaxRelayAnswerBytes, maxAnswerBytes), relay.MaxAnswerBytes),
+		replay:      relay.NewReplayGuard(),
+		limits:      newMemberLimits(),
+		hc:          directClient(),
+		slots:       make(chan struct{}, maxDirectCalls),
+		streams:     make(chan struct{}, maxStreams),
+		uploads:     make(chan struct{}, maxStreams),
+		probing:     make(chan struct{}, maxProbeBacks),
+		kick:        make(chan struct{}, 1),
+		stirred:     make(chan struct{}, 1),
+		st:          st,
+		dirty:       moved,
+		addrs:       map[string]*remoteAddr{},
+		failed:      map[string]time.Time{},
+		awaiting:    map[string]time.Time{},
+		strangerTo:  map[string]bool{},
+		heard:       map[string]bool{},
+		greeted:     map[string]time.Time{},
+		synced:      map[string]time.Time{},
+		arrived:     map[string]time.Time{},
+		ctx:         ctx,
+		cancel:      cancel,
 	}
 	// A stream takes as long as it takes; its context bounds it.
 	g.streamer = &http.Client{Transport: g.hc.Transport, CheckRedirect: g.hc.CheckRedirect}
@@ -677,7 +686,7 @@ func (g *Group) look(now time.Time) map[string]*Member {
 		}
 	}
 	for id, m := range view {
-		if _, gone := g.st.Removed[id]; gone || id == g.self {
+		if _, gone := g.st.Removed[id]; gone || id == g.self || g.strangerTo[id] {
 			delete(view, id)
 			continue
 		}

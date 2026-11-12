@@ -68,16 +68,8 @@ func (f *Fortress) readEvents(ctx context.Context, id string, q eventsQuery) (ev
 	return p, err
 }
 
-// serveEvents answers EventsAction from Config.Events, for a member whose app
-// said it reads events. Any other app would read them without a switch in
-// Permissions to stop it.
-func (f *Fortress) serveEvents(_ context.Context, from Caller, body []byte) ([]byte, error) {
-	f.mu.Lock()
-	uses := f.book.Members[from.ID].Uses
-	f.mu.Unlock()
-	if !slices.Contains(uses, EventsAction) {
-		return nil, &Refusal{Code: "permission_off"}
-	}
+// serveEvents answers EventsAction from Config.Events.
+func (f *Fortress) serveEvents(_ context.Context, _ Caller, body []byte) ([]byte, error) {
 	var q eventsQuery
 	if len(body) > 0 && json.Unmarshal(body, &q) != nil {
 		return nil, &Refusal{Code: "bad_request"}
