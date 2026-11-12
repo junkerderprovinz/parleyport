@@ -31,6 +31,8 @@ type Membership struct {
 	// LAN finds the members on this network too.
 	LAN  bool
 	Uses []string
+	// Icon is the app's logo as status.IconFromSVG writes it.
+	Icon string
 }
 
 // membershipFormat is what the directory keeps: the member key and the keys
@@ -41,6 +43,7 @@ type membershipFormat struct {
 	Relay    string   `json:"relay,omitempty"`
 	LAN      bool     `json:"lan,omitempty"`
 	Uses     []string `json:"uses,omitempty"`
+	Icon     string   `json:"icon,omitempty"`
 	Seed     string   `json:"seed"`
 	Group    string   `json:"group"`
 	Frame    string   `json:"frame"`
@@ -67,7 +70,7 @@ func Join(dir string, secret []byte, m Membership) error {
 		}
 		seed = hex.EncodeToString(id.Seed())
 	}
-	s := membershipFormat{App: m.App, Name: m.Device, Relay: m.Relay, LAN: m.LAN, Uses: m.Uses, Seed: seed}
+	s := membershipFormat{App: m.App, Name: m.Device, Relay: m.Relay, LAN: m.LAN, Uses: m.Uses, Icon: m.Icon, Seed: seed}
 	s.setKeys(set)
 	// Opening it once, off the network, checks the app id and the actions
 	// before anything is written.
@@ -177,7 +180,7 @@ func (s membershipFormat) config(dir string) (Config, error) {
 		return Config{}, errors.New("the keys are incomplete")
 	}
 	cfg := Config{
-		App:      App{ID: s.App, Name: s.App},
+		App:      App{ID: s.App, Name: s.App, Icon: s.Icon},
 		Keys:     set,
 		Identity: id,
 		Self:     group.Self{Name: s.Name, Deployment: "plugin"},

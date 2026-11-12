@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/netip"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,6 +33,8 @@ func TestOpenRefusesAnIncompleteConfig(t *testing.T) {
 			c.Actions = []Action{{Name: "files.drop"}}
 		},
 		"a use named badly":                  func(c *Config) { c.Uses = []string{"run"} },
+		"an icon that is no SVG":             func(c *Config) { c.App.Icon = "data:image/png;base64,AAAA" },
+		"a host name too long":               func(c *Config) { c.Host = strings.Repeat("h", 65) },
 		"a pairing with no store":            func(c *Config) { c.Pairing.Group.Store = nil },
 		"keys but no secret for the pairing": func(c *Config) { c.Secret, c.Keys = nil, Domain.Keys(testSecret) },
 		"half the keys": func(c *Config) {
@@ -67,6 +70,39 @@ func TestMembersOfTwoAppsSeeEachOther(t *testing.T) {
 	}
 	if _, paired := pairedWith(a.f.Pairing(), b.id); paired {
 		t.Error("alpha's own pairing lists an instance of another app")
+	}
+}
+
+func TestAMemberShowsItsLogoAndServerEvenWhenAway(t *testing.T) {
+	url := relayServer(t)
+	a := open(t, "alpha", "alpha-1", setup{relay: url})
+	b := open(t, "bravo", "My bravo", setup{relay: url, icon: testIcon(t), host: "Tower"})
+	meet(t, a, b)
+
+	got, _ := memberOf(a.f, b.id)
+	if got.App.Icon != testIcon(t) || got.Host != "Tower" || got.Device != "My bravo" {
+		t.Errorf("alpha lists bravo with icon %.40q on host %q as %q, want its logo on Tower as My bravo", got.App.Icon, got.Host, got.Device)
+	}
+	if err := a.f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	again := reopen(t, a, setup{})
+	if m, _ := memberOf(again, b.id); m.App.Icon != testIcon(t) || m.Host != "Tower" {
+		t.Errorf("opened again off the network, alpha lists bravo with icon %.40q on host %q", m.App.Icon, m.Host)
+	}
+}
+
+func TestAMemberWithABrokenIconOrHostIsNotTakenAtItsWord(t *testing.T) {
+	for name, a := range map[string]about{
+		"an icon that is no SVG": {App: App{ID: "bravo", Icon: "data:image/png;base64,AAAA"}},
+		"a host name too long":   {App: App{ID: "bravo"}, Host: strings.Repeat("h", 65)},
+	} {
+		if a.valid() {
+			t.Errorf("%s is taken", name)
+		}
+	}
+	if !(about{App: App{ID: "bravo", Icon: testIcon(t)}, Host: "Tower"}).valid() {
+		t.Error("a member with a logo and a host is not taken")
 	}
 }
 

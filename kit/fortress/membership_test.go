@@ -195,3 +195,17 @@ func TestAMembershipFollowsANewPhraseInItsDirectory(t *testing.T) {
 		t.Errorf("alpha lists %d members, want bravo and the plugin once", got)
 	}
 }
+
+func TestAMembershipKeepsTheLogoOfItsApp(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "fortress")
+	if err := Join(dir, testSecret, Membership{App: "alpha", Device: "cellar", Relay: "off", Icon: testIcon(t)}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(dir)
+	if err != nil || cfg.App.Icon != testIcon(t) {
+		t.Errorf("Load has the icon %.40q, %v", cfg.App.Icon, err)
+	}
+	if err := Join(dir, testSecret, Membership{App: "alpha", Device: "cellar", Relay: "off", Icon: "data:image/png;base64,AAAA"}); err == nil {
+		t.Error("Join keeps an icon that is no SVG")
+	}
+}

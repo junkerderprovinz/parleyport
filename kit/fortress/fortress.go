@@ -105,11 +105,14 @@ func validAction(name string) bool {
 }
 
 // App is the app an instance runs. ID is also the domain the app derives the
-// keys of its pairing under, so it never changes.
+// keys of its pairing under, so it never changes. Icon is the app's logo as
+// status.IconFromSVG writes it, which the members show even while the
+// instance is away.
 type App struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`
 	Version string `json:"version"`
+	Icon    string `json:"icon,omitempty"`
 }
 
 // Pairing is how the app pairs its own instances. Its keys come from the
@@ -144,7 +147,10 @@ type Config struct {
 	Identity member.Identity
 	// Self is what the other members see of this instance. Its Name is the
 	// device it runs on.
-	Self     group.Self
+	Self group.Self
+	// Host names the server the instance runs on, the same for every app
+	// there however each names itself, such as the Unraid server's name.
+	Host     string
 	Relay    group.RelayMode
 	RelayURL string
 	// LAN is where the fortress announces this instance, a service on
@@ -228,6 +234,10 @@ func (cfg Config) check() error {
 	switch {
 	case !validApp(cfg.App.ID):
 		return fmt.Errorf("fortress: %q is no app id", cfg.App.ID)
+	case cfg.App.Icon != "" && status.CheckIcon(cfg.App.Icon) != nil:
+		return fmt.Errorf("fortress: the icon: %w", status.CheckIcon(cfg.App.Icon))
+	case len(cfg.Host) > maxText:
+		return errors.New("fortress: the host name is too long")
 	case len(cfg.Secret) == 0 && !cfg.Keys.Complete():
 		return errors.New("fortress: no secret and no complete keys")
 	case len(cfg.Secret) == 0 && cfg.Pairing != nil:
@@ -277,6 +287,8 @@ type Member struct {
 	App        App
 	Device     string
 	Deployment string
+	// Host is the server it said it runs on, empty until it said so.
+	Host string
 	// Address is where its web interface is.
 	Address string
 	State   group.State
@@ -369,7 +381,7 @@ func Open(cfg Config) (*Fortress, error) {
 	f := &Fortress{
 		app:       cfg.App,
 		self:      cfg.Identity.ID(),
-		about:     about{App: cfg.App, Uses: cfg.Uses},
+		about:     about{App: cfg.App, Host: cfg.Host, Uses: cfg.Uses},
 		actions:   map[string]Action{},
 		store:     store,
 		keeper:    cfg.Keeper,
@@ -533,7 +545,7 @@ func (f *Fortress) Members() []Member {
 		}
 		a := f.book.Members[m.ID]
 		out = append(out, Member{
-			ID: m.ID, Kind: m.Kind, App: a.App, Device: m.Name, Deployment: m.Deployment, Address: m.Address,
+			ID: m.ID, Kind: m.Kind, App: a.App, Device: m.Name, Deployment: m.Deployment, Host: a.Host, Address: m.Address,
 			State: m.State, Direct: m.Direct, Relay: m.Relay, LastSeen: m.LastSeen,
 			Actions: append([]string(nil), a.Actions...), Uses: append([]string(nil), a.Uses...),
 		})

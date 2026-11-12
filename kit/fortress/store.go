@@ -9,11 +9,13 @@ import (
 
 	"github.com/junkerderprovinz/parleyport/kit/group"
 	"github.com/junkerderprovinz/parleyport/kit/member"
+	"github.com/junkerderprovinz/parleyport/kit/status"
 )
 
 // about is what a member says it is.
 type about struct {
 	App     App      `json:"app"`
+	Host    string   `json:"host,omitempty"`
 	Actions []string `json:"actions,omitempty"`
 	Uses    []string `json:"uses,omitempty"`
 	// Moved says the member answers on a phrase the fortress has left, and
@@ -24,7 +26,8 @@ type about struct {
 }
 
 func (a about) valid() bool {
-	if !validApp(a.App.ID) || len(a.App.Name) > maxText || len(a.App.Version) > maxText ||
+	if !validApp(a.App.ID) || len(a.App.Name) > maxText || len(a.App.Version) > maxText || len(a.Host) > maxText ||
+		a.App.Icon != "" && status.CheckIcon(a.App.Icon) != nil ||
 		len(a.Actions) > maxNames || len(a.Uses) > maxNames {
 		return false
 	}

@@ -2,7 +2,7 @@
 // shell, take part in a fortress: join it with the phrase, list the members,
 // read their status and ask one of them to run an action.
 //
-//	fortress join -dir DIR -app ID -name DEVICE [-relay URL|off] [-lan] [-uses a.b,c.d] < phrase
+//	fortress join -dir DIR -app ID -name DEVICE [-relay URL|off] [-lan] [-uses a.b,c.d] [-icon logo.svg] < phrase
 //	fortress members -dir DIR [-json] [-wait 5s]
 //	fortress status -dir DIR [-json] [-lang de] [-wait 5s]
 //	fortress act -dir DIR [-wait 5s] MEMBER ACTION [BODY]
@@ -86,6 +86,7 @@ func dispatch(ctx context.Context, args []string, stdin io.Reader, stdout io.Wri
 	relayURL := fs.String("relay", "", `the relay: empty for the project's, a URL, or "off"`)
 	useLAN := fs.Bool("lan", false, "find members on this network too")
 	uses := fs.String("uses", "", "the actions it calls at others, comma separated")
+	icon := fs.String("icon", "", "the app's logo, an SVG file the members show")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("%w: %v", errUsage, err)
 	}
@@ -102,7 +103,17 @@ func dispatch(ctx context.Context, args []string, stdin io.Reader, stdout io.Wri
 		if *uses != "" {
 			list = strings.Split(*uses, ",")
 		}
-		return join(*dir, fortress.Membership{App: *app, Device: *name, Relay: *relayURL, LAN: *useLAN, Uses: list}, stdin)
+		m := fortress.Membership{App: *app, Device: *name, Relay: *relayURL, LAN: *useLAN, Uses: list}
+		if *icon != "" {
+			svg, err := os.ReadFile(*icon) //nolint:gosec // G304: the operator names the logo
+			if err != nil {
+				return err
+			}
+			if m.Icon, err = status.IconFromSVG(svg); err != nil {
+				return err
+			}
+		}
+		return join(*dir, m, stdin)
 	case "members":
 		return withFortress(ctx, *dir, *wait, func(f *fortress.Fortress) error { return members(f, stdout, *asJSON) })
 	case "status":

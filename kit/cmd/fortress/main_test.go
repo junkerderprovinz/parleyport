@@ -338,3 +338,31 @@ func TestAPluginFollowsAChangedPhraseAsTheSameMember(t *testing.T) {
 		t.Errorf("alpha lists %v, want the plugin once", listed)
 	}
 }
+
+func TestAPluginJoinsWithTheLogoOfItsApp(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "plugin")
+	words, err := phrase.Encode(secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logo := filepath.Join(t.TempDir(), "logo.svg")
+	svg := []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3"/></svg>`)
+	if err := os.WriteFile(logo, svg, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, stderr := cli(t, words+"\n", "join", "-dir", dir, "-app", "watcher", "-name", "tower", "-relay", "off", "-icon", logo); code != 0 {
+		t.Fatalf("join: %d %s", code, stderr)
+	}
+	cfg, err := fortress.Load(dir)
+	want, _ := status.IconFromSVG(svg)
+	if err != nil || cfg.App.Icon != want {
+		t.Errorf("the membership has the icon %.40q, %v", cfg.App.Icon, err)
+	}
+
+	if err := os.WriteFile(logo, []byte(`<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, _ := cli(t, words+"\n", "join", "-dir", dir, "-app", "watcher", "-name", "tower", "-relay", "off", "-icon", logo); code != 1 {
+		t.Errorf("join with a logo that runs a script ends with %d, want 1", code)
+	}
+}

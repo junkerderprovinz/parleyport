@@ -145,7 +145,9 @@ type setup struct {
 	importer  func(context.Context, Caller, io.Reader, int64) error
 	actions   []Action
 	uses      []string
-	log       *events.Log
+	// icon and host are what the instance says of its app and its server.
+	icon, host string
+	log        *events.Log
 	// noListener opens the instance without a direct address, so the others
 	// reach it through the relay alone.
 	noListener bool
@@ -193,7 +195,8 @@ func config(t *testing.T, n *node, s setup) Config {
 		direct = n.srv.URL
 	}
 	cfg := Config{
-		App:      App{ID: n.app, Name: "App " + n.app, Version: "1.0.0"},
+		App:      App{ID: n.app, Name: "App " + n.app, Version: "1.0.0", Icon: s.icon},
+		Host:     s.host,
 		Secret:   secret,
 		Identity: identity(t, n.name),
 		Self:     group.Self{Name: n.name, Deployment: "container", DirectURL: direct},
@@ -343,4 +346,13 @@ func freePort(t *testing.T) uint16 {
 	}
 	defer func() { _ = c.Close() }()
 	return c.LocalAddr().(*net.UDPAddr).AddrPort().Port()
+}
+
+func testIcon(t testing.TB) string {
+	t.Helper()
+	icon, err := status.IconFromSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3" fill="#2e7d32"/></svg>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return icon
 }
