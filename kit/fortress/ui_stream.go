@@ -42,9 +42,13 @@ const (
 	// maxStreamsPerCaller and maxStreams bound the streams the opened app
 	// runs for one member and in all, maxTabStreams those of one tab. Some
 	// pages open a socket for every part of the screen.
-	maxStreamsPerCaller = 32
-	maxStreams          = 64
-	maxTabStreams       = 16
+	maxStreamsPerCaller = 64
+	maxStreams          = 128
+	maxTabStreams       = 32
+	// maxSends bounds the messages from browsers on their way to members at
+	// once, so that a page opening many sockets does not run into the calls
+	// a member takes from one caller.
+	maxSends = 4
 	// tabCheck is how often a stream looks whether its tab still stands.
 	tabCheck = time.Second
 	// maxBacklog is how many answers a stream may fall behind its browser.
@@ -686,7 +690,13 @@ func (f *Fortress) tunnelStream(w http.ResponseWriter, r *http.Request, t *ticke
 			if err != nil {
 				return
 			}
+			select {
+			case f.sending <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
 			a, err := f.streamCall(ctx, t.member, streamOp{Op: "send", Stream: first.Stream, Binary: typ == websocket.MessageBinary}, data)
+			<-f.sending
 			if err != nil || a.Done {
 				return
 			}

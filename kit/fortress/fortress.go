@@ -341,6 +341,8 @@ type Fortress struct {
 	// one for each sign-in.
 	pumpMu sync.Mutex
 	pumps  map[string]*pump
+	// sending bounds the messages from browsers on their way at once.
+	sending chan struct{}
 	// opening bounds the requests of every opened tab on their way at once.
 	opening   chan struct{}
 	onRemoved func()
@@ -422,6 +424,7 @@ func Open(cfg Config) (*Fortress, error) {
 		jars:      newJars(),
 		jarKey:    jarKey,
 		opening:   make(chan struct{}, maxOpenCalls),
+		sending:   make(chan struct{}, maxSends),
 		onRemoved: cfg.OnRemoved,
 		book:      bk,
 		// A book written at once tells a later change of phrase from a fresh

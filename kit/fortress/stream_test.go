@@ -231,11 +231,12 @@ func TestAPageWithManySocketsLeavesRoomForItsRequests(t *testing.T) {
 		conns = append(conns, c)
 	}
 	for i, c := range conns {
-		msg := fmt.Sprintf("socket %d", i)
-		if err := c.Write(ctx(t), websocket.MessageText, []byte(msg)); err != nil {
+		if err := c.Write(ctx(t), websocket.MessageText, []byte(fmt.Sprintf("socket %d", i))); err != nil {
 			t.Fatal(err)
 		}
-		if _, got, err := c.Read(ctx(t)); err != nil || string(got) != "echo "+msg {
+	}
+	for i, c := range conns {
+		if _, got, err := c.Read(ctx(t)); err != nil || string(got) != fmt.Sprintf("echo socket %d", i) {
 			t.Fatalf("socket %d read %q %v", i, got, err)
 		}
 	}
