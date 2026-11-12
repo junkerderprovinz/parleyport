@@ -111,6 +111,7 @@ type setup struct {
 	upload      http.Handler
 	vouch       func(id string, key ed25519.PublicKey) bool
 	vouchedOnly bool
+	mayJoin     func(ctx context.Context, id string) bool
 	// noListener opens the instance the way a desktop app runs: it calls
 	// others directly but takes no direct calls itself.
 	noListener bool
@@ -179,6 +180,7 @@ func openGroup(t *testing.T, n *node, s setup) *Group {
 		Upload:              s.upload,
 		Vouch:               s.vouch,
 		VouchedOnly:         s.vouchedOnly,
+		MayJoin:             s.mayJoin,
 	}, appRoutes())
 	if err != nil {
 		t.Fatalf("open %s: %v", n.name, err)

@@ -112,7 +112,7 @@ func (g *Group) takeLocked(m Member, now time.Time) bool {
 	seen := earliest(m.LastSeen, now)
 	rec, ok := st.Members[m.ID]
 	if !ok {
-		if !approved && waitingLocked(st) >= maxWaiting {
+		if g.vouchedOnly || !g.closedSince.IsZero() || !approved && waitingLocked(st) >= maxWaiting {
 			return false
 		}
 		if len(st.Members) >= maxPinned {

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -243,5 +244,82 @@ func TestAGroupForTheVouchedAloneShowsAStrangerNothing(t *testing.T) {
 	}
 	if raw, _ := c.store.Load(); bytes.Contains(raw, []byte(a.id)) {
 		t.Errorf("charlie keeps alpha in its store: %s", raw)
+	}
+}
+
+func TestAGroupClosedToNewcomersServesOnlyWhoItMetBefore(t *testing.T) {
+	url := relayServer(t)
+	a := open(t, "alpha", setup{relay: url, byPhrase: true})
+	b := open(t, "bravo", setup{relay: url, byPhrase: true})
+	waitFor(t, "bravo to see alpha", func() bool { m, _ := memberOf(b.g, a.id); return m.Relay })
+	if status, _, err := call(t, b, a, http.MethodGet, "/api/whoami", nil); err != nil || status != http.StatusOK {
+		t.Fatalf("bravo calls alpha = %d %v", status, err)
+	}
+	since := time.Now()
+	c := open(t, "charlie", setup{relay: url, byPhrase: true})
+	waitFor(t, "charlie to see alpha", func() bool { m, _ := memberOf(c.g, a.id); return m.Relay })
+	if status, _, err := call(t, c, a, http.MethodGet, "/api/whoami", nil); err != nil || status != http.StatusOK {
+		t.Fatalf("charlie calls alpha before it closes = %d %v", status, err)
+	}
+
+	a.g.CloseToNew(since)
+	d := open(t, "delta", setup{relay: url, byPhrase: true})
+	waitFor(t, "alpha to answer delta", func() bool { status, _, _ := call(t, d, a, http.MethodGet, "/api/whoami", nil); return status != 0 })
+	for _, n := range []*node{c, d} {
+		status, body, _ := call(t, n, a, http.MethodGet, "/api/whoami", nil)
+		if status != http.StatusForbidden || !bytes.Contains(body, []byte(`"groupClosed"`)) {
+			t.Errorf("%s, met after alpha closed, calls it = %d %s, want 403 groupClosed", n.name, status, body)
+		}
+	}
+	if status, _, err := call(t, b, a, http.MethodGet, "/api/whoami", nil); err != nil || status != http.StatusOK {
+		t.Errorf("bravo, met before, calls alpha = %d %v, want it served", status, err)
+	}
+	if status, body, err := call(t, b, a, http.MethodGet, rosterPath, nil); err != nil || status != http.StatusOK || bytes.Contains(body, []byte(c.id)) {
+		t.Errorf("alpha hands bravo the roster %d %s %v, want it without charlie", status, body, err)
+	}
+	for _, id := range []string{c.id, d.id} {
+		if m, _ := memberOf(a.g, id); m.State != StateUnknown {
+			t.Errorf("alpha lists %s as %q, want its key not pinned", id, m.State)
+		}
+	}
+	if err := a.g.Import(Roster{Members: []Member{{ID: d.id, Kind: member.KindInstance, Key: identity(t, "delta").Public(), State: StateApproved}}}); err != nil {
+		t.Fatal(err)
+	}
+	if m, _ := memberOf(a.g, d.id); m.State != StateUnknown {
+		t.Errorf("alpha took delta from a roster as %q after it closed", m.State)
+	}
+}
+
+func TestAGroupAsksBeforeItTakesInANewcomerByThePhrase(t *testing.T) {
+	url := relayServer(t)
+	charlie := identity(t, "charlie")
+	var mu sync.Mutex
+	asked := map[string]int{}
+	a := open(t, "alpha", setup{relay: url, byPhrase: true, mayJoin: func(_ context.Context, id string) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		asked[id]++
+		return id != charlie.ID()
+	}})
+	b := open(t, "bravo", setup{relay: url, byPhrase: true})
+	c := open(t, "charlie", setup{relay: url, byPhrase: true})
+	waitFor(t, "alpha to answer charlie", func() bool { status, _, _ := call(t, c, a, http.MethodGet, "/api/whoami", nil); return status != 0 })
+
+	for range 2 {
+		if status, _, err := call(t, b, a, http.MethodGet, "/api/whoami", nil); err != nil || status != http.StatusOK {
+			t.Fatalf("bravo calls alpha = %d %v", status, err)
+		}
+	}
+	status, body, _ := call(t, c, a, http.MethodGet, "/api/whoami", nil)
+	if status != http.StatusForbidden || !bytes.Contains(body, []byte(`"groupClosed"`)) {
+		t.Errorf("charlie, turned down, calls alpha = %d %s, want 403 groupClosed", status, body)
+	}
+	if m, _ := memberOf(a.g, c.id); !m.Met.IsZero() {
+		t.Errorf("alpha met charlie at %v, want never", m.Met)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if asked[b.id] != 1 {
+		t.Errorf("alpha asked about bravo %d times, want once, before it first met it", asked[b.id])
 	}
 }

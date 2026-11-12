@@ -69,10 +69,13 @@ func (g *Group) tick(now time.Time) {
 
 // greet calls every instance in reach that has not served a call from this
 // one yet. It learns where an instance that serves this one takes direct
-// calls. A group for the vouched alone greets nobody, since the greeting
-// would tell a stranger who it is.
+// calls. A group for the vouched alone, or closed to newcomers, greets
+// nobody, since the greeting would tell a stranger who it is.
 func (g *Group) greet(ctx context.Context, now time.Time) {
-	if g.vouchedOnly {
+	g.mu.Lock()
+	closed := g.vouchedOnly || !g.closedSince.IsZero()
+	g.mu.Unlock()
+	if closed {
 		return
 	}
 	var due []string

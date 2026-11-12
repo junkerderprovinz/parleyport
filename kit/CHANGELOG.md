@@ -15,7 +15,7 @@ The first version: everything an app needs to pair its instances, join a fortres
 ## ✨ Added
 
 - **Pairing by phrase alone.** `phrase`, `keys` and `member` turn twelve words into the keys of a group, and `group` pairs an app's instances with them. On one network the members find each other through `lan` and talk directly, elsewhere they meet on a relay through `relay`.
-- **The fortress.** `fortress` joins every app of a household under one phrase, with a switch for every action an app offers the others. After a phrase change, members that missed it follow on their own for 30 days, while a newcomer on the old phrase gets `groupClosed` and sees no members.
+- **The fortress.** `fortress` joins every app of a household under one phrase, with a switch for every action an app offers the others. After a phrase change, members that missed it follow on their own for 30 days, while a newcomer on the old phrase gets `groupClosed` and sees no members, even at a member that hasn't followed yet.
 - **Status, events and rules.** `status` is the report and log every app answers, and `statustest` checks an app against it in the app's own tests. `events` keeps an app's events in a ring the other members read, and the fortress runs rules on them.
 - **Notifications.** `notify` sends events to webhooks, Discord, Slack, Gotify, ntfy, Matrix, mail, Apprise, Healthchecks and Unraid's own notifications, with every secret masked on the way to a settings page.
 - **Home Assistant.** `mqttha` announces an app as a device with sensors and buttons through MQTT discovery.

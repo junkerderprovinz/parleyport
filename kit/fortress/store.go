@@ -19,6 +19,8 @@ type about struct {
 	// Moved says the member answers on a phrase the fortress has left, and
 	// hands the members from before the new keys at movedPath.
 	Moved bool `json:"moved,omitempty"`
+	// Changed is when that member took the new phrase.
+	Changed time.Time `json:"changed,omitzero"`
 }
 
 func (a about) valid() bool {

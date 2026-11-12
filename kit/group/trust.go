@@ -224,6 +224,9 @@ var (
 	// group, such as a phone where only instances pair.
 	kindNotTakenRefusal = refuse(http.StatusForbidden, "memberKindRefused", "this group takes no devices of this kind")
 	strangerRefusal     = refuse(http.StatusForbidden, "groupClosed", "this instance takes no new members on this phrase")
+	// askFirst never leaves the group: admitCall asks MayJoin and admits the
+	// call again.
+	askFirst = &refusal{}
 )
 
 // memberLimits counts what each member key has in flight and when keys were
@@ -291,7 +294,7 @@ func (g *Group) handle(ctx context.Context, call relay.ProxyCall) (int, []byte) 
 		return relay.StatusDrop, nil
 	}
 	defer g.wg.Done()
-	caller, r := g.admit(call, relay.SourceOf(ctx), g.vouched(call.From, call.Kind, call.Key), time.Now())
+	caller, r := g.admitCall(ctx, call)
 	if r != nil {
 		return r.status, r.body
 	}
@@ -304,6 +307,20 @@ func (g *Group) handle(ctx context.Context, call relay.ProxyCall) (int, []byte) 
 		return g.internal(caller, call)
 	}
 	return g.serveApp(context.WithValue(ctx, callerKey{}, caller), call)
+}
+
+// admitCall decides whose call this is, as admit does, and asks MayJoin first
+// where admit says so.
+func (g *Group) admitCall(ctx context.Context, call relay.ProxyCall) (Caller, *refusal) {
+	vouched := g.vouched(call.From, call.Kind, call.Key)
+	caller, r := g.admit(call, relay.SourceOf(ctx), vouched, false, time.Now())
+	if r != askFirst {
+		return caller, r
+	}
+	if !g.mayJoin(ctx, call.From) {
+		return Caller{}, strangerRefusal
+	}
+	return g.admit(call, relay.SourceOf(ctx), vouched, true, time.Now())
 }
 
 // vouched reports whether Vouch lets in instance id under key, which is
@@ -326,8 +343,9 @@ func (g *Group) vouched(id string, kind member.Kind, key ed25519.PublicKey) bool
 // key makes, whether that key is approved, and whether the call ran before. A
 // call's id is used up only once it is known to come from a pinned key, so a
 // stranger fills no record a member needs. An instance vouched for is
-// approved here as it calls.
-func (g *Group) admit(call relay.ProxyCall, source string, vouched bool, now time.Time) (Caller, *refusal) {
+// approved here as it calls. A member the phrase alone would let in is
+// refused with askFirst until MayJoin was asked, which asked says.
+func (g *Group) admit(call relay.ProxyCall, source string, vouched, asked bool, now time.Time) (Caller, *refusal) {
 	if !relay.Recent(call, now) {
 		return Caller{}, dropped
 	}
@@ -350,7 +368,14 @@ func (g *Group) admit(call relay.ProxyCall, source string, vouched bool, now tim
 	if _, revoked := st.Revoked[hex.EncodeToString(call.Key)]; revoked || removed {
 		return Caller{}, removedRefusal
 	}
+	ask := g.mayJoin != nil && g.byPhrase && !vouched && !asked && g.closedSince.IsZero()
 	if rec, ok := st.Members[call.From]; ok {
+		if g.closedToLocked(rec) && !vouched {
+			return Caller{}, strangerRefusal
+		}
+		if ask && rec.Met.IsZero() {
+			return Caller{}, askFirst
+		}
 		if !g.replay.Admit(call) {
 			return Caller{}, dropped
 		}
@@ -373,7 +398,7 @@ func (g *Group) admit(call relay.ProxyCall, source string, vouched bool, now tim
 		}
 		return Caller{ID: call.From, Kind: rec.Kind, Key: rec.Key}, nil
 	}
-	if g.vouchedOnly && !vouched {
+	if (g.vouchedOnly || !g.closedSince.IsZero()) && !vouched {
 		return Caller{}, strangerRefusal
 	}
 	for _, rec := range st.Members {
@@ -389,6 +414,9 @@ func (g *Group) admit(call relay.ProxyCall, source string, vouched bool, now tim
 		if idle = idlePinLocked(st, now); idle == "" {
 			return Caller{}, refuse(http.StatusTooManyRequests, "groupFull", "this group already knows as many devices as it can")
 		}
+	}
+	if ask {
+		return Caller{}, askFirst
 	}
 	if !g.limits.mayPin(source, now) {
 		return Caller{}, refuse(http.StatusTooManyRequests, "groupJoinsBusy", "too many new devices joined this group within the hour")
@@ -454,6 +482,16 @@ func waitingLocked(st *state) int {
 // instance not pinned yet is pinned by its answer.
 func (g *Group) trustsAnswer(target string, key ed25519.PublicKey) bool {
 	vouched := g.vouched(target, member.KindInstance, key)
+	if g.asks(target, vouched) {
+		// MayJoin may be waiting for this very answer, so it gets no longer
+		// than a call.
+		ctx, cancel := context.WithTimeout(g.ctx, callTimeout)
+		ok := g.mayJoin(ctx, target)
+		cancel()
+		if !ok {
+			return false
+		}
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	rec, ok := g.st.Members[target]
@@ -484,7 +522,7 @@ func (g *Group) pinAnswerLocked(id string, key []byte, vouched bool) (record, bo
 	now := time.Now()
 	_, removed := st.Removed[id]
 	_, revoked := st.Revoked[hex.EncodeToString(key)]
-	if removed || revoked || g.vouchedOnly && !vouched || !claimFits(id, member.KindInstance, key) || len(st.Members) >= maxPinned ||
+	if removed || revoked || (g.vouchedOnly || !g.closedSince.IsZero()) && !vouched || !claimFits(id, member.KindInstance, key) || len(st.Members) >= maxPinned ||
 		(!g.byPhrase && waitingLocked(st) >= maxWaiting) {
 		return record{}, false
 	}

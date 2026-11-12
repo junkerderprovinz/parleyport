@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/junkerderprovinz/parleyport/kit/group"
 	"github.com/junkerderprovinz/parleyport/kit/keys"
 )
 
@@ -275,5 +276,87 @@ func TestAMemberTakenOutAfterTheChangeGetsNoNewKeys(t *testing.T) {
 	}
 	if _, err := p.f.NewKeys(ctx(t)); err == nil {
 		t.Error("the plugin, taken out, got the new keys")
+	}
+}
+
+// closedTo reports whether member to refuses from as a stranger.
+func closedTo(t *testing.T, from, to *node) bool {
+	t.Helper()
+	status, body, _ := from.f.group.Call(ctx(t), to.id, http.MethodGet, aboutPath, nil)
+	return status == http.StatusForbidden && bytes.Contains(body, []byte(`"groupClosed"`))
+}
+
+func TestAPluginThatHasNotFollowedYetRefusesANewcomerOnTheOldPhrase(t *testing.T) {
+	url := relayServer(t)
+	a := open(t, "alpha", "alpha-1", setup{relay: url})
+	b := open(t, "bravo", "bravo-1", setup{relay: url})
+	p := openKeysOnly(t, url, "watcher", "watcher-1", Domain.Keys(testSecret))
+	for _, n := range []*node{a, b, p} {
+		waitFor(t, n.name+" to see everybody", func() bool { return len(n.f.Members()) == 2 })
+	}
+	meet(t, a, p)
+	meet(t, b, p)
+	// The plugin stays on the old phrase and asks nobody anything until its
+	// watcher runs again.
+	changePhrase(t, url, a, b)
+
+	late := openKeysOnly(t, url, "watcher", "watcher-late", Domain.Keys(testSecret))
+	waitFor(t, "the plugin to answer the newcomer", func() bool {
+		status, _, _ := late.f.group.Call(ctx(t), p.id, http.MethodGet, aboutPath, nil)
+		return status != 0
+	})
+	if !closedTo(t, late, p) {
+		t.Error("the plugin, still on the old phrase, takes in a newcomer on it")
+	}
+	for _, n := range []*node{a, b} {
+		waitFor(t, n.name+" to refuse the newcomer", func() bool { return closedTo(t, late, n) })
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, m := range late.f.group.Roster().Members {
+			if m.ID == a.id || m.ID == b.id {
+				t.Fatalf("the newcomer was handed %+v", m)
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if m, ok := memberOf(p.f, late.id); ok && m.State == group.StateApproved {
+		t.Errorf("the plugin lists the newcomer as %+v", m)
+	}
+}
+
+func TestAPluginShutsOutANewcomerOnceItHearsThePhraseChanged(t *testing.T) {
+	url := relayServer(t)
+	a := open(t, "alpha", "alpha-1", setup{relay: url})
+	b := open(t, "bravo", "bravo-1", setup{relay: url})
+	p := openKeysOnly(t, url, "watcher", "watcher-1", Domain.Keys(testSecret))
+	for _, n := range []*node{a, b, p} {
+		waitFor(t, n.name+" to see everybody", func() bool { return len(n.f.Members()) == 2 })
+	}
+	meet(t, a, p)
+	secret := changePhrase(t, url, a, b)
+	// Nobody who took the new phrase is in reach, so the plugin cannot know.
+	for _, n := range []*node{a, b} {
+		if err := n.f.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	late := openKeysOnly(t, url, "watcher", "watcher-late", Domain.Keys(testSecret))
+	waitFor(t, "the plugin to take the newcomer in", func() bool {
+		status, _, _ := late.f.group.Call(ctx(t), p.id, http.MethodGet, aboutPath, nil)
+		return status == http.StatusOK
+	})
+
+	a.f = reopen(t, a, setup{relay: url, secret: secret, moved: testSecret})
+	waitFor(t, "alpha to tell the plugin the phrase changed", func() bool {
+		_, err := p.f.Status(ctx(t), a.id, "")
+		return refusalCode(err) == phraseChanged
+	})
+	waitFor(t, "the plugin to refuse the newcomer", func() bool { return closedTo(t, late, p) })
+	if m, ok := memberOf(p.f, late.id); ok && m.State == group.StateApproved {
+		t.Errorf("the plugin lists the newcomer as %+v", m)
+	}
+	if _, err := p.f.Status(ctx(t), late.id, ""); err == nil {
+		t.Error("the plugin still reads the newcomer")
 	}
 }

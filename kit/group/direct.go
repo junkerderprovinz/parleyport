@@ -512,6 +512,9 @@ func (g *Group) probe(ctx context.Context, base string) (hello, error) {
 		return hello{}, fmt.Errorf("group: %s is this instance's own address", base)
 	}
 	vouched := g.vouched(h.ID, member.KindInstance, res.Key)
+	if g.asks(h.ID, vouched) && !g.mayJoin(ctx, h.ID) {
+		return hello{}, fmt.Errorf("%w: %s is not taken in", ErrStranger, base)
+	}
 	g.mu.Lock()
 	if _, pinned := g.st.Members[h.ID]; !pinned {
 		g.pinAnswerLocked(h.ID, res.Key, vouched)

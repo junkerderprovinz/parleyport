@@ -316,6 +316,10 @@ type Fortress struct {
 	// keys under the new one. nil when the phrase did not change lately.
 	old *group.Group
 	set keys.Set
+	// opened is closed once group is set.
+	opened chan struct{}
+	// asking lets one round of asking the members run at a time.
+	asking chan struct{}
 
 	mu        sync.Mutex
 	book      book
@@ -326,6 +330,11 @@ type Fortress struct {
 	synced    map[string]time.Time
 	greeted   map[string]time.Time
 	watched   map[string]time.Time
+	// shutSince is when a member says the fortress left this phrase, zero
+	// while none did; asked is when the members were last asked and none
+	// said so.
+	shutSince time.Time
+	asked     time.Time
 
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -376,6 +385,8 @@ func Open(cfg Config) (*Fortress, error) {
 		synced:    map[string]time.Time{},
 		greeted:   map[string]time.Time{},
 		watched:   map[string]time.Time{},
+		opened:    make(chan struct{}),
+		asking:    make(chan struct{}, 1),
 		ctx:       ctx,
 		cancel:    cancel,
 	}
@@ -420,6 +431,7 @@ func Open(cfg Config) (*Fortress, error) {
 		Store:               store,
 		OnRemoved:           f.leave,
 		OnRemove:            f.fortressRemoved,
+		MayJoin:             f.mayJoin,
 		MaxAnswerBytes:      cfg.MaxAnswerBytes,
 		MaxRelayAnswerBytes: cfg.MaxRelayAnswerBytes,
 		Stream:              http.HandlerFunc(f.serveExport),
@@ -437,6 +449,7 @@ func Open(cfg Config) (*Fortress, error) {
 	early := f.early
 	f.early = nil
 	f.mu.Unlock()
+	close(f.opened)
 	if len(cfg.Secret) > 0 && len(cfg.Previous) > 0 && time.Since(bk.Changed) < moveWindow {
 		if err := f.openOld(cfg, set); err != nil {
 			cancel()
@@ -738,6 +751,9 @@ func (f *Fortress) describe(ctx context.Context, id string, now time.Time) bool 
 	if err != nil || json.Unmarshal(body, &a) != nil || !a.valid() {
 		f.again(f.described, id, now.Add(retryAfter))
 		return false
+	}
+	if a.Moved {
+		f.shut(a.Changed)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -159,6 +159,12 @@ type Config struct {
 	// whatever the phrase says: a stranger is refused without its key being
 	// pinned, and stops listing this instance once it has been refused.
 	VouchedOnly bool
+	// MayJoin, in a group that takes everyone holding the phrase, is asked
+	// before a member the phrase alone lets in is first met here, by a call or
+	// an answer. It runs without the group's lock and may call the members
+	// met before; false refuses the newcomer as a stranger. nil takes everyone
+	// the phrase lets in.
+	MayJoin func(ctx context.Context, id string) bool
 }
 
 // State is where a member stands with this instance.
@@ -247,6 +253,7 @@ type Group struct {
 	vouch       func(string, ed25519.PublicKey) bool
 	byPhrase    bool
 	vouchedOnly bool
+	mayJoin     func(context.Context, string) bool
 	kinds       []member.Kind
 	ports       []string
 	maxAnswer   int
@@ -272,6 +279,9 @@ type Group struct {
 	addrs    map[string]*remoteAddr
 	failed   map[string]time.Time
 	awaiting map[string]time.Time
+	// closedSince is when the group stopped taking newcomers, zero while it
+	// takes them.
+	closedSince time.Time
 	// strangerTo are the instances that refused this one as a stranger.
 	strangerTo map[string]bool
 	heard      map[string]bool
@@ -345,6 +355,7 @@ func Open(cfg Config, serve http.Handler) (*Group, error) {
 		vouch:       cfg.Vouch,
 		byPhrase:    cfg.JoinByPhrase,
 		vouchedOnly: cfg.VouchedOnly,
+		mayJoin:     cfg.MayJoin,
 		kinds:       slices.Clone(cfg.Kinds),
 		ports:       portNames(cfg.Ports),
 		maxAnswer:   cmp.Or(cfg.MaxAnswerBytes, maxAnswerBytes),
@@ -591,6 +602,45 @@ func (g *Group) Retire() time.Time {
 		}
 	}
 	return g.st.Retired
+}
+
+// CloseToNew takes nobody new into the group from now on, whatever the
+// phrase says, and forgets every member first met here after since. Such a
+// member, and one never met here, is refused as a stranger and handed
+// nothing; a later call with an earlier since forgets more.
+func (g *Group) CloseToNew(since time.Time) {
+	g.mu.Lock()
+	if !g.closedSince.IsZero() && !since.Before(g.closedSince) {
+		g.mu.Unlock()
+		return
+	}
+	g.closedSince = since
+	for id, rec := range g.st.Members {
+		if rec.Met.After(since) {
+			delete(g.st.Members, id)
+			g.dirty = true
+		}
+	}
+	g.mu.Unlock()
+	g.stir()
+}
+
+// closedToLocked reports whether the group, closed to newcomers, refuses the
+// member rec is kept for.
+func (g *Group) closedToLocked(rec record) bool {
+	return !g.closedSince.IsZero() && (rec.Met.IsZero() || rec.Met.After(g.closedSince))
+}
+
+// asks reports whether MayJoin has to be asked before member id is met here.
+func (g *Group) asks(id string, vouched bool) bool {
+	if g.mayJoin == nil || !g.byPhrase || vouched {
+		return false
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	rec, ok := g.st.Members[id]
+	_, removed := g.st.Removed[id]
+	return g.closedSince.IsZero() && !removed && (!ok || rec.Met.IsZero())
 }
 
 // RelayConnected reports whether the relay socket is up, which an empty member

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/junkerderprovinz/parleyport/kit/group"
@@ -181,6 +182,78 @@ func (f *Fortress) prune() {
 // phraseChanged is the code a member answers on the phrase the fortress left.
 const phraseChanged = "phrase_changed"
 
+// askTimeout bounds how long a newcomer waits while the members met before
+// are asked whether the fortress left this phrase.
+const askTimeout = 5 * time.Second
+
+// mayJoin lets newcomer id into the fortress on the strength of the phrase
+// alone unless a member met before says the fortress left this phrase. Every
+// such member in reach is asked anew, once for all the newcomers that arrive
+// while it is asked.
+func (f *Fortress) mayJoin(ctx context.Context, id string) bool {
+	arrived := time.Now()
+	select {
+	case <-f.opened:
+	case <-ctx.Done():
+		return false
+	}
+	select {
+	case f.asking <- struct{}{}:
+		defer func() { <-f.asking }()
+	case <-ctx.Done():
+		return false
+	}
+	f.mu.Lock()
+	shut, asked := !f.shutSince.IsZero(), f.asked
+	f.mu.Unlock()
+	if shut {
+		return false
+	}
+	if !asked.Before(arrived) {
+		return true
+	}
+	started := time.Now()
+	var ids []string
+	for _, m := range f.group.Members() {
+		if m.ID != id && m.Kind == member.KindInstance && m.State == group.StateApproved && m.Online() &&
+			!m.Met.IsZero() && m.Met.Before(arrived) {
+			ids = append(ids, m.ID)
+		}
+	}
+	ctx, cancel := context.WithTimeout(ctx, askTimeout)
+	defer cancel()
+	var wg sync.WaitGroup
+	for _, other := range ids {
+		wg.Go(func() { f.describe(ctx, other, started) })
+	}
+	wg.Wait()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.shutSince.IsZero() {
+		return false
+	}
+	f.asked = started
+	return true
+}
+
+// shut closes the fortress on this phrase to newcomers once a member says it
+// took a new one at changed, and turns away whoever was first met since.
+func (f *Fortress) shut(changed time.Time) {
+	now := time.Now()
+	if changed.IsZero() || changed.After(now) {
+		changed = now
+	}
+	f.mu.Lock()
+	if !f.shutSince.IsZero() && !changed.Before(f.shutSince) {
+		f.mu.Unlock()
+		return
+	}
+	f.shutSince = changed
+	g := f.group
+	f.mu.Unlock()
+	g.CloseToNew(changed)
+}
+
 // ErrNoNewPhrase is what NewKeys returns when no member in reach says that
 // the fortress changed its phrase.
 var ErrNoNewPhrase = errors.New("fortress: no member in reach took a new phrase")
@@ -263,7 +336,9 @@ func (f *Fortress) serveOld(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "forbidden")
 	case r.URL.Path == aboutPath && r.Method == http.MethodGet:
 		a := f.about
-		a.Moved = true
+		f.mu.Lock()
+		a.Moved, a.Changed = true, f.book.Changed
+		f.mu.Unlock()
 		writeJSON(w, a)
 	case r.URL.Path == movedPath && r.Method == http.MethodGet:
 		writeJSON(w, movedBody{Group: f.set.Group, Frame: f.set.Frame, PeerAuth: f.set.PeerAuth}) //nolint:gosec // G117: sealed to an approved member
