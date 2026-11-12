@@ -145,6 +145,13 @@ func (g *Group) noteAnswer(id string, status int, body []byte, now time.Time) {
 	if status >= 200 && status < 300 {
 		g.heard[id] = true
 	}
+	if status == http.StatusForbidden && bytes.Contains(body, []byte(`"groupClosed"`)) {
+		g.strangerTo[id] = true
+		if _, ok := g.st.Members[id]; ok {
+			delete(g.st.Members, id)
+			g.dirty = true
+		}
+	}
 }
 
 // noteAddress records url as where id might take direct calls, without taking

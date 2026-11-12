@@ -230,18 +230,20 @@ func (f *Fortress) movedKeys(ctx context.Context, id string) (keys.Set, error) {
 // openOld opens the fortress on cfg.Previous for the members from before the
 // change that hold only keys, which have no way to the new phrase but this.
 // The phrase lets nobody in there: only the instances the fortress approved
-// under the same key are, and set is what they are handed.
+// under the same key are, and set is what they are handed. Whoever else holds
+// the old phrase learns neither this instance's name nor who is in the
+// fortress.
 func (f *Fortress) openOld(cfg Config, set keys.Set) error {
 	f.set = set
 	old, err := group.Open(group.Config{
-		Domain:   Domain,
-		Secret:   cfg.Previous,
-		Identity: cfg.Identity,
-		Self:     cfg.Self,
-		Relay:    cfg.Relay,
-		RelayURL: cfg.RelayURL,
-		Store:    &memory{},
-		Vouch:    func(id string, key ed25519.PublicKey) bool { return approvedIn(f.group, id, key) },
+		Domain:      Domain,
+		Secret:      cfg.Previous,
+		Identity:    cfg.Identity,
+		Relay:       cfg.Relay,
+		RelayURL:    cfg.RelayURL,
+		Store:       &memory{},
+		Vouch:       func(id string, key ed25519.PublicKey) bool { return approvedIn(f.group, id, key) },
+		VouchedOnly: true,
 	}, http.HandlerFunc(f.serveOld))
 	if err != nil {
 		return err

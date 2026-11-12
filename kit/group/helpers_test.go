@@ -101,15 +101,16 @@ type setup struct {
 	onRemove func(id string)
 	onChange func()
 	// keysOnly opens the group on the keys derived from the secret instead.
-	keysOnly  bool
-	byPhrase  bool
-	maxAnswer int
-	maxRelay  int
-	kinds     []member.Kind
-	ports     []int
-	stream    http.Handler
-	upload    http.Handler
-	vouch     func(id string, key ed25519.PublicKey) bool
+	keysOnly    bool
+	byPhrase    bool
+	maxAnswer   int
+	maxRelay    int
+	kinds       []member.Kind
+	ports       []int
+	stream      http.Handler
+	upload      http.Handler
+	vouch       func(id string, key ed25519.PublicKey) bool
+	vouchedOnly bool
 	// noListener opens the instance the way a desktop app runs: it calls
 	// others directly but takes no direct calls itself.
 	noListener bool
@@ -177,6 +178,7 @@ func openGroup(t *testing.T, n *node, s setup) *Group {
 		Stream:              s.stream,
 		Upload:              s.upload,
 		Vouch:               s.vouch,
+		VouchedOnly:         s.vouchedOnly,
 	}, appRoutes())
 	if err != nil {
 		t.Fatalf("open %s: %v", n.name, err)
