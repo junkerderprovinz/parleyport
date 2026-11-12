@@ -332,7 +332,7 @@ func TestOpeningNeedsThePermissionAndStopsWhenItIsSwitchedOff(t *testing.T) {
 		t.Fatal(err)
 	}
 	res := br.get(path+"/", "Sec-Fetch-Dest", "iframe")
-	if res.StatusCode != http.StatusForbidden || !strings.Contains(read(t, res), "words for permission_off") {
+	if body := read(t, res); res.StatusCode != http.StatusForbidden || !strings.Contains(body, "words for permission_off") || !strings.Contains(body, "color:CanvasText") {
 		t.Fatalf("an open tunnel after the switch went off: %d", res.StatusCode)
 	}
 	if _, err := a.f.Open(ctx(t), visit(a, b)); !errors.Is(err, ErrPermissionOff) {

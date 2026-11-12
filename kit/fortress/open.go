@@ -252,7 +252,7 @@ header span{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-spac
 header code{color:var(--muted);font-size:12px}
 header a{margin-left:auto;color:var(--ink);text-decoration:none;font-size:20px;line-height:1;padding:2px 8px;border-radius:6px}
 header a:hover{background:var(--line)}
-iframe{flex:1;border:0;width:100%;background:#fff}
+iframe{flex:1;border:0;width:100%;background:Canvas}
 </style></head>
 <body><header>{{if .Icon}}<img src="{{.Icon}}" alt="">{{end}}<b>{{.App}}</b><span>{{.Device}}</span><code title="{{.ID}}">{{.Print}}</code><a href="{{.Back}}" aria-label="×">×</a></header>
 <iframe src="{{.Frame}}" title="{{.App}}" sandbox="` + sandbox + `" referrerpolicy="no-referrer"></iframe>
@@ -314,7 +314,7 @@ func (f *Fortress) refuse(w http.ResponseWriter, r *http.Request, status int, co
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(status)
 		_, _ = io.WriteString(w, `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">`+
-			`<style>:root{color-scheme:light dark}body{font:15px/1.4 system-ui,sans-serif;display:grid;place-items:center;min-height:90vh;margin:0;padding:16px;text-align:center}</style>`+
+			`<style>:root{color-scheme:light dark}body{background:Canvas;color:CanvasText;font:15px/1.4 system-ui,sans-serif;display:grid;place-items:center;min-height:90vh;margin:0;padding:16px;text-align:center}</style>`+
 			`<p>`+template.HTMLEscapeString(words(r, code))+`</p>`)
 		return
 	}
