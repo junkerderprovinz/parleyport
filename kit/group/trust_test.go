@@ -153,6 +153,41 @@ func TestRemovalRevokesTheKeyEverywhere(t *testing.T) {
 	}
 }
 
+func TestAMemberRemovedWhileAwayHearsItOnItsNextCall(t *testing.T) {
+	url := relayServer(t)
+	a := open(t, "alpha", setup{relay: url})
+	c := open(t, "charlie", setup{relay: url})
+	waitFor(t, "both on the relay", func() bool { return len(a.g.Members()) == 1 && len(c.g.Members()) == 1 })
+	meet(t, a, c)
+	if err := c.g.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.g.Remove(c.id); err != nil {
+		t.Fatal(err)
+	}
+
+	back := open(t, "charlie", setup{relay: url, store: c.store})
+	waitFor(t, "charlie back on the relay", func() bool {
+		status, _, _ := call(t, back, a, http.MethodGet, "/api/whoami", nil)
+		return status == http.StatusGone
+	})
+	waitFor(t, "charlie to hear it", func() bool { return back.removed.Load() > 0 })
+}
+
+func TestAMemberThatIsNotRemovedIgnoresAnotherOnesRefusal(t *testing.T) {
+	url := relayServer(t)
+	a := open(t, "alpha", setup{relay: url})
+	b := open(t, "bravo", setup{relay: url})
+	waitFor(t, "both on the relay", func() bool { return len(a.g.Members()) == 1 && len(b.g.Members()) == 1 })
+	meet(t, a, b)
+	if status, _, err := call(t, b, a, http.MethodGet, "/api/gone", nil); err != nil || status != http.StatusGone {
+		t.Fatalf("bravo calls the app's own 410: %d %v", status, err)
+	}
+	if b.removed.Load() > 0 {
+		t.Error("an app's own 410 counted as a removal")
+	}
+}
+
 func TestARemovalRightBeforeCloseStillReachesTheOthers(t *testing.T) {
 	n := onRelay(t, "alpha", "bravo", "charlie")
 	a, b, c := n[0], n[1], n[2]

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -476,5 +477,54 @@ func TestAPluginRemovesOnlyAMemberItNamesWithoutDoubt(t *testing.T) {
 	}
 	if code, out, stderr := cli(t, "", "remove", "-dir", dir, "-wait", "10s", shed); code != 0 || !strings.Contains(out, shed) {
 		t.Fatalf("removing beta by its id: %d %s %s", code, out, stderr)
+	}
+}
+
+func TestAPluginTakenOutWhileAwayForgetsTheFortressAndSaysSo(t *testing.T) {
+	url := relayServer(t)
+	a := openApp(t, url)
+	dir := filepath.Join(t.TempDir(), "plugin")
+	words, err := phrase.Encode(secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, _, stderr := cli(t, words+"\n", "join", "-dir", dir, "-app", "watcher", "-name", "tower", "-relay", url); code != 0 {
+		t.Fatalf("join: %d %s", code, stderr)
+	}
+	if code, _, stderr := cli(t, "", "members", "-dir", dir, "-wait", "3s"); code != 0 {
+		t.Fatalf("members: %d %s", code, stderr)
+	}
+	var plugin string
+	for _, m := range a.f.Members() {
+		if m.App.ID == "watcher" {
+			plugin = m.ID
+		}
+	}
+	if plugin == "" {
+		t.Fatal("alpha never met the plugin")
+	}
+	if err := a.f.Remove(plugin); err != nil {
+		t.Fatal(err)
+	}
+
+	code, _, stderr := cli(t, "", "status", "-dir", dir, "-wait", "5s")
+	if code != 1 || !strings.Contains(stderr, "taken out") {
+		t.Fatalf("status after the removal: %d %s", code, stderr)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "fortress.json")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the removed plugin kept its membership: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, removedHere)); err != nil {
+		t.Errorf("the removed plugin left no word of it: %v", err)
+	}
+	if code, _, stderr := cli(t, "", "members", "-dir", dir, "-wait", "1s"); code != 1 || !strings.Contains(stderr, "taken out") {
+		t.Errorf("members after the removal: %d %s", code, stderr)
+	}
+
+	if code, _, stderr := cli(t, words+"\n", "join", "-dir", dir, "-app", "watcher", "-name", "tower", "-relay", url); code != 0 {
+		t.Fatalf("joining again: %d %s", code, stderr)
+	}
+	if _, err := os.Stat(filepath.Join(dir, removedHere)); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("joining again kept the word of the removal: %v", err)
 	}
 }

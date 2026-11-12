@@ -72,6 +72,8 @@ func (g *Group) Call(ctx context.Context, id, method, path string, body []byte) 
 		g.confirm(id, u, "", "", time.Now())
 		if !g.trustsAnswer(id, res.Key) {
 			err = &relay.UntrustedAnswer{Target: id, Status: res.Status, Body: res.Body}
+		} else {
+			g.noteRemoval(path, res.Status, res.Body)
 		}
 		g.noteAnswer(id, res.Status, res.Body, time.Now())
 		return res.Status, res.Body, err
@@ -83,6 +85,7 @@ func (g *Group) Call(ctx context.Context, id, method, path string, body []byte) 
 	var untrusted *relay.UntrustedAnswer
 	switch {
 	case err == nil:
+		g.noteRemoval(path, status, out)
 		g.noteAnswer(id, status, out, time.Now())
 	case errors.As(err, &untrusted):
 		g.noteAnswer(id, untrusted.Status, untrusted.Body, time.Now())
@@ -151,6 +154,15 @@ func (g *Group) noteAnswer(id string, status int, body []byte, now time.Time) {
 			delete(g.st.Members, id)
 			g.dirty = true
 		}
+	}
+}
+
+// noteRemoval takes an approved instance's word that this one was removed
+// while it was away, when the decision itself never reached it. Only the
+// group's own routes count, since an app's answer may say anything.
+func (g *Group) noteRemoval(path string, status int, body []byte) {
+	if status == http.StatusGone && strings.HasPrefix(path, internalPrefix) && bytes.Equal(body, removedRefusal.body) {
+		g.heardRemoved()
 	}
 }
 

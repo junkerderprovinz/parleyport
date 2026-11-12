@@ -18,7 +18,9 @@
 // takes out as JSON and returns once the members in reach took the removal;
 // DIR keeps it out on every command after. Every command but join takes part
 // for as long as it runs, waits up to -wait for the members to show, and
-// leaves.
+// leaves. A command that finds this member taken out by another forgets the
+// membership, leaves the file removed-here in DIR and fails until join runs
+// again.
 package main
 
 import (
@@ -32,7 +34,9 @@ import (
 	"io/fs"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"text/tabwriter"
 	"time"
 
@@ -49,6 +53,13 @@ const settle = 1500 * time.Millisecond
 
 // errUsage is a command line that does not make sense; it exits with 2.
 var errUsage = errors.New("usage")
+
+// errRemoved is a command that found this member taken out of its fortress.
+var errRemoved = errors.New("this member was taken out of the fortress; join again with the current phrase")
+
+// removedHere is all that stays in DIR of a membership another member ended,
+// so the plugin can still say so on its next run.
+const removedHere = "removed-here"
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -149,39 +160,65 @@ func join(dir string, m fortress.Membership, stdin io.Reader) error {
 		return err
 	}
 	defer clear(secret)
-	return fortress.Join(dir, secret, m)
+	if err := fortress.Join(dir, secret, m); err != nil {
+		return err
+	}
+	if err := os.Remove(filepath.Join(dir, removedHere)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 // withFortress joins the fortress kept in dir, waits for its members and runs
-// do. When the phrase changed since the last run, it follows first.
+// do. When the phrase changed since the last run, it follows first. A member
+// that hears it was taken out forgets the membership and leaves removedHere.
 func withFortress(ctx context.Context, dir string, wait time.Duration, do func(*fortress.Fortress) error) error {
-	f, leave, err := openDir(ctx, dir, wait)
+	var removed atomic.Bool
+	f, leave, err := openDir(ctx, dir, wait, &removed)
 	if err != nil {
 		return err
 	}
 	// A member out of reach is asked for the new keys again on the next run,
 	// and do says what the old phrase still reaches.
-	if moved, _ := fortress.Follow(ctx, dir, f); moved {
+	if moved, _ := fortress.Follow(ctx, dir, f); moved && !removed.Load() {
 		if err := errors.Join(f.Close(), leave()); err != nil {
 			return err
 		}
-		if f, leave, err = openDir(ctx, dir, wait); err != nil {
+		if f, leave, err = openDir(ctx, dir, wait, &removed); err != nil {
 			return err
 		}
 	}
-	return errors.Join(do(f), f.Close(), leave())
+	err = errors.Join(do(f), f.Close(), leave())
+	if removed.Load() {
+		return errors.Join(forget(dir), errRemoved)
+	}
+	return err
+}
+
+func forget(dir string) error {
+	if err := os.RemoveAll(dir); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, removedHere), nil, 0o600)
 }
 
 // openDir joins the fortress kept in dir and waits for its members. leave
 // closes what it started besides the fortress.
-func openDir(ctx context.Context, dir string, wait time.Duration) (f *fortress.Fortress, leave func() error, err error) {
+func openDir(ctx context.Context, dir string, wait time.Duration, removed *atomic.Bool) (f *fortress.Fortress, leave func() error, err error) {
 	cfg, err := fortress.Load(dir)
 	if errors.Is(err, fs.ErrNotExist) {
+		if _, gone := os.Stat(filepath.Join(dir, removedHere)); gone == nil {
+			return nil, nil, errRemoved
+		}
 		return nil, nil, fmt.Errorf("%s holds no fortress yet; run fortress join first", dir)
 	}
 	if err != nil {
 		return nil, nil, err
 	}
+	cfg.OnRemoved = func() { removed.Store(true) }
 	leave = func() error { return nil }
 	if cfg.LAN != nil {
 		cfg.LAN.Start()

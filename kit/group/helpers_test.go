@@ -203,6 +203,10 @@ func appRoutes() http.Handler {
 		_, _ = io.Copy(w, r.Body)
 	})
 	mux.HandleFunc("GET /api/panic", func(http.ResponseWriter, *http.Request) { panic("boom") })
+	mux.HandleFunc("GET /api/gone", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusGone)
+		_, _ = w.Write([]byte("removed"))
+	})
 	mux.HandleFunc("GET /api/big", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(make([]byte, maxAnswerBytes+1))
 	})

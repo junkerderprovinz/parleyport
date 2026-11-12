@@ -708,9 +708,7 @@ func (g *Group) decide(d decision, now time.Time) {
 	switch d.Op {
 	case opRemove:
 		if d.ID == g.self {
-			if g.onRemoved != nil {
-				g.removed.Do(func() { go g.onRemoved() })
-			}
+			g.heardRemoved()
 			return
 		}
 		if kindOfID(d.ID) != "" {
@@ -718,6 +716,12 @@ func (g *Group) decide(d decision, now time.Time) {
 		}
 	case opApprove:
 		_ = g.Import(Roster{Members: []Member{{ID: d.ID, Kind: d.Kind, Key: d.Key, State: StateApproved}}})
+	}
+}
+
+func (g *Group) heardRemoved() {
+	if g.onRemoved != nil {
+		g.removed.Do(func() { go g.onRemoved() })
 	}
 }
 
