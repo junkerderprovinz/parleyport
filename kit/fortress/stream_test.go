@@ -219,3 +219,29 @@ func TestALargeFirstMessageOfAWebsocketArrivesWhole(t *testing.T) {
 		}
 	}
 }
+
+func TestAPageWithManySocketsLeavesRoomForItsRequests(t *testing.T) {
+	_, _, path, br := liveOpening(t)
+	var conns []*websocket.Conn
+	for range maxTabStreams {
+		c, err := dialThrough(t, br, path+"/ws")
+		if err != nil {
+			t.Fatal(err)
+		}
+		conns = append(conns, c)
+	}
+	for i, c := range conns {
+		msg := fmt.Sprintf("socket %d", i)
+		if err := c.Write(ctx(t), websocket.MessageText, []byte(msg)); err != nil {
+			t.Fatal(err)
+		}
+		if _, got, err := c.Read(ctx(t)); err != nil || string(got) != "echo "+msg {
+			t.Fatalf("socket %d read %q %v", i, got, err)
+		}
+	}
+	for range 4 {
+		if res := br.get(path + "/private"); res.StatusCode != http.StatusOK {
+			t.Fatalf("a request beside %d sockets: %d", len(conns), res.StatusCode)
+		}
+	}
+}

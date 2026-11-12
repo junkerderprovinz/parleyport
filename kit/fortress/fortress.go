@@ -337,6 +337,10 @@ type Fortress struct {
 	// jarKey keeps the sign-ins of this app's users apart in the jars of the
 	// members they open, without naming them there.
 	jarKey []byte
+	// pumps ask the members for what came on the streams of opened tabs,
+	// one for each sign-in.
+	pumpMu sync.Mutex
+	pumps  map[string]*pump
 	// opening bounds the requests of every opened tab on their way at once.
 	opening   chan struct{}
 	onRemoved func()
