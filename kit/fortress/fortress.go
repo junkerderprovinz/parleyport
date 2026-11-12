@@ -19,6 +19,11 @@
 // actions. Every event carries how many rules led to it, and a chain stops at
 // events.MaxDepth, so two apps that answer each other cannot loop.
 //
+// A member that offers its web interface with Config.UI opens through the
+// fortress for the members whose app may run OpenAction there: Open and
+// OpenHandler show it to a signed-in user of the opening app, in a sandbox of
+// its own and behind the member's own sign-in.
+//
 // The phrase is the proof: a device that holds it is a member at once, with
 // the permissions as they stand. A member taken out is refused by all the
 // others for good, but whoever still holds the phrase can come back under a
@@ -33,6 +38,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -201,6 +207,9 @@ type Config struct {
 	// Pairing.Group sets its own, as in group.Config.
 	MaxAnswerBytes      int
 	MaxRelayAnswerBytes int
+	// UI is the app's web interface, which the members whose app may run
+	// OpenAction here open through the fortress; nil offers none.
+	UI *UI
 	// OnRemoved runs, at most once and on its own goroutine, when another
 	// member says this instance was taken out of the fortress or its pairing.
 	// The app leaves.
@@ -250,10 +259,12 @@ func (cfg Config) check() error {
 		return errors.New("fortress: the pairing sets who joins, as whom or where, which is the fortress's to set")
 	case len(cfg.Actions) > maxNames || len(cfg.Uses) > maxNames:
 		return errors.New("fortress: too many actions")
+	case cfg.UI != nil && !cfg.UI.complete():
+		return errors.New("fortress: an interface needs a handler, SignIn and Opened")
 	}
 	seen := map[string]bool{}
 	for _, a := range cfg.Actions {
-		if a.Name == ExportAction || a.Name == ImportAction || a.Name == EventsAction {
+		if a.Name == ExportAction || a.Name == ImportAction || a.Name == EventsAction || a.Name == OpenAction {
 			return fmt.Errorf("fortress: %s is offered through its own field of Config, not as an action", a.Name)
 		}
 		if !validAction(a.Name) || a.Run == nil || seen[a.Name] {
@@ -306,18 +317,28 @@ func (m Member) Online() bool { return m.Direct || m.Relay }
 
 // Fortress is this instance's side of its fortress.
 type Fortress struct {
-	app       App
-	self      string
-	about     about
-	actions   map[string]Action
-	status    http.Handler
-	store     *splitStore
-	group     *group.Group
-	pairing   *group.Group
-	keeper    Keeper
-	export    func(context.Context, Caller) (io.ReadCloser, int64, error)
-	importer  func(context.Context, Caller, io.Reader, int64) error
-	events    *events.Log
+	app      App
+	self     string
+	about    about
+	actions  map[string]Action
+	status   http.Handler
+	store    *splitStore
+	group    *group.Group
+	pairing  *group.Group
+	keeper   Keeper
+	export   func(context.Context, Caller) (io.ReadCloser, int64, error)
+	importer func(context.Context, Caller, io.Reader, int64) error
+	events   *events.Log
+	ui       *UI
+	uiLimit  int
+	jars     jars
+	streams  streams
+	tickets  tickets
+	// jarKey keeps the sign-ins of this app's users apart in the jars of the
+	// members they open, without naming them there.
+	jarKey []byte
+	// opening bounds the requests of every opened tab on their way at once.
+	opening   chan struct{}
 	onRemoved func()
 	removed   sync.Once
 	// paired is what the pairing derives from the secret, which a phone
@@ -377,6 +398,10 @@ func Open(cfg Config) (*Fortress, error) {
 	if err != nil {
 		return nil, err
 	}
+	jarKey := make([]byte, 32)
+	if _, err := rand.Read(jarKey); err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	f := &Fortress{
 		app:       cfg.App,
@@ -388,6 +413,11 @@ func Open(cfg Config) (*Fortress, error) {
 		export:    cfg.Export,
 		importer:  cfg.Import,
 		events:    cfg.Events,
+		ui:        cfg.UI,
+		uiLimit:   cmp.Or(cfg.MaxAnswerBytes, maxUIAnswer),
+		jars:      newJars(),
+		jarKey:    jarKey,
+		opening:   make(chan struct{}, maxOpenCalls),
 		onRemoved: cfg.OnRemoved,
 		book:      bk,
 		// A book written at once tells a later change of phrase from a fresh
@@ -411,6 +441,9 @@ func Open(cfg Config) (*Fortress, error) {
 	}
 	if cfg.Import != nil {
 		f.about.Actions = append(f.about.Actions, ImportAction)
+	}
+	if cfg.UI != nil {
+		f.about.Actions = append(f.about.Actions, OpenAction)
 	}
 	if cfg.Events != nil {
 		f.actions[EventsAction] = Action{Name: EventsAction, Run: f.serveEvents}
@@ -486,6 +519,7 @@ func (f *Fortress) Close() error {
 		f.closed = true
 		f.mu.Unlock()
 		f.cancel()
+		f.streams.closeAll()
 		f.wg.Wait()
 		err := f.group.Close()
 		if f.pairing != nil {
@@ -592,6 +626,8 @@ func (f *Fortress) leave() {
 // fortressRemoved follows a removal in the fortress, made here or passed on,
 // into the pairing.
 func (f *Fortress) fortressRemoved(id string) {
+	f.dropCaller(id)
+	f.tickets.dropMember(id)
 	f.mu.Lock()
 	if _, ok := f.book.Members[id]; ok {
 		delete(f.book.Members, id)
@@ -812,6 +848,12 @@ func (f *Fortress) serve(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, f.permissionList())
 	case path == permissionsPath && r.Method == http.MethodPost:
 		f.takeSwitch(w, r, caller.ID)
+	case path == uiPath && r.Method == http.MethodPost:
+		f.serveUI(w, r, caller.ID)
+	case path == uiStreamPath && r.Method == http.MethodPost:
+		f.serveStream(w, r, caller.ID)
+	case path == uiCheckPath && r.Method == http.MethodPost:
+		f.checkUI(w, r, caller.ID)
 	case path == phrasePath && r.Method == http.MethodPost && f.keeper != nil:
 		takeSecret(w, r, f.keeper)
 	case len(path) > len(actPrefix) && path[:len(actPrefix)] == actPrefix && r.Method == http.MethodPost:

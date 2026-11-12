@@ -148,6 +148,8 @@ type setup struct {
 	// icon and host are what the instance says of its app and its server.
 	icon, host string
 	log        *events.Log
+	// ui is the app's web interface the others open.
+	ui *UI
 	// noListener opens the instance without a direct address, so the others
 	// reach it through the relay alone.
 	noListener bool
@@ -223,6 +225,7 @@ func config(t *testing.T, n *node, s setup) Config {
 		MaxRelayAnswerBytes: s.maxRelay,
 		Export:              s.export,
 		Import:              s.importer,
+		UI:                  s.ui,
 	}
 	cfg.Actions = append(cfg.Actions, s.actions...)
 	if !s.noPair {
