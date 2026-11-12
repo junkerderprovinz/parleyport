@@ -169,7 +169,8 @@ type Config struct {
 	// none.
 	Status status.Source
 	// Actions are what the app does for other members, Uses the actions it
-	// calls at them.
+	// calls at them. Another member runs nothing for this app that Uses does
+	// not name.
 	Actions []Action
 	Uses    []string
 	// Export hands over this instance's backup and its length in bytes when
@@ -666,9 +667,13 @@ func (f *Fortress) greet(id string) {
 }
 
 func (f *Fortress) appOf(id string) string {
+	return f.aboutOf(id).App.ID
+}
+
+func (f *Fortress) aboutOf(id string) about {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.book.Members[id].App.ID
+	return f.book.Members[id]
 }
 
 // run looks after the members until Close.

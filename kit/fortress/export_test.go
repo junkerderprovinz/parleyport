@@ -80,7 +80,7 @@ func export(t *testing.T, from, to *node) ([]byte, error) {
 func TestABackupLargerThanARelayFrameArrivesWholeOnTheNetwork(t *testing.T) {
 	const size = 9<<20 + 4321
 	var count atomic.Int32
-	a, b := onOneNetwork(t, setup{}, setup{export: exporting(size, &count)}, unchanged)
+	a, b := onOneNetwork(t, setup{uses: []string{ExportAction}}, setup{export: exporting(size, &count)}, unchanged)
 	got, err := export(t, a, b)
 	if err != nil || !bytes.Equal(got, backupOf(size)) {
 		t.Fatalf("alpha exports bravo's backup: %d of %d bytes, %v", len(got), size, err)
@@ -107,7 +107,7 @@ func TestABackupIsNotExportedThroughTheRelay(t *testing.T) {
 
 func TestABackupIsNotExportedWithoutThePermission(t *testing.T) {
 	var count atomic.Int32
-	a, b := onOneNetwork(t, setup{}, setup{export: exporting(10, &count)}, unchanged)
+	a, b := onOneNetwork(t, setup{uses: []string{ExportAction}}, setup{export: exporting(10, &count)}, unchanged)
 	if err := b.f.SetPermission("alpha", "bravo", ExportAction, false); err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestABackupIsNotExportedWithoutThePermission(t *testing.T) {
 }
 
 func TestAnAppWithoutAnExportSaysSo(t *testing.T) {
-	a, b := onOneNetwork(t, setup{}, setup{}, unchanged)
+	a, b := onOneNetwork(t, setup{uses: []string{ExportAction}}, setup{}, unchanged)
 	if _, err := export(t, a, b); !errors.Is(err, ErrNoSuchAction) {
 		t.Errorf("an export from an app without one: %v, want ErrNoSuchAction", err)
 	}
@@ -136,7 +136,7 @@ func TestAnExportPassesOnTheAppsRefusal(t *testing.T) {
 	refuse := func(context.Context, Caller) (io.ReadCloser, int64, error) {
 		return nil, 0, &Refusal{Code: "backup_running"}
 	}
-	a, b := onOneNetwork(t, setup{}, setup{export: refuse}, unchanged)
+	a, b := onOneNetwork(t, setup{uses: []string{ExportAction}}, setup{export: refuse}, unchanged)
 	if _, err := export(t, a, b); refusalCode(err) != "backup_running" {
 		t.Errorf("a refused export: %v, want backup_running", err)
 	}
@@ -148,7 +148,7 @@ func TestAnExportSeesWhoAsked(t *testing.T) {
 		asked.Store(from)
 		return io.NopCloser(bytes.NewReader(nil)), 0, nil
 	}
-	a, b := onOneNetwork(t, setup{}, setup{export: who}, unchanged)
+	a, b := onOneNetwork(t, setup{uses: []string{ExportAction}}, setup{export: who}, unchanged)
 	if _, err := export(t, a, b); err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +195,7 @@ func TestADamagedOrCutExportFails(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			var count atomic.Int32
-			a, b := onOneNetwork(t, setup{}, setup{export: exporting(size, &count)}, tampering(t, damage))
+			a, b := onOneNetwork(t, setup{uses: []string{ExportAction}}, setup{export: exporting(size, &count)}, tampering(t, damage))
 			got, err := export(t, a, b)
 			if !errors.Is(err, group.ErrStreamBroken) {
 				t.Errorf("a damaged export: %d bytes, %v, want group.ErrStreamBroken", len(got), err)
@@ -208,7 +208,7 @@ func TestAnExportShorterThanItSaidFails(t *testing.T) {
 	short := func(context.Context, Caller) (io.ReadCloser, int64, error) {
 		return io.NopCloser(bytes.NewReader(backupOf(1000))), 2000, nil
 	}
-	a, b := onOneNetwork(t, setup{}, setup{export: short}, unchanged)
+	a, b := onOneNetwork(t, setup{uses: []string{ExportAction}}, setup{export: short}, unchanged)
 	if _, err := export(t, a, b); !errors.Is(err, group.ErrStreamBroken) {
 		t.Errorf("an export shorter than it said: %v, want group.ErrStreamBroken", err)
 	}
@@ -239,7 +239,7 @@ func TestAnAnswerMayBeAsLargeAsTheAppAllows(t *testing.T) {
 		return err
 	}
 	t.Run("directly", func(t *testing.T) {
-		a, b := onOneNetwork(t, setup{maxAnswer: 6 << 20}, setup{actions: []Action{big}, maxAnswer: 6 << 20}, unchanged)
+		a, b := onOneNetwork(t, setup{maxAnswer: 6 << 20, uses: []string{big.Name}}, setup{actions: []Action{big}, maxAnswer: 6 << 20}, unchanged)
 		if err := act(t, a, b, 6<<20); err != nil {
 			t.Errorf("an answer of 6 MiB on the network: %v", err)
 		}
@@ -249,7 +249,7 @@ func TestAnAnswerMayBeAsLargeAsTheAppAllows(t *testing.T) {
 	})
 	t.Run("through the relay", func(t *testing.T) {
 		url := relayServer(t)
-		a := open(t, "alpha", "alpha-1", setup{relay: url, noListener: true})
+		a := open(t, "alpha", "alpha-1", setup{relay: url, noListener: true, uses: []string{big.Name}})
 		b := open(t, "bravo", "bravo-1", setup{relay: url, noListener: true, actions: []Action{big}, maxRelay: 6 << 20})
 		waitFor(t, "both on the relay", func() bool { return len(a.f.Members()) == 1 && len(b.f.Members()) == 1 })
 		meet(t, a, b)
@@ -260,4 +260,19 @@ func TestAnAnswerMayBeAsLargeAsTheAppAllows(t *testing.T) {
 			t.Errorf("an answer past 6 MiB through the relay: %v, want answerTooLarge", err)
 		}
 	})
+}
+
+func TestABackupAskedForAsAnActionIsRefusedForWhatItIs(t *testing.T) {
+	var count atomic.Int32
+	a, b := onOneNetwork(t, setup{}, setup{export: exporting(10, &count)}, unchanged)
+	if _, err := a.f.Act(ctx(t), b.id, ExportAction, nil); !errors.Is(err, ErrNotUsed) {
+		t.Errorf("an app that does not use backup.export asks for it: %v, want ErrNotUsed", err)
+	}
+	c, d := onOneNetwork(t, setup{uses: []string{ExportAction}}, setup{export: exporting(10, &count)}, unchanged)
+	if _, err := c.f.Act(ctx(t), d.id, ExportAction, nil); refusalCode(err) != "stream_only" {
+		t.Errorf("backup.export asked for as an action: %v, want stream_only", err)
+	}
+	if n := count.Load(); n != 0 {
+		t.Errorf("bravo exported %d times for an ordinary call", n)
+	}
 }

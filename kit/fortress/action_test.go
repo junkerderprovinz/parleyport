@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/junkerderprovinz/parleyport/kit/status"
@@ -147,7 +148,7 @@ func TestAnActionsRefusalKeepsItsStatus(t *testing.T) {
 		}
 		return nil, &Refusal{Code: "busy"}
 	}}
-	a := open(t, "alpha", "alpha-1", setup{relay: url})
+	a := open(t, "alpha", "alpha-1", setup{relay: url, uses: []string{lookup.Name}})
 	b := open(t, "bravo", "bravo-1", setup{relay: url, actions: []Action{lookup}})
 	waitFor(t, "both on the relay", func() bool { return len(a.f.Members()) == 1 && len(b.f.Members()) == 1 })
 	meet(t, a, b)
@@ -160,6 +161,36 @@ func TestAnActionsRefusalKeepsItsStatus(t *testing.T) {
 		var got *Refusal
 		if !errors.As(err, &got) || *got != want {
 			t.Errorf("the action refusing %s arrives as %v, want %+v", body, err, want)
+		}
+	}
+}
+
+func TestAnActionTheCallersAppDoesNotUseIsRefused(t *testing.T) {
+	url := relayServer(t)
+	var ran atomic.Int32
+	run := Action{Name: "jobs.run", Run: func(context.Context, Caller, []byte) ([]byte, error) {
+		ran.Add(1)
+		return []byte(`{}`), nil
+	}}
+	a := open(t, "alpha", "alpha-1", setup{relay: url})
+	b := open(t, "bravo", "bravo-1", setup{relay: url, actions: []Action{run}})
+	c := open(t, "charlie", "charlie-1", setup{relay: url, uses: []string{"jobs.run"}})
+	meet(t, a, b)
+	meet(t, c, b)
+
+	_, err := a.f.Act(ctx(t), b.id, "jobs.run", nil)
+	if !errors.Is(err, ErrNotUsed) || !errors.Is(err, ErrPermissionOff) {
+		t.Errorf("alpha, which does not use jobs.run, ran it: %v, want ErrNotUsed", err)
+	}
+	if n := ran.Load(); n != 0 {
+		t.Fatalf("bravo ran jobs.run %d times for an app that does not use it", n)
+	}
+	if _, err := c.f.Act(ctx(t), b.id, "jobs.run", nil); err != nil {
+		t.Errorf("charlie, which uses jobs.run, ran it: %v", err)
+	}
+	for _, p := range b.f.Permissions() {
+		if p.Action == "jobs.run" && p.From == "alpha" {
+			t.Errorf("bravo lists a switch for an action alpha does not use: %+v", p)
 		}
 	}
 }
