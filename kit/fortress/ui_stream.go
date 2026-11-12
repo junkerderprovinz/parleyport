@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+
+	"github.com/junkerderprovinz/parleyport/kit/group"
 )
 
 // A live stream of an opened page, a websocket or an event stream, does not
@@ -30,14 +32,18 @@ const (
 	pollFor = 10 * time.Second
 	// streamIdle ends a stream nobody asked about for that long.
 	streamIdle = 30 * time.Second
-	// maxStreamQueue is what a stream holds for the opening member at most;
-	// a stream that falls further behind ends and the browser connects anew.
-	maxStreamQueue = 256 << 10
+	// A stream holds what fits into half an answer for the opening member,
+	// at least minStreamBytes and at most maxStreamBytes, and so does one
+	// message; a stream that falls further behind ends and the browser
+	// connects anew.
+	minStreamBytes = 256 << 10
+	maxStreamBytes = 4 << 20
 	// maxStreamsPerCaller and maxStreams bound the streams the opened app
-	// runs for one member and in all, maxTabStreams those of one tab.
-	maxStreamsPerCaller = 4
-	maxStreams          = 16
-	maxTabStreams       = 2
+	// runs for one member and in all, maxTabStreams those of one tab. A page
+	// may hold more than one socket.
+	maxStreamsPerCaller = 8
+	maxStreams          = 32
+	maxTabStreams       = 4
 	// startFor is how long the opened app may take to answer a new stream.
 	startFor = 10 * time.Second
 )
@@ -66,6 +72,7 @@ type streamAnswer struct {
 // stream is one live stream the opened app runs for a member.
 type stream struct {
 	caller string
+	limit  int
 	cancel context.CancelFunc
 	send   func(ctx context.Context, binary bool, data []byte) error
 
@@ -83,7 +90,7 @@ func (s *stream) push(m streamMsg) {
 	if s.done {
 		return
 	}
-	if s.queued+len(m.Data) > maxStreamQueue {
+	if s.queued+len(m.Data) > s.limit {
 		s.done = true
 		s.cancel()
 	} else {
@@ -115,8 +122,14 @@ func (s *stream) take(ctx context.Context) ([]streamMsg, bool) {
 		s.mu.Lock()
 		s.used = time.Now()
 		if len(s.queue) > 0 || s.done {
-			out, done := s.queue, s.done
-			s.queue, s.queued = nil, 0
+			n, size := 0, 0
+			for n < len(s.queue) && (n == 0 || size+len(s.queue[n].Data) <= s.limit) {
+				size += len(s.queue[n].Data)
+				n++
+			}
+			out := s.queue[:n:n]
+			s.queue, s.queued = s.queue[n:], s.queued-size
+			done := s.done && len(s.queue) == 0
 			s.mu.Unlock()
 			return out, done
 		}
@@ -311,7 +324,7 @@ func (f *Fortress) startStream(w http.ResponseWriter, op streamOp, from Caller) 
 		f.ui.Opened(from)
 	}
 	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), openedKey{}, from))
-	s := &stream{caller: from.ID, cancel: cancel, used: time.Now(), ready: make(chan struct{}, 1)}
+	s := &stream{caller: from.ID, limit: min(max(f.uiLimit/2, minStreamBytes), maxStreamBytes), cancel: cancel, used: time.Now(), ready: make(chan struct{}, 1)}
 	id, ok := f.streams.add(s)
 	if !ok {
 		cancel()
@@ -443,7 +456,7 @@ func (f *Fortress) startSocket(ctx context.Context, s *stream, target string, he
 		}
 		return http.StatusBadGateway, nil
 	}
-	c.SetReadLimit(maxStreamQueue)
+	c.SetReadLimit(int64(s.limit))
 	s.send = func(ctx context.Context, binary bool, data []byte) error {
 		typ := websocket.MessageText
 		if binary {
@@ -575,7 +588,7 @@ func (f *Fortress) tunnelStream(w http.ResponseWriter, r *http.Request, t *ticke
 		return
 	}
 	defer func() { _ = c.CloseNow() }()
-	c.SetReadLimit(maxStreamQueue)
+	c.SetReadLimit(group.MaxCallBytes - maxAskHead)
 	go func() {
 		defer cancel()
 		for {

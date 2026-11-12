@@ -41,6 +41,19 @@ func live(ui *UI) *UI {
 			}
 		}
 	})
+	mux.HandleFunc("GET /big-ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer func() { _ = c.CloseNow() }()
+		for range 3 {
+			if err := c.Write(r.Context(), websocket.MessageText, []byte(strings.Repeat("t", 600_000))); err != nil {
+				return
+			}
+		}
+		_, _, _ = c.Read(r.Context())
+	})
 	mux.HandleFunc("GET /events", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		flusher := w.(http.Flusher)
@@ -190,5 +203,19 @@ func TestTheStreamsOfOpenedPagesStayFew(t *testing.T) {
 	}
 	if maxTabStreams+more != maxStreamsPerCaller {
 		t.Fatalf("%d websockets for one member, want %d", maxTabStreams+more, maxStreamsPerCaller)
+	}
+}
+
+func TestALargeFirstMessageOfAWebsocketArrivesWhole(t *testing.T) {
+	_, _, path, br := liveOpening(t)
+	c, err := dialThrough(t, br, path+"/big-ws")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 3 {
+		_, msg, err := c.Read(ctx(t))
+		if err != nil || len(msg) != 600_000 {
+			t.Fatalf("message %d: %d bytes, %v", i, len(msg), err)
+		}
 	}
 }
