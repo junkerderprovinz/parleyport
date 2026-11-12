@@ -29,7 +29,8 @@ ParleyPort is a relay for apps that pair their instances. When two of your insta
 3. [What it looks like](#3-what-it-looks-like)
 4. [What it does](#4-what-it-does)
 5. [Getting started](#5-getting-started)
-6. [How AI is used here](#6-how-ai-is-used-here)
+6. [For app authors](#6-for-app-authors)
+7. [How AI is used here](#7-how-ai-is-used-here)
 
 <br>
 
@@ -134,7 +135,27 @@ Then, on every instance of the group, open **Settings, Pairing, Relay, Own relay
 
 <br>
 
-<p><a id="6-how-ai-is-used-here" href="#6-how-ai-is-used-here"><picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/sections/6-how-ai-is-used-here-dark.svg"><img src=".github/assets/sections/6-how-ai-is-used-here.svg" alt="6. How AI is used here" width="100%"></picture></a></p>
+<p><a id="6-for-app-authors" href="#6-for-app-authors"><picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/sections/6-for-app-authors-dark.svg"><img src=".github/assets/sections/6-for-app-authors.svg" alt="6. For app authors" width="100%"></picture></a></p>
+
+The other half of ParleyPort is the kit, the client side of the protocol as a Go module of its own. An app that pairs its instances imports it and gets the twelve words, the member keys, the relay client, the group that finds its members on the network or over the relay, and the fortress that puts all of a household's apps under one phrase.
+
+```sh
+go get github.com/junkerderprovinz/parleyport/kit@latest
+```
+
+The kit has a version line of its own. The server's tags are `vX.Y.Z`, the kit's are `kit/vX.Y.Z`, so an app moves to a new kit without waiting for a new relay. [kit/README.md](kit/README.md) lists the packages, and [kit/CHANGELOG.md](kit/CHANGELOG.md) says what each version brought.
+
+A plugin without Go code takes part through the two helpers attached to every release, built for linux/amd64 and arm64. `fortress` joins a fortress, lists the members, reads their status and asks one of them for an action. `notify` sends a message to the channels in a file and shows and saves those channels with every secret masked. Check what you download against `helpers-sha256sums.txt`:
+
+```sh
+base=https://github.com/junkerderprovinz/parleyport/releases/latest/download
+curl -fsSL -O "$base/fortress-linux-amd64" -O "$base/helpers-sha256sums.txt"
+sha256sum --check --ignore-missing helpers-sha256sums.txt
+```
+
+<br>
+
+<p><a id="7-how-ai-is-used-here" href="#7-how-ai-is-used-here"><picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/sections/7-how-ai-is-used-here-dark.svg"><img src=".github/assets/sections/7-how-ai-is-used-here.svg" alt="7. How AI is used here" width="100%"></picture></a></p>
 
 One knight builds this, and AI is one of the tools I work with, the same way I work with an editor or a compiler. It helps me write code and documentation and it checks my work, and that saves me a good many evenings. It does not make the decisions, though. I read and understand everything before it ships, and if something here breaks, that is on me and not on the tool.
 

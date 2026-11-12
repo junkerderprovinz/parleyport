@@ -12,4 +12,4 @@ Apps that pair their instances import it for the pieces they would otherwise eac
 
 `cmd/notify` does the same for messages: it sends an event to the channels in a file, tries one channel, and shows and saves the channels for a settings page with every secret masked. Both are attached to each ParleyPort release for linux/amd64 and arm64.
 
-It is versioned apart from the server, with tags of the form `kit/vX.Y.Z`. Until the first apps run on it, the version stays at 0.x and the API may still change.
+It is versioned apart from the server, with tags of the form `kit/vX.Y.Z`. Within 1.x an update keeps every app building, and [CHANGELOG.md](CHANGELOG.md) says what each version brought.
