@@ -1,5 +1,5 @@
-// Package relay routes messages between KnightLoader or BombVault instances
-// that present the same relay key, so two instances behind NAT can reach each
+// Package relay routes messages between instances of a client app that
+// present the same relay key, so two instances behind NAT can reach each
 // other by both dialling out to one place.
 //
 // Possession of the key is the whole authorization model: the relay has no
@@ -19,6 +19,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"net/netip"
 	"sync"
@@ -180,6 +181,15 @@ func New() *Server {
 	}
 }
 
+// failHandshake counts a failed handshake against addr and logs a block it
+// starts, without the address, so an owner can tell a refused client from a
+// relay that is down.
+func (s *Server) failHandshake(addr string) {
+	if d := s.limiter.fail(addr); d > 0 {
+		log.Printf("relay: an address that keeps failing the handshake is refused for %s", d)
+	}
+}
+
 // admits reports whether key may connect. Admit is read without the lock
 // because it is set once before the server is mounted, to a closure that
 // reads live configuration itself.
@@ -234,9 +244,9 @@ func (s *Server) Len() int {
 // be answered. Anybody else could announce the same id to take the instance's
 // calls, so an id whose holder proved the key behind it (proven, see
 // Hello.proves) is taken only by a connection that proves it too. A holder
-// that proved nothing, as every BombVault and every KnightLoader before 1.9
-// does, is replaced by whoever announces its id, since such a client has
-// nothing else to reclaim its place with. The replaced connection gets no
+// that proved nothing, as a hello-first client does, is replaced by whoever
+// announces its id, since such a client has nothing else to reclaim its place
+// with. The replaced connection gets no
 // offline presence, since the announce says the instance is back, but
 // requests still waiting on it are failed at once (see failPending).
 //
@@ -620,8 +630,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	c.SetReadLimit(helloLimit)
 
 	// Sent before the hello is read and never waited on, so a client that
-	// writes its hello at once and skips frame types it does not know, as
-	// every BombVault does, connects without ever looking at it.
+	// writes its hello at once and skips frame types it does not know
+	// connects without ever looking at it.
 	challenge := make([]byte, challengeSize)
 	if _, err := rand.Read(challenge); err != nil {
 		_ = c.Close(websocket.StatusInternalError, "the relay has no randomness for a challenge")
@@ -637,14 +647,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	hello, err := readHello(r.Context(), c)
 	if err != nil {
-		s.limiter.fail(addr)
+		s.failHandshake(addr)
 		_ = c.Close(websocket.StatusPolicyViolation, "the first frame must be a hello with a relay key of at least 32 characters and an instance id")
 		return
 	}
 	// Checked before Join, so an unserved key never enters the registry. The
 	// close reason tells an instance whose key stopped matching what happened.
 	if !s.admits(hello.Key) {
-		s.limiter.fail(addr)
+		s.failHandshake(addr)
 		_ = c.Close(websocket.StatusPolicyViolation, "this relay does not serve that relay key")
 		return
 	}

@@ -96,15 +96,14 @@ func announceOf(t *testing.T, env Envelope, msg string) Announce {
 	return a
 }
 
-// join adds a connection whose hello proved its id, as a KnightLoader 1.9
-// member's does.
+// join adds a connection whose hello proved its id, as a member's does.
 func join(t *testing.T, s *Server, key, id string) *fakeConn {
 	t.Helper()
 	return joinAs(t, s, key, id, true)
 }
 
-// joinUnproven adds a connection whose hello proved nothing, as every
-// BombVault's and every older KnightLoader's.
+// joinUnproven adds a connection whose hello proved nothing, as a hello-first
+// client's does.
 func joinUnproven(t *testing.T, s *Server, key, id string) *fakeConn {
 	t.Helper()
 	return joinAs(t, s, key, id, false)
@@ -387,10 +386,10 @@ func TestAnIDIsTakenOverOnlyWithItsKey(t *testing.T) {
 	}
 }
 
-// TestAnUnprovenIDGoesToTheNewestConnection: BombVault and KnightLoader
-// before 1.9 prove nothing, and an instance of theirs whose socket died
-// reconnects under the same id. The newest connection takes the id, and a
-// proven one takes it from an unproven holder for good.
+// TestAnUnprovenIDGoesToTheNewestConnection: a hello-first client proves
+// nothing, and an instance of it whose socket died reconnects under the same
+// id. The newest connection takes the id, and a proven one takes it from an
+// unproven holder for good.
 func TestAnUnprovenIDGoesToTheNewestConnection(t *testing.T) {
 	s := New()
 	sib := joinUnproven(t, s, "key-1", "watcher")

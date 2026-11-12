@@ -16,10 +16,9 @@ import (
 	"github.com/coder/websocket"
 )
 
-// The member keys of the KnightLoader 1.9 instances in these tests, and the
-// ids they make. dialInstance proves an id only when it knows the key behind
-// it, so "bravo" and the like join unproven, as BombVault and older
-// KnightLoader releases do.
+// The member keys of the instances in these tests, and the ids they make.
+// dialInstance proves an id only when it knows the key behind it, so "bravo"
+// and the like join unproven, as hello-first clients do.
 var (
 	alphaKey   = memberKeyFrom('a')
 	bravoKey   = memberKeyFrom('b')
@@ -107,7 +106,7 @@ func TestAVeryLongNameStillFitsTheHello(t *testing.T) {
 const wsTimeout = 10 * time.Second
 
 // dialInstance opens a real WebSocket to the relay and completes the hello
-// handshake as a KnightLoader 1.9 instance does: it waits for the challenge
+// handshake as a member does: it waits for the challenge
 // and, when it holds the key behind id, proves the id for the host it dialled.
 func dialInstance(t *testing.T, url, key, id string) *websocket.Conn {
 	t.Helper()
@@ -380,10 +379,10 @@ func TestAHelloPlayedBackOnAnotherConnectionTakesNoPlace(t *testing.T) {
 	readFrame(t, alpha, TypeProxyRequest)
 }
 
-// TestAKnightLoaderInstanceReconnectsWithItsProof: an instance whose socket
+// TestAMemberReconnectsWithItsProof: an instance whose socket
 // died reconnects before the relay noticed, and its proof takes the place of
 // the dead socket.
-func TestAKnightLoaderInstanceReconnectsWithItsProof(t *testing.T) {
+func TestAMemberReconnectsWithItsProof(t *testing.T) {
 	relaySrv := New()
 	srv := httptest.NewServer(relaySrv)
 	t.Cleanup(srv.Close)

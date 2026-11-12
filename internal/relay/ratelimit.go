@@ -119,8 +119,8 @@ func (l *limiter) tracked() int {
 }
 
 // fail records one failed handshake and extends the block if the address
-// has now earned one.
-func (l *limiter) fail(addr string) {
+// has now earned one. It returns the length of the block it started, or zero.
+func (l *limiter) fail(addr string) time.Duration {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
@@ -144,7 +144,7 @@ func (l *limiter) fail(addr string) {
 	a.last = now
 
 	if a.fails < failsBeforeBlock {
-		return
+		return 0
 	}
 	if a.blockFor == 0 {
 		a.blockFor = baseBlock
@@ -155,6 +155,7 @@ func (l *limiter) fail(addr string) {
 		}
 	}
 	a.blockedUntil = now.Add(a.blockFor)
+	return a.blockFor
 }
 
 // succeed clears an address's record: a working handshake shows a real client,

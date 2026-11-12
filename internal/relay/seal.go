@@ -2,7 +2,8 @@ package relay
 
 // Sealing proxy frames so the relay that carries them cannot read them. The
 // relay routes on the target and the request id; the path, body and bearer
-// token are sealed under DeriveFrameKey, which the relay does not hold.
+// token are sealed under a frame key the clients derive from their secret,
+// which the relay does not hold.
 //
 // AES-256-GCM is authenticated, in the standard library and hardware
 // accelerated everywhere this ships. The 12-byte nonce is random and prefixed
