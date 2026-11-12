@@ -632,3 +632,15 @@ func TestATabBehindAProxyPrefixKeepsThePrefix(t *testing.T) {
 		t.Fatalf("a prefix that is no path reached the opened app as %q", got)
 	}
 }
+
+func TestAShellWithoutATicketLeadsHomeBehindTheProxyPrefix(t *testing.T) {
+	a, _, _ := opening(t, true)
+	br := browse(t, a)
+	gone := OpenPath + "0123456789abcdef0123456789abcdef"
+	for prefix, want := range map[string]string{"": "/", "/loader": "/loader/", "/loader/": "/loader/", `/"><x`: "/"} {
+		res := br.get(gone, "Cookie", "own=own", "X-Forwarded-Prefix", prefix)
+		if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != want {
+			t.Errorf("prefix %q: %d to %q, want %q", prefix, res.StatusCode, res.Header.Get("Location"), want)
+		}
+	}
+}

@@ -263,12 +263,12 @@ iframe{flex:1;border:0;width:100%;background:Canvas}
 // tab was opened with.
 func (f *Fortress) serveShell(w http.ResponseWriter, r *http.Request, t *ticket, session func(*http.Request) (string, bool)) {
 	if t == nil {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+		http.Redirect(w, r, proxyBase(r)+"/", http.StatusSeeOther)
 		return
 	}
 	s, ok := session(r)
 	if !ok || subtle.ConstantTimeCompare([]byte(s), []byte(t.session)) != 1 {
-		http.Redirect(w, r, cmp.Or(t.back, "/"), http.StatusSeeOther)
+		http.Redirect(w, r, cmp.Or(t.back, proxyBase(r)+"/"), http.StatusSeeOther)
 		return
 	}
 	f.tickets.use(t, time.Now())
@@ -287,7 +287,7 @@ func (f *Fortress) serveShell(w http.ResponseWriter, r *http.Request, t *ticket,
 	h.Set("Cache-Control", "no-store")
 	_ = shellPage.Execute(w, map[string]any{
 		"App": cmp.Or(a.App.Name, a.App.ID), "Device": m.Device, "ID": t.member, "Print": short,
-		"Icon": template.URL(a.App.Icon), "Back": cmp.Or(t.back, "/"), "Frame": t.id + "/",
+		"Icon": template.URL(a.App.Icon), "Back": cmp.Or(t.back, proxyBase(r)+"/"), "Frame": t.id + "/",
 	})
 }
 
@@ -447,11 +447,17 @@ func refusedCode(status int, body []byte) (string, int) {
 // the path prefix a reverse proxy in front of the app names. A forged prefix
 // only misleads the browser that sent it.
 func tabPath(r *http.Request, t *ticket) string {
+	return proxyBase(r) + OpenPath + t.id
+}
+
+// proxyBase is the path prefix a reverse proxy in front of the app names,
+// without its trailing slash, or "" for none or one that is no path.
+func proxyBase(r *http.Request) string {
 	base := strings.TrimSuffix(r.Header.Get("X-Forwarded-Prefix"), "/")
 	if base != "" && !prefixPattern.MatchString(base+"/") {
-		base = ""
+		return ""
 	}
-	return base + OpenPath + t.id
+	return base
 }
 
 // within places a redirect the opened app answered under the tab's prefix.
