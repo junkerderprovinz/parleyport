@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"go.uber.org/goleak"
@@ -106,7 +107,7 @@ func (a *app) open(t *testing.T, url string, secret, previous []byte) {
 		Previous: previous,
 		Keeper:   a,
 		Identity: id,
-		Self:     group.Self{Name: "tower", Deployment: "container"},
+		Self:     group.Self{Name: "tower", Deployment: "container", Address: "http://tower:8080"},
 		Relay:    group.RelayOwn,
 		RelayURL: url,
 		Store:    a.store,
@@ -167,6 +168,10 @@ func TestAPluginJoinsReadsAndActs(t *testing.T) {
 	var listed []memberOut
 	if err := json.Unmarshal([]byte(out), &listed); err != nil || len(listed) != 1 || listed[0].ID != a.id {
 		t.Fatalf("members lists %s %v, want alpha-1", out, err)
+	}
+	// A plugin that cannot change the phrase points to a member that can.
+	if listed[0].Deployment != "container" || strings.Contains(out, "tower:8080") || strings.Contains(out, `"address"`) {
+		t.Errorf("members gives alpha as %q in %s, want its deployment and no address", listed[0].Deployment, out)
 	}
 
 	code, out, stderr = cli(t, "", "status", "-dir", dir, "-json", "-wait", "10s")
@@ -272,6 +277,7 @@ func TestUsage(t *testing.T) {
 		"an unknown verb":  {"dance"},
 		"no dir":           {"members"},
 		"act without all":  {"act", "-dir", dir, "alpha"},
+		"remove nobody":    {"remove", "-dir", dir},
 		"join without app": {"join", "-dir", dir, "-name", "tower"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -364,5 +370,111 @@ func TestAPluginJoinsWithTheLogoOfItsApp(t *testing.T) {
 	}
 	if code, _, _ := cli(t, words+"\n", "join", "-dir", dir, "-app", "watcher", "-name", "tower", "-relay", "off", "-icon", logo); code != 1 {
 		t.Errorf("join with a logo that runs a script ends with %d, want 1", code)
+	}
+}
+
+// openBeta opens bravo, an instance of the app "beta", that counts how often
+// it heard it was removed.
+func openBeta(t *testing.T, url string, removed *atomic.Int32, device string) (*fortress.Fortress, string) {
+	t.Helper()
+	seed := sha256.Sum256([]byte("beta-" + device))
+	id, err := member.FromSeed(member.KindInstance, seed[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := fortress.Open(fortress.Config{
+		App:       fortress.App{ID: "beta", Name: "Beta", Version: "1.0.0"},
+		Secret:    secret,
+		Identity:  id,
+		Self:      group.Self{Name: device, Deployment: "container"},
+		Relay:     group.RelayOwn,
+		RelayURL:  url,
+		Store:     &memStore{},
+		Status:    source{},
+		OnRemoved: func() { removed.Add(1) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+	return f, id.ID()
+}
+
+func listedIn(f *fortress.Fortress, id string) bool {
+	return slices.ContainsFunc(f.Members(), func(m fortress.Member) bool { return m.ID == id })
+}
+
+func TestAPluginRemovesAMemberEverywhereInReach(t *testing.T) {
+	url := relayServer(t)
+	a := openApp(t, url)
+	var heard atomic.Int32
+	_, bravo := openBeta(t, url, &heard, "shed")
+	dir := t.TempDir()
+	words, err := phrase.Encode(secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, _, stderr := cli(t, words+"\n", "join", "-dir", dir, "-app", "watcher", "-name", "tower", "-relay", url); code != 0 {
+		t.Fatalf("join: %d %s", code, stderr)
+	}
+	code, out, stderr := cli(t, "", "members", "-dir", dir, "-json", "-wait", "10s")
+	if code != 0 || !strings.Contains(out, bravo) {
+		t.Fatalf("members before the removal: %d %s %s", code, out, stderr)
+	}
+
+	code, out, stderr = cli(t, "", "remove", "-dir", dir, "-wait", "10s", "beta")
+	var gone memberOut
+	if code != 0 || json.Unmarshal([]byte(out), &gone) != nil || gone.ID != bravo || gone.App.ID != "beta" || gone.Device != "shed" {
+		t.Fatalf("remove: %d %q %s, want bravo printed", code, out, stderr)
+	}
+	// remove returns once the members in reach have taken the removal.
+	if listedIn(a.f, bravo) {
+		t.Error("alpha still lists bravo after remove returned")
+	}
+	if heard.Load() == 0 {
+		t.Error("bravo did not hear it was removed")
+	}
+
+	// With alpha away, only what the plugin kept keeps bravo out.
+	if err := a.f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	code, out, stderr = cli(t, "", "members", "-dir", dir, "-json", "-wait", "3s")
+	if code != 0 || strings.Contains(out, bravo) {
+		t.Errorf("members after the removal: %d %s %s, want bravo left out", code, out, stderr)
+	}
+	if code, _, stderr := cli(t, "", "remove", "-dir", dir, "-wait", "1s", bravo); code != 1 || !strings.Contains(stderr, "no member") {
+		t.Errorf("removing bravo again: %d %q", code, stderr)
+	}
+}
+
+func TestAPluginRemovesOnlyAMemberItNamesWithoutDoubt(t *testing.T) {
+	url := relayServer(t)
+	openApp(t, url)
+	var heard atomic.Int32
+	_, shed := openBeta(t, url, &heard, "shed")
+	barn, _ := openBeta(t, url, &heard, "barn")
+	dir := t.TempDir()
+	words, err := phrase.Encode(secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, _, stderr := cli(t, words+"\n", "join", "-dir", dir, "-app", "watcher", "-name", "tower", "-relay", url); code != 0 {
+		t.Fatalf("join: %d %s", code, stderr)
+	}
+	if code, out, stderr := cli(t, "", "members", "-dir", dir, "-json", "-wait", "10s"); code != 0 || strings.Count(out, `"beta"`) != 2 {
+		t.Fatalf("members with both betas: %d %s %s", code, out, stderr)
+	}
+	if err := barn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, stderr := cli(t, "", "remove", "-dir", dir, "-wait", "3s", "beta"); code != 1 || !strings.Contains(stderr, "by its id") {
+		t.Fatalf("removing beta by its app with one of two away: %d %q, want a refusal", code, stderr)
+	}
+	if heard.Load() != 0 {
+		t.Fatal("a beta was taken out by its app name")
+	}
+	if code, out, stderr := cli(t, "", "remove", "-dir", dir, "-wait", "10s", shed); code != 0 || !strings.Contains(out, shed) {
+		t.Fatalf("removing beta by its id: %d %s %s", code, out, stderr)
 	}
 }

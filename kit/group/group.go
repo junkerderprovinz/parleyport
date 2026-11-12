@@ -295,6 +295,9 @@ type Group struct {
 	wg        sync.WaitGroup
 	closeOnce sync.Once
 	closeErr  error
+	// passing counts the decisions on their way to other instances, which
+	// Close lets arrive before it cancels anything.
+	passing sync.WaitGroup
 }
 
 // Open joins the group cfg names and answers the calls of its members with
@@ -473,6 +476,7 @@ func (g *Group) Close() error {
 		g.mu.Lock()
 		g.closed = true
 		g.mu.Unlock()
+		g.passing.Wait()
 		g.cancel()
 		if g.client != nil {
 			_ = g.client.Close()

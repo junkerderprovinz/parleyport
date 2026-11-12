@@ -1,11 +1,12 @@
 // Command fortress lets an app without Go code, such as a plugin written in
 // shell, take part in a fortress: join it with the phrase, list the members,
-// read their status and ask one of them to run an action.
+// read their status, ask one of them to run an action and take one out.
 //
 //	fortress join -dir DIR -app ID -name DEVICE [-relay URL|off] [-lan] [-uses a.b,c.d] [-icon logo.svg] < phrase
 //	fortress members -dir DIR [-json] [-wait 5s]
 //	fortress status -dir DIR [-json] [-lang de] [-wait 5s]
 //	fortress act -dir DIR [-wait 5s] MEMBER ACTION [BODY]
+//	fortress remove -dir DIR [-wait 5s] MEMBER
 //
 // MEMBER is a member's id or the id of an app with one instance in reach.
 // join keeps no phrase: DIR holds the plugin's member key and the keys the
@@ -13,8 +14,10 @@
 // app's pairing and lead back to no phrase. Whoever takes DIR is this one
 // member at most, until somebody removes it. After the phrase changes, every
 // command follows on its own, as the same member, for 30 days; joining again
-// with the new phrase does the same any time. Every command but join takes
-// part for as long as it runs, waits up to -wait for the members to show, and
+// with the new phrase does the same any time. remove prints the member it
+// takes out as JSON and returns once the members in reach took the removal;
+// DIR keeps it out on every command after. Every command but join takes part
+// for as long as it runs, waits up to -wait for the members to show, and
 // leaves.
 package main
 
@@ -72,7 +75,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 
 func dispatch(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("%w: fortress join|members|status|act -dir DIR", errUsage)
+		return fmt.Errorf("%w: fortress join|members|status|act|remove -dir DIR", errUsage)
 	}
 	verb, args := args[0], args[1:]
 	fs := flag.NewFlagSet(verb, flag.ContinueOnError)
@@ -127,6 +130,11 @@ func dispatch(ctx context.Context, args []string, stdin io.Reader, stdout io.Wri
 			body = []byte(rest[2])
 		}
 		return withFortress(ctx, *dir, *wait, func(f *fortress.Fortress) error { return act(ctx, f, stdout, rest[0], rest[1], body) })
+	case "remove":
+		if len(rest) != 1 {
+			return fmt.Errorf("%w: remove MEMBER", errUsage)
+		}
+		return withFortress(ctx, *dir, *wait, func(f *fortress.Fortress) error { return remove(f, stdout, rest[0]) })
 	}
 	return fmt.Errorf("%w: unknown command %q", errUsage, verb)
 }
@@ -302,13 +310,13 @@ func statuses(ctx context.Context, f *fortress.Fortress, w io.Writer, lang strin
 
 // act runs action at the member target names and prints its answer.
 func act(ctx context.Context, f *fortress.Fortress, w io.Writer, target, action string, body []byte) error {
-	id, err := resolve(f, target)
+	m, err := resolve(f, target)
 	if err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	out, err := f.Act(ctx, id, action, body)
+	out, err := f.Act(ctx, m.ID, action, body)
 	if err != nil {
 		return err
 	}
@@ -316,23 +324,47 @@ func act(ctx context.Context, f *fortress.Fortress, w io.Writer, target, action 
 	return err
 }
 
+// remove takes the member target names out of the fortress and prints it.
+// An app name will do only while the fortress knows a single member of it,
+// away or not, since taking out the wrong one cannot be undone. Closing the
+// fortress afterwards waits until the members in reach heard it.
+func remove(f *fortress.Fortress, w io.Writer, target string) error {
+	var found []fortress.Member
+	for _, m := range f.Members() {
+		if m.ID == target || m.App.ID == target {
+			found = append(found, m)
+		}
+	}
+	switch {
+	case len(found) == 0:
+		return fmt.Errorf("no member %s is known", target)
+	case len(found) > 1:
+		return fmt.Errorf("the fortress knows %d members of %s; name one by its id", len(found), target)
+	}
+	m := found[0]
+	if err := f.Remove(m.ID); err != nil {
+		return err
+	}
+	return json.NewEncoder(w).Encode(outOf(m))
+}
+
 // resolve finds the member target names: its id, or an app with exactly one
 // instance in reach.
-func resolve(f *fortress.Fortress, target string) (string, error) {
-	var found []string
+func resolve(f *fortress.Fortress, target string) (fortress.Member, error) {
+	var found []fortress.Member
 	for _, m := range f.Members() {
 		if m.ID == target {
-			return m.ID, nil
+			return m, nil
 		}
 		if m.App.ID == target && m.Online() {
-			found = append(found, m.ID)
+			found = append(found, m)
 		}
 	}
 	switch len(found) {
 	case 0:
-		return "", fmt.Errorf("no member %s is in reach", target)
+		return fortress.Member{}, fmt.Errorf("no member %s is in reach", target)
 	case 1:
 		return found[0], nil
 	}
-	return "", fmt.Errorf("%s runs on %d instances in reach; name one by its id", target, len(found))
+	return fortress.Member{}, fmt.Errorf("%s runs on %d instances in reach; name one by its id", target, len(found))
 }

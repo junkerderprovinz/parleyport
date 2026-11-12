@@ -145,7 +145,7 @@ go get github.com/junkerderprovinz/parleyport/kit@latest
 
 The kit has a version line of its own. The server's tags are `vX.Y.Z`, the kit's are `kit/vX.Y.Z`, so an app moves to a new kit without waiting for a new relay. [kit/README.md](kit/README.md) lists the packages, and [kit/CHANGELOG.md](kit/CHANGELOG.md) says what each version brought.
 
-A plugin without Go code takes part through the two helpers attached to every release, built for linux/amd64 and arm64. `fortress` joins a fortress, lists the members, reads their status and asks one of them for an action. `notify` sends a message to the channels in a file and shows and saves those channels with every secret masked. Check what you download against `helpers-sha256sums.txt`:
+A plugin without Go code takes part through the two helpers attached to every release, built for linux/amd64 and arm64. `fortress` joins a fortress, lists the members, reads their status, asks one of them for an action and takes one out. `notify` sends a message to the channels in a file and shows and saves those channels with every secret masked. Check what you download against `helpers-sha256sums.txt`:
 
 ```sh
 base=https://github.com/junkerderprovinz/parleyport/releases/latest/download

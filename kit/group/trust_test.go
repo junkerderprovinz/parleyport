@@ -153,6 +153,27 @@ func TestRemovalRevokesTheKeyEverywhere(t *testing.T) {
 	}
 }
 
+func TestARemovalRightBeforeCloseStillReachesTheOthers(t *testing.T) {
+	n := onRelay(t, "alpha", "bravo", "charlie")
+	a, b, c := n[0], n[1], n[2]
+	meet(t, a, b)
+	meet(t, a, c)
+	meet(t, b, c)
+
+	if err := a.g.Remove(c.id); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.g.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, listed := memberOf(b.g, c.id); listed {
+		t.Error("bravo still lists charlie after alpha closed")
+	}
+	if c.removed.Load() == 0 {
+		t.Error("charlie did not hear it was removed")
+	}
+}
+
 func TestRemovingAPendingMemberRefusesIt(t *testing.T) {
 	n := onRelay(t, "alpha", "bravo")
 	a, b := n[0], n[1]

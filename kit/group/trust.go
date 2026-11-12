@@ -652,16 +652,30 @@ func (g *Group) passOn(d decision, to []string) {
 		return
 	}
 	for _, id := range to {
-		if !g.enter() {
+		if !g.enterPassing() {
 			return
 		}
 		go func() {
 			defer g.wg.Done()
+			defer g.passing.Done()
 			ctx, cancel := context.WithTimeout(g.ctx, callTimeout)
 			defer cancel()
 			_, _, _ = g.Call(ctx, id, http.MethodPost, decisionPath, body)
 		}()
 	}
+}
+
+// enterPassing is enter for a decision passed on, which Close also waits
+// for before it cancels the call.
+func (g *Group) enterPassing() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closed {
+		return false
+	}
+	g.wg.Add(1)
+	g.passing.Add(1)
+	return true
 }
 
 // internal answers the routes the group serves itself. Only an approved
