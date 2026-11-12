@@ -9,12 +9,13 @@ The first version: everything an app needs to pair its instances, join a fortres
 **Adopting apps:**
 
 - **Moving up:** `go get github.com/junkerderprovinz/parleyport/kit@v1.0.0`. An app on a pseudo-version of the kit moves up the same way.
+- **Uses:** list every action your app calls at other members in `fortress.Config.Uses`. A call to an action that isn't listed is refused with 403 `not_used`, which `Act` returns as `ErrNotUsed` (it also counts as `ErrPermissionOff`).
 - **Relay:** answers of up to 8 MiB and answers in parts need ParleyPort 1.2.0 on the relay. An older relay carries answers of up to 4 MiB in one piece, as before.
 
 ## ✨ Added
 
 - **Pairing by phrase alone.** `phrase`, `keys` and `member` turn twelve words into the keys of a group, and `group` pairs an app's instances with them. On one network the members find each other through `lan` and talk directly, elsewhere they meet on a relay through `relay`.
-- **The fortress.** `fortress` joins every app of a household under one phrase, with a switch for every action an app offers the others. After a phrase change, members that missed it follow on their own for 30 days.
+- **The fortress.** `fortress` joins every app of a household under one phrase, with a switch for every action an app offers the others. After a phrase change, members that missed it follow on their own for 30 days, while a newcomer on the old phrase gets `groupClosed` and sees no members.
 - **Status, events and rules.** `status` is the report and log every app answers, and `statustest` checks an app against it in the app's own tests. `events` keeps an app's events in a ring the other members read, and the fortress runs rules on them.
 - **Notifications.** `notify` sends events to webhooks, Discord, Slack, Gotify, ntfy, Matrix, mail, Apprise, Healthchecks and Unraid's own notifications, with every secret masked on the way to a settings page.
 - **Home Assistant.** `mqttha` announces an app as a device with sensors and buttons through MQTT discovery.
