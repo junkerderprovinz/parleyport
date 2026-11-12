@@ -208,10 +208,10 @@ func (f *Fortress) member(id string) (Member, bool) {
 // it at OpenPath without its own sign-in in front: session names the
 // password session a request carries, which the bar needs and the requests
 // of the sandboxed page cannot carry. words says why a page did not open, in
-// the language r asks for; nil says it in codes.
+// the language r asks for; nil takes Words.
 func (f *Fortress) OpenHandler(session func(r *http.Request) (string, bool), words func(r *http.Request, code string) string) http.Handler {
 	if words == nil {
-		words = func(_ *http.Request, code string) string { return code }
+		words = Words
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rest, ok := strings.CutPrefix(r.URL.EscapedPath(), OpenPath)
