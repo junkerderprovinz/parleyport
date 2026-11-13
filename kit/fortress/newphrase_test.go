@@ -131,6 +131,7 @@ func TestAMemberTakenOutBeforeTheChangeIsNeverHandedTheNewPhrase(t *testing.T) {
 	for _, n := range []*node{a, b, c, d} {
 		waitFor(t, n.name+" to see everybody", func() bool { return len(n.f.Members()) == 3 })
 	}
+	meet(t, a, b)
 	meet(t, a, d)
 	if err := a.f.Remove(c.id); err != nil {
 		t.Fatal(err)

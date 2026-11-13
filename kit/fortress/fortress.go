@@ -674,6 +674,10 @@ func (f *Fortress) fortressRemoved(id string) {
 		delete(f.book.Cursors, id)
 		f.dirty = true
 	}
+	if _, ok := f.book.Heard[id]; ok {
+		delete(f.book.Heard, id)
+		f.dirty = true
+	}
 	f.mu.Unlock()
 	if f.pairing != nil {
 		if _, ok := listed(f.pairing, id); ok {
@@ -853,6 +857,12 @@ func (f *Fortress) describe(ctx context.Context, id string, now time.Time) bool 
 		f.book.Members = map[string]about{}
 	}
 	f.book.Members[id] = a
+	if _, ok := f.book.Heard[id]; !ok {
+		if f.book.Heard == nil {
+			f.book.Heard = map[string]time.Time{}
+		}
+		f.book.Heard[id] = now.Round(0)
+	}
 	f.dirty = true
 	return true
 }

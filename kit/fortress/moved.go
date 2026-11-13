@@ -252,7 +252,9 @@ func (f *Fortress) shut(changed time.Time) {
 	f.shutSince = changed
 	g := f.group
 	f.mu.Unlock()
-	g.CloseToNew(changed)
+	if g != nil {
+		g.CloseToNew(changed)
+	}
 }
 
 // ErrNoNewPhrase is what NewKeys returns when no member in reach says that
@@ -344,6 +346,8 @@ func (f *Fortress) serveOld(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, a)
 	case (r.URL.Path == movedPath || r.URL.Path == newPhrasePath) && time.Since(f.changed()) >= moveWindow:
 		writeError(w, http.StatusGone, phraseChanged)
+	case (r.URL.Path == movedPath || r.URL.Path == newPhrasePath) && !f.heardBefore(caller.ID, f.removedSince(f.before())):
+		writeError(w, http.StatusForbidden, "forbidden")
 	case r.URL.Path == movedPath && r.Method == http.MethodGet:
 		writeJSON(w, movedBody{Group: f.set.Group, Frame: f.set.Frame, PeerAuth: f.set.PeerAuth}) //nolint:gosec // G117: sealed to an approved member
 	case r.URL.Path == newPhrasePath && r.Method == http.MethodPost:

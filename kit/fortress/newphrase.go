@@ -167,11 +167,18 @@ func (f *Fortress) handNewPhrase(w http.ResponseWriter, r *http.Request, to stri
 	writeJSON(w, answer)
 }
 
-// changed is when the fortress took the phrase this instance is on.
+// changed is when the fortress took the phrase this instance is on, before
+// when it took the one before.
 func (f *Fortress) changed() time.Time {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.book.Changed
+}
+
+func (f *Fortress) before() time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.book.Before
 }
 
 // sealNewPhrase seals p, from member from to member to, for the key to asked
@@ -295,4 +302,30 @@ func (f *Fortress) takePhrase(w http.ResponseWriter, r *http.Request, from strin
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// removedSince is when the latest member was taken out after since, zero
+// when none was.
+func (f *Fortress) removedSince(since time.Time) time.Time {
+	var last time.Time
+	for _, at := range f.group.Roster().Removed {
+		if at.After(since) && at.After(last) {
+			last = at
+		}
+	}
+	return last
+}
+
+// heardBefore reports whether this instance first heard from member id
+// before removed, or nobody was taken out. A member taken out keeps the
+// phrase it had, and may be back under a new key, so a member first met
+// after that is handed no new phrase and enters it like a newcomer.
+func (f *Fortress) heardBefore(id string, removed time.Time) bool {
+	if removed.IsZero() {
+		return true
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	at, ok := f.book.Heard[id]
+	return ok && at.Before(removed)
 }

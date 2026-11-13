@@ -134,8 +134,15 @@ func (f *Fortress) ChangePhrase(ctx context.Context) ([]string, error) {
 		took []string
 		wg   sync.WaitGroup
 	)
+	f.mu.Lock()
+	since := f.book.Changed
+	f.mu.Unlock()
+	removed := f.removedSince(since)
 	for _, m := range f.group.Members() {
 		if m.Kind != member.KindInstance || m.State == group.StatePending || !m.Online() {
+			continue
+		}
+		if !f.heardBefore(m.ID, removed) {
 			continue
 		}
 		wg.Go(func() {

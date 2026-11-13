@@ -65,6 +65,7 @@ func TestAnInstanceThatFollowedLateHandsAMemberTakenOutNothing(t *testing.T) {
 	for _, n := range []*node{a, b, c, d} {
 		waitFor(t, n.name+" to see everybody", func() bool { return len(n.f.Members()) == 3 })
 	}
+	meet(t, a, b)
 	meet(t, a, d)
 	// delta is away while charlie is taken out and the phrase changes.
 	closeAll(t, d)

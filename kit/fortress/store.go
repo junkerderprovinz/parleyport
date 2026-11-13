@@ -51,6 +51,12 @@ type book struct {
 	// instance took it only after the change.
 	Changed time.Time `json:"changed,omitzero"`
 	Late    bool      `json:"late,omitempty"`
+	// Before is when the fortress took the phrase it changed from.
+	Before time.Time `json:"before,omitzero"`
+	// Heard is when this instance first heard from each member, on any
+	// phrase, so that a member first met after a removal can be told from
+	// one met before it.
+	Heard map[string]time.Time `json:"heard,omitempty"`
 	// Next is what the phrase this book moves to next was handed with.
 	Next        *handed          `json:"next,omitempty"`
 	Members     map[string]about `json:"members,omitempty"`
@@ -92,7 +98,7 @@ func loadBook(raw []byte, groupKey, previous string) (book, error) {
 		return b, nil
 	case previous != "" && b.Group == previous:
 		now := time.Now().Round(0)
-		b.Group, b.Changed, b.Late = groupKey, now, b.Next != nil && b.Next.Late
+		b.Group, b.Before, b.Changed, b.Late = groupKey, b.Changed, now, b.Next != nil && b.Next.Late
 		if b.Next != nil && !b.Next.Changed.IsZero() && b.Next.Changed.Before(now) {
 			b.Changed = b.Next.Changed
 		}

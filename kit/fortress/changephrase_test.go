@@ -122,6 +122,7 @@ func TestChangePhraseSendsNothingToAMemberTakenOut(t *testing.T) {
 	for _, n := range []*node{a, b, r} {
 		waitFor(t, n.name+" to see everybody", func() bool { return len(n.f.Members()) == 2 })
 	}
+	meet(t, a, b)
 	if err := a.f.Remove(r.id); err != nil {
 		t.Fatal(err)
 	}
@@ -223,5 +224,82 @@ func TestChangePhraseSendsNothingToAMemberWaitingForApproval(t *testing.T) {
 	}
 	if n := len(c.on(phrasePath)) + len(c.on(phraseKeyPath)); n > 0 {
 		t.Errorf("whisky, waiting for approval, got %d calls about the new phrase", n)
+	}
+}
+
+func TestNoMemberFirstMetAfterARemovalIsHandedTheNewPhrase(t *testing.T) {
+	url := relayServer(t)
+	a := open(t, "alpha", "alpha-1", setup{relay: url})
+	b := open(t, "bravo", "bravo-1", setup{relay: url})
+	c := open(t, "charlie", "charlie-1", setup{relay: url})
+	for _, n := range []*node{a, b, c} {
+		waitFor(t, n.name+" to see everybody", func() bool { return len(n.f.Members()) == 2 })
+	}
+	meet(t, a, b)
+	if err := a.f.Remove(c.id); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "bravo to take charlie out", func() bool { _, ok := memberOf(b.f, c.id); return !ok })
+	closeAll(t, c)
+	// charlie is back at once under a key of its own, with the phrase that
+	// still holds, and echo joins as well before the phrase changes.
+	back := open(t, "charlie", "charlie-2", setup{relay: url})
+	e := open(t, "echo", "echo-1", setup{relay: url})
+	meet(t, a, back)
+	meet(t, a, e)
+
+	moved, err := a.f.ChangePhrase(ctx(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret := a.lastKept()
+	if !slices.Equal(moved, []string{b.id}) {
+		t.Errorf("the new phrase reached %v, want bravo alone", moved)
+	}
+	for _, n := range []*node{a, b} {
+		closeAll(t, n)
+		n.f = reopen(t, n, setup{relay: url, secret: secret, moved: testSecret})
+	}
+	// Nor do they get it, or the keys under it, asking on the old phrase.
+	for _, n := range []*node{back, e} {
+		if n.lastKept() != nil {
+			t.Errorf("%s, first met after the removal, was handed the new phrase", n.name)
+		}
+		closeAll(t, n)
+		neverHanded(t, url, n, a)
+	}
+
+	// echo enters the new phrase itself and is in.
+	e.f = reopen(t, e, setup{relay: url, secret: secret})
+	waitFor(t, "echo to reach alpha under the new phrase", func() bool {
+		_, err := e.f.Status(ctx(t), a.id, "")
+		return err == nil
+	})
+}
+
+func TestARemovalBeforeThePhraseChangedLeavesTheMembersMetSinceAlone(t *testing.T) {
+	url := relayServer(t)
+	a := open(t, "alpha", "alpha-1", setup{relay: url})
+	b := open(t, "bravo", "bravo-1", setup{relay: url})
+	c := open(t, "charlie", "charlie-1", setup{relay: url})
+	for _, n := range []*node{a, b, c} {
+		waitFor(t, n.name+" to see everybody", func() bool { return len(n.f.Members()) == 2 })
+	}
+	meet(t, a, b)
+	if err := a.f.Remove(c.id); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "bravo to take charlie out", func() bool { _, ok := memberOf(b.f, c.id); return !ok })
+	secret := changePhrase(t, url, a, b)
+
+	e := open(t, "echo", "echo-1", setup{relay: url, secret: secret})
+	meet(t, a, e)
+	meet(t, a, b)
+	moved, err := a.f.ChangePhrase(ctx(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(moved, e.id) || !slices.Contains(moved, b.id) {
+		t.Errorf("the next phrase reached %v, want bravo and echo", moved)
 	}
 }

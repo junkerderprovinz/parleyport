@@ -118,6 +118,7 @@ func TestOnlyAMemberFromBeforeTheChangeGetsTheNewKeys(t *testing.T) {
 	for _, n := range []*node{a, b, out} {
 		waitFor(t, n.name+" to see everybody", func() bool { return len(n.f.Members()) == 2 })
 	}
+	meet(t, a, b)
 	meet(t, a, out)
 	if err := a.f.Remove(out.id); err != nil {
 		t.Fatal(err)
