@@ -367,8 +367,8 @@ type Fortress struct {
 	// with catchUp. Neither is kept anywhere.
 	secret, previous []byte
 	// catching is set while this instance asks for the phrase the fortress
-	// changed to, and stays set once it was handed it.
-	catching bool
+	// changed to, caught once it was handed it.
+	catching, caught bool
 	// offered holds the one-off key each member that changes the phrase
 	// seals it for, until it sends it.
 	offered map[string]offer
@@ -521,7 +521,7 @@ func Open(cfg Config) (*Fortress, error) {
 	f.early = nil
 	f.mu.Unlock()
 	close(f.opened)
-	if len(cfg.Secret) > 0 && len(cfg.Previous) > 0 && time.Since(bk.Changed) < moveWindow {
+	if len(cfg.Secret) > 0 && len(cfg.Previous) > 0 && !bk.Late && time.Since(bk.Changed) < moveWindow {
 		if err := f.openOld(cfg, set); err != nil {
 			cancel()
 			_ = g.Close()
@@ -828,7 +828,9 @@ func (f *Fortress) describe(ctx context.Context, id string, now time.Time) bool 
 	}
 	if a.Moved {
 		f.shut(a.Changed)
-		f.catchUp(id)
+		// Deferred before the unlock, so it runs after it, and a retry it
+		// schedules is not overwritten below.
+		defer f.catchUp(id)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -107,10 +107,10 @@ func TestWhatChangePhraseSendsOpensOnlyForTheMemberItWentTo(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got, err := openNewPhrase(other, sent[0], testSecret, a.id, d.id); err == nil {
-		t.Errorf("another key with the old phrase opened it to %x", got)
+		t.Errorf("another key with the old phrase opened it to %x", got.Secret)
 	}
-	if got, err := openNewPhrase(c.own, sent[0], testSecret, a.id, d.id); err != nil || !bytes.Equal(got, secret) {
-		t.Errorf("delta opens %x, %v, want the new secret", got, err)
+	if got, err := openNewPhrase(c.own, sent[0], testSecret, a.id, d.id); err != nil || !bytes.Equal(got.Secret, secret) {
+		t.Errorf("delta opens %x, %v, want the new secret", got.Secret, err)
 	}
 }
 
@@ -176,7 +176,7 @@ func TestChangePhraseHandsAPluginNoSecretAndItFollowsWithTheKeys(t *testing.T) {
 		}
 		for _, held := range [][]byte{nil, old.Frame, old.PeerAuth, []byte(old.Group)} {
 			if got, err := openNewPhrase(liar.own, sent, held, a.id, q.id); err == nil {
-				t.Errorf("watcher-2 opened the new phrase to %x", got)
+				t.Errorf("watcher-2 opened the new phrase to %x", got.Secret)
 			}
 		}
 	}

@@ -342,6 +342,8 @@ func (f *Fortress) serveOld(w http.ResponseWriter, r *http.Request) {
 		a.Moved, a.Changed = true, f.book.Changed
 		f.mu.Unlock()
 		writeJSON(w, a)
+	case (r.URL.Path == movedPath || r.URL.Path == newPhrasePath) && time.Since(f.changed()) >= moveWindow:
+		writeError(w, http.StatusGone, phraseChanged)
 	case r.URL.Path == movedPath && r.Method == http.MethodGet:
 		writeJSON(w, movedBody{Group: f.set.Group, Frame: f.set.Frame, PeerAuth: f.set.PeerAuth}) //nolint:gosec // G117: sealed to an approved member
 	case r.URL.Path == newPhrasePath && r.Method == http.MethodPost:

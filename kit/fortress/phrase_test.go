@@ -16,6 +16,7 @@ func TestANewPhraseTakesTheMembersAlongAndLeavesTheRemovedOut(t *testing.T) {
 		waitFor(t, n.name+" to see everybody", func() bool { return len(n.f.Members()) == 3 })
 	}
 	meet(t, a, b)
+	meet(t, a, d)
 	if err := a.f.SetPermission("bravo", "alpha", "files.drop", false); err != nil {
 		t.Fatal(err)
 	}

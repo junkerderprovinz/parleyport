@@ -46,8 +46,13 @@ type book struct {
 	// Group is the fortress's group key, so a store written under another
 	// phrase starts over.
 	Group string `json:"group"`
-	// Changed is when the book moved here from the phrase before.
-	Changed     time.Time        `json:"changed,omitzero"`
+	// Changed is when the fortress took the phrase this book is under, for
+	// a book that moved here from the phrase before, and Late that this
+	// instance took it only after the change.
+	Changed time.Time `json:"changed,omitzero"`
+	Late    bool      `json:"late,omitempty"`
+	// Next is what the phrase this book moves to next was handed with.
+	Next        *handed          `json:"next,omitempty"`
 	Members     map[string]about `json:"members,omitempty"`
 	Permissions permissionTable  `json:"permissions,omitempty"`
 	Rules       []Rule           `json:"rules,omitempty"`
@@ -56,6 +61,13 @@ type book struct {
 	// Behind are the members the app's own pairing let in that had not
 	// followed it when Settle closed it.
 	Behind map[string]straggler `json:"behind,omitempty"`
+}
+
+// handed is when the fortress took a new phrase, and whether this instance
+// took it only after that.
+type handed struct {
+	Changed time.Time `json:"changed"`
+	Late    bool      `json:"late,omitempty"`
 }
 
 type straggler struct {
@@ -79,7 +91,12 @@ func loadBook(raw []byte, groupKey, previous string) (book, error) {
 	case b.Group == groupKey:
 		return b, nil
 	case previous != "" && b.Group == previous:
-		b.Group, b.Changed = groupKey, time.Now().Round(0)
+		now := time.Now().Round(0)
+		b.Group, b.Changed, b.Late = groupKey, now, b.Next != nil && b.Next.Late
+		if b.Next != nil && !b.Next.Changed.IsZero() && b.Next.Changed.Before(now) {
+			b.Changed = b.Next.Changed
+		}
+		b.Next = nil
 		return b, nil
 	}
 	return fresh, nil

@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/junkerderprovinz/parleyport/kit/group"
 	"github.com/junkerderprovinz/parleyport/kit/phrase"
 )
 
@@ -37,16 +38,72 @@ type newPhraseAnswer struct {
 	Sealed []byte `json:"sealed"`
 }
 
+// newPhrase is what a member hands with the secret of a new phrase: when the
+// fortress took it, and whom it knows to be taken out, so that the one it
+// hands it to cannot carry a member taken out, or one first met after the
+// change, over to the new phrase.
+type newPhrase struct {
+	Secret  []byte               `json:"secret"`
+	Changed time.Time            `json:"changed"`
+	Removed map[string]time.Time `json:"removed,omitempty"`
+	Revoked map[string]time.Time `json:"revoked,omitempty"`
+}
+
+// handing is secret with when the fortress took it and the removals this
+// instance knows.
+func (f *Fortress) handing(secret []byte, changed time.Time) newPhrase {
+	r := f.group.Roster()
+	return newPhrase{Secret: secret, Changed: changed, Removed: r.Removed, Revoked: r.Revoked}
+}
+
+// takeNew takes p, the phrase a member handed this instance, as of when the
+// fortress took it: whoever was first met after that is forgotten, whoever
+// the member knows to be taken out is taken out here, and the keeper keeps
+// the secret. The book under the new phrase counts the change from then too,
+// and late marks an instance that took it after the change, which serves
+// nobody on the phrase before.
+func (f *Fortress) takeNew(p newPhrase, late bool) error {
+	if len(p.Secret) != phrase.SecretLen || bytes.Equal(p.Secret, f.secret) {
+		return errors.New("fortress: the new phrase came unusable")
+	}
+	f.shut(p.Changed)
+	if err := f.group.Import(group.Roster{Removed: p.Removed, Revoked: p.Revoked}); err != nil {
+		return err
+	}
+	if err := f.moveBook(&handed{Changed: p.Changed, Late: late}); err != nil {
+		return err
+	}
+	if err := f.keeper.Keep(p.Secret); err != nil {
+		_ = f.moveBook(nil)
+		return err
+	}
+	return nil
+}
+
+// moveBook keeps h in the book for the phrase it moves to next.
+func (f *Fortress) moveBook(h *handed) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.book.Next = h
+	return f.saveLocked()
+}
+
 // catchUp takes the phrase the fortress changed to from member id, which
-// said it took it, and hands it to the keeper. Only an instance that holds
-// the phrase itself does; one that holds only keys follows with NewKeys. One
-// that was handed it asks nobody again.
+// said it took it. Only an instance that holds the phrase itself does; one
+// that holds only keys follows with NewKeys. One member is asked at a time,
+// and a member that was not asked or did not hand it over is described again
+// soon, until one did.
 func (f *Fortress) catchUp(id string) {
 	if f.keeper == nil || len(f.secret) == 0 {
 		return
 	}
 	f.mu.Lock()
-	if f.catching || f.closed {
+	switch {
+	case f.closed || f.caught:
+		f.mu.Unlock()
+		return
+	case f.catching:
+		f.described[id] = time.Now().Add(retryAfter)
 		f.mu.Unlock()
 		return
 	}
@@ -57,63 +114,52 @@ func (f *Fortress) catchUp(id string) {
 		defer f.wg.Done()
 		ctx, cancel := context.WithTimeout(f.ctx, callTimeout)
 		defer cancel()
-		secret, err := f.askNewPhrase(ctx, id)
+		p, err := f.askNewPhrase(ctx, id)
 		if err == nil {
-			err = f.keeper.Keep(secret)
+			err = f.takeNew(p, true)
 		}
-		if err != nil {
-			f.mu.Lock()
-			f.catching = false
-			f.mu.Unlock()
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.catching = false
+		if err == nil {
+			f.caught = true
+		} else {
+			f.described[id] = time.Now().Add(retryAfter)
 		}
 	}()
 }
 
-// askNewPhrase asks member id for the secret of the phrase it took.
-func (f *Fortress) askNewPhrase(ctx context.Context, id string) ([]byte, error) {
+// askNewPhrase asks member id for the phrase it took.
+func (f *Fortress) askNewPhrase(ctx context.Context, id string) (newPhrase, error) {
 	own, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
-		return nil, err
+		return newPhrase{}, err
 	}
 	body, err := json.Marshal(newPhraseAsk{Key: own.PublicKey().Bytes()})
 	if err != nil {
-		return nil, err
+		return newPhrase{}, err
 	}
 	status, raw, err := f.group.Call(ctx, id, http.MethodPost, newPhrasePath, body)
 	if err != nil {
-		return nil, err
+		return newPhrase{}, err
 	}
 	if status != http.StatusOK {
-		return nil, refusal(status, raw)
+		return newPhrase{}, refusal(status, raw)
 	}
-	secret, err := openNewPhrase(own, raw, f.secret, id, f.self)
-	if err != nil {
-		return nil, err
-	}
-	if len(secret) != phrase.SecretLen || bytes.Equal(secret, f.secret) {
-		return nil, errors.New("fortress: the new phrase came unusable")
-	}
-	return secret, nil
+	return openNewPhrase(own, raw, f.secret, id, f.self)
 }
 
 // handNewPhrase answers member to, on the phrase before, with this
 // instance's secret, sealed for the key it asked with. serveOld checked that
-// to is an instance of the fortress as it stands.
+// to is an instance of the fortress as it stands, within the window.
 func (f *Fortress) handNewPhrase(w http.ResponseWriter, r *http.Request, to string) {
-	f.mu.Lock()
-	changed := f.book.Changed
-	f.mu.Unlock()
-	if time.Since(changed) >= moveWindow {
-		writeError(w, http.StatusGone, phraseChanged)
-		return
-	}
 	var ask newPhraseAsk
 	raw, err := io.ReadAll(r.Body)
 	if err != nil || json.Unmarshal(raw, &ask) != nil {
 		writeError(w, http.StatusBadRequest, "bad_request")
 		return
 	}
-	answer, err := sealNewPhrase(ask.Key, f.secret, f.previous, f.self, to)
+	answer, err := sealNewPhrase(ask.Key, f.handing(f.secret, f.changed()), f.previous, f.self, to)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request")
 		return
@@ -121,9 +167,20 @@ func (f *Fortress) handNewPhrase(w http.ResponseWriter, r *http.Request, to stri
 	writeJSON(w, answer)
 }
 
-// sealNewPhrase seals secret, from member from to member to, for the key to
-// asked with.
-func sealNewPhrase(asked, secret, held []byte, from, to string) (newPhraseAnswer, error) {
+// changed is when the fortress took the phrase this instance is on.
+func (f *Fortress) changed() time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.book.Changed
+}
+
+// sealNewPhrase seals p, from member from to member to, for the key to asked
+// with.
+func sealNewPhrase(asked []byte, p newPhrase, held []byte, from, to string) (newPhraseAnswer, error) {
+	plain, err := json.Marshal(p)
+	if err != nil {
+		return newPhraseAnswer{}, err
+	}
 	peer, err := ecdh.X25519().NewPublicKey(asked)
 	if err != nil {
 		return newPhraseAnswer{}, err
@@ -136,25 +193,33 @@ func sealNewPhrase(asked, secret, held []byte, from, to string) (newPhraseAnswer
 	if err != nil {
 		return newPhraseAnswer{}, err
 	}
-	return newPhraseAnswer{Key: own.PublicKey().Bytes(), Sealed: aead.Seal(nil, make([]byte, aead.NonceSize()), secret, nil)}, nil
+	return newPhraseAnswer{Key: own.PublicKey().Bytes(), Sealed: aead.Seal(nil, make([]byte, aead.NonceSize()), plain, nil)}, nil
 }
 
 // openNewPhrase opens raw, the answer member from gave member to, which asked
 // with own and held the phrase before as held.
-func openNewPhrase(own *ecdh.PrivateKey, raw, held []byte, from, to string) ([]byte, error) {
+func openNewPhrase(own *ecdh.PrivateKey, raw, held []byte, from, to string) (newPhrase, error) {
 	var answer newPhraseAnswer
 	if err := json.Unmarshal(raw, &answer); err != nil {
-		return nil, fmt.Errorf("fortress: %s answered unreadably: %w", from, err)
+		return newPhrase{}, fmt.Errorf("fortress: %s answered unreadably: %w", from, err)
 	}
 	peer, err := ecdh.X25519().NewPublicKey(answer.Key)
 	if err != nil {
-		return nil, err
+		return newPhrase{}, err
 	}
 	aead, err := newPhraseSeal(own, peer, held, from, to)
 	if err != nil {
-		return nil, err
+		return newPhrase{}, err
 	}
-	return aead.Open(nil, make([]byte, aead.NonceSize()), answer.Sealed, nil)
+	plain, err := aead.Open(nil, make([]byte, aead.NonceSize()), answer.Sealed, nil)
+	if err != nil {
+		return newPhrase{}, err
+	}
+	var p newPhrase
+	if err := json.Unmarshal(plain, &p); err != nil {
+		return newPhrase{}, fmt.Errorf("fortress: %s sealed something unreadable: %w", from, err)
+	}
+	return p, nil
 }
 
 // newPhraseSeal is the seal between own and peer, which both ends make from
@@ -209,7 +274,7 @@ func (f *Fortress) offerPhraseKey(w http.ResponseWriter, from string) {
 }
 
 // takePhrase opens the phrase member from sent, sealed for the key it was
-// offered, and hands it to the keeper.
+// offered, and takes it.
 func (f *Fortress) takePhrase(w http.ResponseWriter, r *http.Request, from string) {
 	f.mu.Lock()
 	o, ok := f.offered[from]
@@ -220,13 +285,13 @@ func (f *Fortress) takePhrase(w http.ResponseWriter, r *http.Request, from strin
 		writeError(w, http.StatusBadRequest, "bad_request")
 		return
 	}
-	secret, err := openNewPhrase(o.key, raw, f.secret, from, f.self)
-	if err != nil || len(secret) != phrase.SecretLen || bytes.Equal(secret, f.secret) {
+	p, err := openNewPhrase(o.key, raw, f.secret, from, f.self)
+	if err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request")
 		return
 	}
-	if err := f.keeper.Keep(secret); err != nil {
-		writeError(w, http.StatusInternalServerError, "internal")
+	if err := f.takeNew(p, false); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

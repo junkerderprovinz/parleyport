@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/junkerderprovinz/parleyport/kit/group"
 	"github.com/junkerderprovinz/parleyport/kit/member"
@@ -101,15 +102,16 @@ func hand(ctx context.Context, g *group.Group, ids []string, path string, secret
 }
 
 // ChangePhrase gives the fortress a new phrase. This instance's keeper keeps
-// it first, then every approved instance in reach that holds the phrase gets
-// it to keep, sealed for that instance alone, and the ids of those that did
-// come back. A member taken out does not get it. One that is away gets it to
-// keep from the first member it meets that took it, within 30 days, if it
-// holds the old phrase and has a Keeper; otherwise it is out until the new
-// phrase is entered there, and then in again as the member it was. A member
-// that holds only keys follows with NewKeys instead. The app opens the
-// fortress again with the new secret and the old one as Config.Previous; the
-// old phrase lets nobody new in from then on.
+// it first, then every instance in reach that holds the phrase and does not
+// wait for approval gets it to keep, sealed for that instance alone, with the
+// removals this one knows, and the ids of those that did come back. A member
+// taken out does not get it. One that is away gets it to keep from the first
+// member it meets that took it, within 30 days of the change, if it holds the
+// old phrase and has a Keeper; otherwise it is out until the new phrase is
+// entered there, and then in again as the member it was. A member that holds
+// only keys follows with NewKeys instead. The app opens the fortress again
+// with the new secret and the old one as Config.Previous; the old phrase lets
+// nobody new in from then on.
 func (f *Fortress) ChangePhrase(ctx context.Context) ([]string, error) {
 	if f.keeper == nil || len(f.secret) == 0 {
 		return nil, errors.New("fortress: a new phrase needs a keeper and the phrase itself")
@@ -118,20 +120,26 @@ func (f *Fortress) ChangePhrase(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := f.keeper.Keep(secret); err != nil {
+	changed := time.Now().Round(0)
+	if err := f.moveBook(&handed{Changed: changed}); err != nil {
 		return nil, err
 	}
+	if err := f.keeper.Keep(secret); err != nil {
+		_ = f.moveBook(nil)
+		return nil, err
+	}
+	p := f.handing(secret, changed)
 	var (
 		mu   sync.Mutex
 		took []string
 		wg   sync.WaitGroup
 	)
 	for _, m := range f.group.Members() {
-		if m.Kind != member.KindInstance || m.State != group.StateApproved || !m.Online() {
+		if m.Kind != member.KindInstance || m.State == group.StatePending || !m.Online() {
 			continue
 		}
 		wg.Go(func() {
-			if f.handPhrase(ctx, m.ID, secret) == nil {
+			if f.handPhrase(ctx, m.ID, p) == nil {
 				mu.Lock()
 				took = append(took, m.ID)
 				mu.Unlock()
@@ -143,9 +151,9 @@ func (f *Fortress) ChangePhrase(ctx context.Context) ([]string, error) {
 	return took, nil
 }
 
-// handPhrase hands member id secret to keep: it asks id for a one-off key
-// and sends secret sealed for it.
-func (f *Fortress) handPhrase(ctx context.Context, id string, secret []byte) error {
+// handPhrase hands member id p to take: it asks id for a one-off key and
+// sends p sealed for it.
+func (f *Fortress) handPhrase(ctx context.Context, id string, p newPhrase) error {
 	ctx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
 	status, raw, err := f.group.Call(ctx, id, http.MethodPost, phraseKeyPath, nil)
@@ -159,7 +167,7 @@ func (f *Fortress) handPhrase(ctx context.Context, id string, secret []byte) err
 	if err := json.Unmarshal(raw, &key); err != nil {
 		return err
 	}
-	answer, err := sealNewPhrase(key.Key, secret, f.secret, f.self, id)
+	answer, err := sealNewPhrase(key.Key, p, f.secret, f.self, id)
 	if err != nil {
 		return err
 	}

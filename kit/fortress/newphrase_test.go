@@ -38,7 +38,7 @@ func listen(t *testing.T, url string, n *node, serve relay.ProxyHandler) *relay.
 	}
 	c.Start()
 	t.Cleanup(func() { _ = c.Close() })
-	waitFor(t, n.name+" on the relay", func() bool { return c.Connected() && len(c.Siblings()) > 0 })
+	waitFor(t, n.name+" on the relay", c.Connected)
 	return c
 }
 
@@ -80,6 +80,9 @@ func handsNothing(t *testing.T, url string, n *node, to ...*node) {
 		})
 		if _, status, raw := askFor(t, c, m); status == http.StatusOK {
 			t.Errorf("%s handed %s %s", m.name, n.name, raw)
+		}
+		if raw, status, _ := c.Proxy(ctx(t), m.id, http.MethodGet, movedPath, nil); status == http.StatusOK {
+			t.Errorf("%s handed %s the new keys %s", m.name, n.name, raw)
 		}
 	}
 }
@@ -128,6 +131,7 @@ func TestAMemberTakenOutBeforeTheChangeIsNeverHandedTheNewPhrase(t *testing.T) {
 	for _, n := range []*node{a, b, c, d} {
 		waitFor(t, n.name+" to see everybody", func() bool { return len(n.f.Members()) == 3 })
 	}
+	meet(t, a, d)
 	if err := a.f.Remove(c.id); err != nil {
 		t.Fatal(err)
 	}
@@ -175,6 +179,7 @@ func TestAMemberTakenOutAfterItAskedOnTheOldPhraseIsHandedNothingMore(t *testing
 	for _, n := range []*node{a, b, d} {
 		waitFor(t, n.name+" to see everybody", func() bool { return len(n.f.Members()) == 2 })
 	}
+	meet(t, a, d)
 	if err := d.f.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -237,8 +242,8 @@ func TestTheNewPhraseOpensOnlyForTheInstanceThatAskedWithTheOldOne(t *testing.T)
 			}
 		}
 	}
-	if got, err := openNewPhrase(own, raw, testSecret, a.id, d.id); err != nil || !bytes.Equal(got, secret) {
-		t.Fatalf("delta opens %x, %v, want the new secret", got, err)
+	if got, err := openNewPhrase(own, raw, testSecret, a.id, d.id); err != nil || !bytes.Equal(got.Secret, secret) {
+		t.Fatalf("delta opens %x, %v, want the new secret", got.Secret, err)
 	}
 	// Whoever reads the answer under the old phrase, as one taken out could,
 	// lacks the key delta asked with.
@@ -247,7 +252,7 @@ func TestTheNewPhraseOpensOnlyForTheInstanceThatAskedWithTheOldOne(t *testing.T)
 		t.Fatal(err)
 	}
 	if got, err := openNewPhrase(other, raw, testSecret, a.id, d.id); err == nil {
-		t.Errorf("another key opened the answer to %x", got)
+		t.Errorf("another key opened the answer to %x", got.Secret)
 	}
 
 	// The plugin, a member that holds only keys, asks as well, and what it
@@ -260,7 +265,7 @@ func TestTheNewPhraseOpensOnlyForTheInstanceThatAskedWithTheOldOne(t *testing.T)
 		old := Domain.Keys(testSecret)
 		for _, held := range [][]byte{nil, old.Frame, old.PeerAuth, []byte(old.Group)} {
 			if got, err := openNewPhrase(pOwn, pRaw, held, a.id, p.id); err == nil {
-				t.Errorf("the plugin opened the answer to %x", got)
+				t.Errorf("the plugin opened the answer to %x", got.Secret)
 			}
 		}
 	}
