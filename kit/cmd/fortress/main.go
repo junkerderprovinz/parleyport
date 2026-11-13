@@ -32,6 +32,9 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -42,14 +45,19 @@ import (
 
 	"github.com/junkerderprovinz/parleyport/kit/fortress"
 	"github.com/junkerderprovinz/parleyport/kit/group"
+	"github.com/junkerderprovinz/parleyport/kit/lan"
 	"github.com/junkerderprovinz/parleyport/kit/member"
 	"github.com/junkerderprovinz/parleyport/kit/phrase"
 	"github.com/junkerderprovinz/parleyport/kit/status"
 )
 
 // settle is how long after the relay connects the members it lists are taken
-// as complete.
-const settle = 1500 * time.Millisecond
+// as complete, and lanRound how long the members on this network take to
+// announce themselves once.
+const (
+	settle   = 1500 * time.Millisecond
+	lanRound = 6 * time.Second
+)
 
 // errUsage is a command line that does not make sense; it exits with 2.
 var errUsage = errors.New("usage")
@@ -220,31 +228,71 @@ func openDir(ctx context.Context, dir string, wait time.Duration, removed *atomi
 	}
 	cfg.OnRemoved = func() { removed.Store(true) }
 	leave = func() error { return nil }
+	var ln net.Listener
 	if cfg.LAN != nil {
+		if ln, err = listenDirect(); err != nil {
+			return nil, nil, err
+		}
+		if ln != nil {
+			cfg.Self.DirectURL = "http://" + ln.Addr().String()
+		}
 		cfg.LAN.Start()
 		leave = cfg.LAN.Close
 	}
 	if f, err = fortress.Open(cfg); err != nil {
+		if ln != nil {
+			_ = ln.Close()
+		}
 		return nil, nil, errors.Join(err, leave())
 	}
-	settled(ctx, f, cfg.Relay != group.RelayOff, wait)
+	if ln != nil {
+		srv := serveDirect(ln, f)
+		leave = func() error { return errors.Join(srv.Close(), cfg.LAN.Close()) }
+	}
+	settled(ctx, f, cfg.Relay != group.RelayOff, cfg.LAN != nil, wait)
 	return f, leave, nil
 }
 
-// settled waits until the relay lists the members and every instance in reach
-// said what it is, or until wait ran out.
-func settled(ctx context.Context, f *fortress.Fortress, relayed bool, wait time.Duration) {
+// listenDirect opens the port the members call this one on while a command
+// runs, on the address it announces on this network and no other. The OS
+// picks the port, since the announce carries it. A host without an IPv4
+// address gets none and reaches the members through the relay alone.
+func listenDirect() (net.Listener, error) {
+	ip := lan.LocalIPv4()
+	if ip == "" {
+		return nil, nil
+	}
+	return net.Listen("tcp4", net.JoinHostPort(ip, "0"))
+}
+
+// serveDirect answers the members' direct calls at ln and nothing else. Every
+// call is sealed and signed under the fortress's keys, so only a member gets
+// past the kit's handler. The server logs nothing, since its errors name the
+// caller's address.
+func serveDirect(ln net.Listener, f *fortress.Fortress) *http.Server {
+	mux := http.NewServeMux()
+	mux.Handle(group.DirectPath, f.DirectHandler())
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second, ErrorLog: log.New(io.Discard, "", 0)}
+	go func() { _ = srv.Serve(ln) }()
+	return srv
+}
+
+// settled waits until the relay lists the members, the network has had its
+// round, and every instance in reach said what it is, or until wait ran out.
+func settled(ctx context.Context, f *fortress.Fortress, relayed, onLAN bool, wait time.Duration) {
 	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 	tick := time.NewTicker(50 * time.Millisecond)
 	defer tick.Stop()
+	start := time.Now()
 	var connected time.Time
 	for {
 		now := time.Now()
 		if relayed && f.RelayConnected() && connected.IsZero() {
 			connected = now
 		}
-		if (!relayed || !connected.IsZero() && now.Sub(connected) >= settle) && described(f) {
+		heard := !onLAN || now.Sub(start) >= lanRound || allInReach(f)
+		if (!relayed || !connected.IsZero() && now.Sub(connected) >= settle) && heard && described(f) {
 			return
 		}
 		select {
@@ -253,6 +301,22 @@ func settled(ctx context.Context, f *fortress.Fortress, relayed bool, wait time.
 		case <-tick.C:
 		}
 	}
+}
+
+// allInReach reports whether every instance the fortress knows is in reach,
+// and it knows one.
+func allInReach(f *fortress.Fortress) bool {
+	known := false
+	for _, m := range f.Members() {
+		if m.Kind != member.KindInstance {
+			continue
+		}
+		if !m.Online() {
+			return false
+		}
+		known = true
+	}
+	return known
 }
 
 func described(f *fortress.Fortress) bool {

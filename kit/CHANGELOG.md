@@ -26,4 +26,4 @@ The first version: everything an app needs to pair its instances, join a fortres
 - **Host paths.** `hostpath` translates between a folder in a container and the same folder on the host.
 - **Backups and large answers.** A member can stream a backup to another and take one back, directly on the local network. Answers over the relay can be as large as an app allows, up to 8 MiB, and travel in parts of 1 MiB.
 - **MCP.** `fortressmcp` brings the fortress into an app's MCP server.
-- **Helpers.** `cmd/fortress` and `cmd/notify` do the same for plugins without Go code. Both are attached to every ParleyPort release.
+- **Helpers.** `cmd/fortress` and `cmd/notify` do the same for plugins without Go code. Both are attached to every ParleyPort release. A plugin joined with `-lan` takes the members' calls on its own network while a command runs, so it reaches them with the relay off too.
