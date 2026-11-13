@@ -245,3 +245,15 @@ func TestABodyMustCarryTheRequestItsHeadNames(t *testing.T) {
 		t.Errorf("= %d %s, want 403", w.Code, w.Body)
 	}
 }
+
+func TestAFullHeadCacheStillTakesAFreshCall(t *testing.T) {
+	a, b := onOneNetwork(t, setup{})
+	now := time.Now()
+	for i := range maxHeadsKept {
+		b.g.heads.first(fmt.Sprintf("member\x00%d", i), now, now)
+	}
+	req, body := direct(t, a, b, "/api/whoami")
+	if w := serveDirect(b.g, req, body); w.Code != http.StatusOK {
+		t.Errorf("= %d %s, want 200", w.Code, w.Body)
+	}
+}

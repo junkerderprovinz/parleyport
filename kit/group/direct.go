@@ -250,6 +250,12 @@ func (e envelope) tags(peerAuth, body []byte) bool {
 	return hmac.Equal([]byte(e.signature), []byte(directSignature(peerAuth, e.sender, e.unix, body)))
 }
 
+// sent is the time the call e describes says it was sent at.
+func (e envelope) sent() time.Time {
+	unix, _ := strconv.ParseInt(e.unix, 10, 64)
+	return time.Unix(unix, 0)
+}
+
 // tagged reports whether the headers of the call e describes, length long,
 // are tagged under peerAuth: an upload's call, which travels in them, or the
 // head tag of any other.
@@ -292,32 +298,37 @@ func (u *untagged) enter(source string) (leave func(), ok bool) {
 }
 
 // heads keeps the head tags taken lately, so a tag played back holds no slot
-// while its body never comes. A tag is good for relay.ClockSkew either way.
+// while its body never comes. A tag is good until relay.ClockSkew after the
+// time it carries, and a full cache makes room by dropping the one that runs
+// out first, so filling it shuts nobody out.
 type heads struct {
-	mu   sync.Mutex
-	seen map[string]time.Time
+	mu    sync.Mutex
+	until map[string]time.Time
 }
 
-// first records key, the sender and request a head tag names, and reports
-// whether it was not taken before.
-func (h *heads) first(key string, now time.Time) bool {
+// first records key, the sender and request of a head tag sent at sent, and
+// reports whether it was not taken before.
+func (h *heads) first(key string, sent, now time.Time) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if _, ok := h.seen[key]; ok {
+	if _, ok := h.until[key]; ok {
 		return false
 	}
-	if h.seen == nil {
-		h.seen = map[string]time.Time{}
+	if h.until == nil {
+		h.until = map[string]time.Time{}
 	}
-	for k, at := range h.seen {
-		if now.Sub(at) > 2*relay.ClockSkew {
-			delete(h.seen, k)
+	soonest := ""
+	for k, until := range h.until {
+		if now.After(until) {
+			delete(h.until, k)
+		} else if soonest == "" || until.Before(h.until[soonest]) {
+			soonest = k
 		}
 	}
-	if len(h.seen) >= maxHeadsKept {
-		return false
+	if len(h.until) >= maxHeadsKept {
+		delete(h.until, soonest)
 	}
-	h.seen[key] = now
+	h.until[key] = sent.Add(relay.ClockSkew)
 	return true
 }
 
@@ -466,7 +477,7 @@ func (g *Group) receive(w http.ResponseWriter, r *http.Request, e envelope) ([]b
 		return nil, false
 	}
 	leave := func() {}
-	if tagged && !e.upload && !g.heads.first(e.sender+"\x00"+e.request, time.Now()) {
+	if tagged && !e.upload && !g.heads.first(e.sender+"\x00"+e.request, e.sent(), time.Now()) {
 		forbid(w)
 		return nil, false
 	}
