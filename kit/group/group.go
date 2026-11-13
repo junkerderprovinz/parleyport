@@ -116,6 +116,10 @@ type Config struct {
 	// OnRemove runs once for every other member taken out here, whether by
 	// Remove or as another instance passed it on.
 	OnRemove func(id string)
+	// OnLeave runs once for every other member that left the group, here or
+	// as another instance passed it on. Leaving is no removal: the member
+	// took its key away itself.
+	OnLeave func(id string)
 	// Kinds are the kinds of member the group takes, instances among them
 	// whatever it says; empty takes every kind. A member of another kind is
 	// neither listed nor pinned, and its calls are refused.
@@ -249,6 +253,7 @@ type Group struct {
 	client      *relay.Client
 	onRemoved   func()
 	onRemove    func(id string)
+	onLeave     func(id string)
 	onChange    func()
 	vouch       func(string, ed25519.PublicKey) bool
 	byPhrase    bool
@@ -355,6 +360,7 @@ func Open(cfg Config, serve http.Handler) (*Group, error) {
 		lan:         cfg.LAN,
 		onRemoved:   cfg.OnRemoved,
 		onRemove:    cfg.OnRemove,
+		onLeave:     cfg.OnLeave,
 		onChange:    cfg.OnChange,
 		vouch:       cfg.Vouch,
 		byPhrase:    cfg.JoinByPhrase,
@@ -741,7 +747,8 @@ func (g *Group) look(now time.Time) map[string]*Member {
 		}
 	}
 	for id, m := range view {
-		if _, gone := g.st.Removed[id]; gone || id == g.self || g.strangerTo[id] {
+		_, left := g.st.Left[id]
+		if _, gone := g.st.Removed[id]; gone || left || id == g.self || g.strangerTo[id] {
 			delete(view, id)
 			continue
 		}

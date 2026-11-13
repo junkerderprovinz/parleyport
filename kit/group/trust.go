@@ -67,6 +67,8 @@ type state struct {
 	Members map[string]record    `json:"members,omitempty"`
 	Removed map[string]time.Time `json:"removed,omitempty"`
 	Revoked map[string]time.Time `json:"revoked,omitempty"`
+	// Left are the members that left the group themselves.
+	Left map[string]time.Time `json:"left,omitempty"`
 	// Address is this instance's direct address as NoteAddress learned it.
 	Address string `json:"address,omitempty"`
 	// Retired is when Retire first ran under this group key.
@@ -365,7 +367,8 @@ func (g *Group) admit(call relay.ProxyCall, source string, vouched, asked bool, 
 	defer g.mu.Unlock()
 	st := &g.st
 	_, removed := st.Removed[call.From]
-	if _, revoked := st.Revoked[hex.EncodeToString(call.Key)]; revoked || removed {
+	_, left := st.Left[call.From]
+	if _, revoked := st.Revoked[hex.EncodeToString(call.Key)]; revoked || removed || left {
 		return Caller{}, removedRefusal
 	}
 	ask := g.mayJoin != nil && g.byPhrase && !vouched && !asked && g.closedSince.IsZero()
@@ -521,8 +524,9 @@ func (g *Group) pinAnswerLocked(id string, key []byte, vouched bool) (record, bo
 	st := &g.st
 	now := time.Now()
 	_, removed := st.Removed[id]
+	_, left := st.Left[id]
 	_, revoked := st.Revoked[hex.EncodeToString(key)]
-	if removed || revoked || (g.vouchedOnly || !g.closedSince.IsZero()) && !vouched || !claimFits(id, member.KindInstance, key) || len(st.Members) >= maxPinned ||
+	if removed || left || revoked || (g.vouchedOnly || !g.closedSince.IsZero()) && !vouched || !claimFits(id, member.KindInstance, key) || len(st.Members) >= maxPinned ||
 		(!g.byPhrase && waitingLocked(st) >= maxWaiting) {
 		return record{}, false
 	}
@@ -590,6 +594,26 @@ func (g *Group) Remove(id string) error {
 	return nil
 }
 
+// Leave tells every instance in reach that this one left the group, so they
+// drop it at once, and the others hear it from their rosters. Close waits
+// until it went out. The app forgets the membership after it.
+func (g *Group) Leave() {
+	g.passOn(decision{Op: opLeave, ID: g.self}, g.instancesOnline(""))
+}
+
+// dropLeft drops id here only and tells the app, the first time.
+func (g *Group) dropLeft(id string, now time.Time) {
+	g.mu.Lock()
+	newly := g.leftLocked(id, now)
+	if newly && g.saveLocked() != nil {
+		g.dirty = true
+	}
+	g.mu.Unlock()
+	if newly && g.onLeave != nil {
+		g.onLeave(id)
+	}
+}
+
 // forget removes id here only and tells the app, the first time.
 func (g *Group) forget(id string, now time.Time) error {
 	g.mu.Lock()
@@ -634,9 +658,11 @@ func (g *Group) instancesOnline(except string) []string {
 const (
 	opApprove = "approve"
 	opRemove  = "remove"
+	opLeave   = "leave"
 )
 
-// decision is an approval or a removal passed from one instance to another.
+// decision is an approval, a removal or a leave passed from one instance to
+// another.
 type decision struct {
 	Op   string      `json:"op"`
 	ID   string      `json:"id"`
@@ -690,7 +716,7 @@ func (g *Group) internal(caller Caller, call relay.ProxyCall) (int, []byte) {
 		if json.Unmarshal(call.Body, &d) != nil {
 			return http.StatusBadRequest, nil
 		}
-		g.decide(d, time.Now())
+		g.decide(d, caller.ID, time.Now())
 		return http.StatusNoContent, nil
 	case call.Path == rosterPath && call.Method == http.MethodGet && instance:
 		b, _ := json.Marshal(g.roster())
@@ -703,9 +729,15 @@ func (g *Group) internal(caller Caller, call relay.ProxyCall) (int, []byte) {
 	return http.StatusNotFound, nil
 }
 
-// decide applies d, as an approved instance passed it on.
-func (g *Group) decide(d decision, now time.Time) {
+// decide applies d, as the approved instance from passed it on.
+func (g *Group) decide(d decision, from string, now time.Time) {
 	switch d.Op {
+	case opLeave:
+		// Only a member itself leaves. Another one's word would be a removal
+		// nobody can see.
+		if d.ID == from && d.ID != g.self {
+			g.dropLeft(d.ID, now)
+		}
 	case opRemove:
 		if d.ID == g.self {
 			g.heardRemoved()

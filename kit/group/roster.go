@@ -21,6 +21,8 @@ type Roster struct {
 	Removed map[string]time.Time
 	// Revoked holds every revoked member key in hex.
 	Revoked map[string]time.Time
+	// Left are the members that left themselves, which counts as no removal.
+	Left map[string]time.Time
 }
 
 // Roster returns what this instance keeps of the group, for an app that shows
@@ -28,7 +30,7 @@ type Roster struct {
 func (g *Group) Roster() Roster {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	r := Roster{Members: make([]Member, 0, len(g.st.Members)), Removed: maps.Clone(g.st.Removed), Revoked: maps.Clone(g.st.Revoked)}
+	r := Roster{Members: make([]Member, 0, len(g.st.Members)), Removed: maps.Clone(g.st.Removed), Revoked: maps.Clone(g.st.Revoked), Left: maps.Clone(g.st.Left)}
 	for id, rec := range g.st.Members {
 		r.Members = append(r.Members, Member{
 			ID: id, Kind: rec.Kind, Name: rec.Name, Deployment: rec.Deployment, Address: rec.Address,
@@ -61,6 +63,12 @@ func (g *Group) Import(r Roster) error {
 			gone = append(gone, id)
 		}
 	}
+	var left []string
+	for id, at := range r.Left {
+		if id != g.self && kindOfID(id) != "" && g.leftLocked(id, earliest(at, now)) {
+			left = append(left, id)
+		}
+	}
 	for key, at := range r.Revoked {
 		if !keyHex(key) {
 			continue
@@ -82,7 +90,7 @@ func (g *Group) Import(r Roster) error {
 		}
 	}
 	var err error
-	if changed || len(gone) > 0 {
+	if changed || len(gone) > 0 || len(left) > 0 {
 		if err = g.saveLocked(); err != nil {
 			g.dirty = true
 		}
@@ -91,6 +99,11 @@ func (g *Group) Import(r Roster) error {
 	if g.onRemove != nil {
 		for _, id := range gone {
 			g.onRemove(id)
+		}
+	}
+	if g.onLeave != nil {
+		for _, id := range left {
+			g.onLeave(id)
 		}
 	}
 	return err
@@ -105,7 +118,8 @@ func (g *Group) takeLocked(m Member, now time.Time) bool {
 	}
 	st := &g.st
 	_, removed := st.Removed[m.ID]
-	if _, revoked := st.Revoked[hex.EncodeToString(m.Key)]; revoked || removed {
+	_, left := st.Left[m.ID]
+	if _, revoked := st.Revoked[hex.EncodeToString(m.Key)]; revoked || removed || left {
 		return false
 	}
 	approved := m.State == StateApproved
@@ -199,6 +213,27 @@ func (g *Group) forgetLocked(id string, at time.Time) bool {
 	return true
 }
 
+// leftLocked drops id, which left the group itself, as of at and reports
+// whether it was not gone already. Its key stays unrevoked, since nobody holds
+// it any more, and it counts as no removal.
+func (g *Group) leftLocked(id string, at time.Time) bool {
+	st := &g.st
+	if _, done := st.Left[id]; done {
+		return false
+	}
+	if _, done := st.Removed[id]; done {
+		return false
+	}
+	delete(st.Members, id)
+	if st.Left == nil {
+		st.Left = map[string]time.Time{}
+	}
+	bounded(st.Left)
+	st.Left[id] = at
+	delete(g.addrs, id)
+	return true
+}
+
 func (g *Group) revokeLocked(key string, at time.Time) {
 	if g.st.Revoked == nil {
 		g.st.Revoked = map[string]time.Time{}
@@ -237,6 +272,7 @@ func later(a, b time.Time) time.Time {
 type roster struct {
 	Members []rosterMember       `json:"members"`
 	Removed map[string]time.Time `json:"removed,omitempty"`
+	Left    map[string]time.Time `json:"left,omitempty"`
 }
 
 type rosterMember struct {
@@ -251,7 +287,7 @@ type rosterMember struct {
 func (g *Group) roster() roster {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	r := roster{Members: []rosterMember{}, Removed: maps.Clone(g.st.Removed)}
+	r := roster{Members: []rosterMember{}, Removed: maps.Clone(g.st.Removed), Left: maps.Clone(g.st.Left)}
 	for id, rec := range g.st.Members {
 		if rec.Approved {
 			r.Members = append(r.Members, rosterMember{ID: id, Kind: rec.Kind, Key: bytes.Clone(rec.Key),
@@ -264,7 +300,7 @@ func (g *Group) roster() roster {
 // merge takes from r, the roster of an approved instance, the approvals,
 // removals and sightings missing here.
 func (g *Group) merge(r roster) {
-	in := Roster{Removed: r.Removed}
+	in := Roster{Removed: r.Removed, Left: r.Left}
 	for i, m := range r.Members {
 		if i >= maxPinned {
 			break

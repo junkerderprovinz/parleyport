@@ -1,12 +1,13 @@
 // Command fortress lets an app without Go code, such as a plugin written in
 // shell, take part in a fortress: join it with the phrase, list the members,
-// read their status, ask one of them to run an action and take one out.
+// read their status, ask one of them to run an action, take one out and leave.
 //
 //	fortress join -dir DIR -app ID -name DEVICE [-relay URL|off] [-lan] [-uses a.b,c.d] [-icon logo.svg] < phrase
 //	fortress members -dir DIR [-json] [-wait 5s]
 //	fortress status -dir DIR [-json] [-lang de] [-wait 5s]
 //	fortress act -dir DIR [-wait 5s] MEMBER ACTION [BODY]
 //	fortress remove -dir DIR [-wait 5s] MEMBER
+//	fortress leave -dir DIR [-wait 5s]
 //
 // MEMBER is a member's id or the id of an app with one instance in reach.
 // join keeps no phrase: DIR holds the plugin's member key and the keys the
@@ -16,11 +17,12 @@
 // command follows on its own, as the same member, for 30 days; joining again
 // with the new phrase does the same any time. remove prints the member it
 // takes out as JSON and returns once the members in reach took the removal;
-// DIR keeps it out on every command after. Every command but join takes part
-// for as long as it runs, waits up to -wait for the members to show, and
-// leaves. A command that finds this member taken out by another forgets the
-// membership, leaves the file removed-here in DIR and fails until join runs
-// again.
+// DIR keeps it out on every command after. leave tells the members in reach
+// that this one left, so they drop it rather than list it as away, and
+// forgets DIR. Every command but join takes part for as long as it runs,
+// waits up to -wait for the members to show, and leaves. A command that finds
+// this member taken out by another forgets the membership, leaves the file
+// removed-here in DIR and fails until join runs again.
 package main
 
 import (
@@ -92,7 +94,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 
 func dispatch(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("%w: fortress join|members|status|act|remove -dir DIR", errUsage)
+		return fmt.Errorf("%w: fortress join|members|status|act|remove|leave -dir DIR", errUsage)
 	}
 	verb, args := args[0], args[1:]
 	fs := flag.NewFlagSet(verb, flag.ContinueOnError)
@@ -152,6 +154,12 @@ func dispatch(ctx context.Context, args []string, stdin io.Reader, stdout io.Wri
 			return fmt.Errorf("%w: remove MEMBER", errUsage)
 		}
 		return withFortress(ctx, *dir, *wait, func(f *fortress.Fortress) error { return remove(f, stdout, rest[0]) })
+	case "leave":
+		err := withFortress(ctx, *dir, *wait, func(f *fortress.Fortress) error {
+			f.Leave()
+			return nil
+		})
+		return errors.Join(err, os.RemoveAll(*dir))
 	}
 	return fmt.Errorf("%w: unknown command %q", errUsage, verb)
 }

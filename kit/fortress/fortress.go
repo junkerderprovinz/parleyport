@@ -502,6 +502,7 @@ func Open(cfg Config) (*Fortress, error) {
 		Store:               store,
 		OnRemoved:           f.leave,
 		OnRemove:            f.fortressRemoved,
+		OnLeave:             f.forgetMember,
 		MayJoin:             f.mayJoin,
 		MaxAnswerBytes:      cfg.MaxAnswerBytes,
 		MaxRelayAnswerBytes: cfg.MaxRelayAnswerBytes,
@@ -645,6 +646,18 @@ func (f *Fortress) Remove(id string) error {
 	return err
 }
 
+// Leave tells every member in reach, in the fortress and the pairing, that
+// this instance left, so they drop it at once instead of listing it as away.
+// The others hear it from them. Close waits until it went out. The app
+// forgets the membership after it.
+func (f *Fortress) Leave() {
+	for _, g := range []*group.Group{f.group, f.pairing, f.old} {
+		if g != nil {
+			g.Leave()
+		}
+	}
+}
+
 func listed(g *group.Group, id string) (group.Member, bool) {
 	for _, m := range g.Members() {
 		if m.ID == id {
@@ -663,6 +676,17 @@ func (f *Fortress) leave() {
 // fortressRemoved follows a removal in the fortress, made here or passed on,
 // into the pairing.
 func (f *Fortress) fortressRemoved(id string) {
+	f.forgetMember(id)
+	if f.pairing != nil {
+		if _, ok := listed(f.pairing, id); ok {
+			_ = f.pairing.Remove(id)
+		}
+	}
+}
+
+// forgetMember drops what the fortress keeps of member id, which left or was
+// taken out.
+func (f *Fortress) forgetMember(id string) {
 	f.dropCaller(id)
 	f.tickets.dropMember(id)
 	f.mu.Lock()
@@ -679,11 +703,6 @@ func (f *Fortress) fortressRemoved(id string) {
 		f.dirty = true
 	}
 	f.mu.Unlock()
-	if f.pairing != nil {
-		if _, ok := listed(f.pairing, id); ok {
-			_ = f.pairing.Remove(id)
-		}
-	}
 }
 
 // pairingRemoved follows a removal in the pairing into the fortress. The
