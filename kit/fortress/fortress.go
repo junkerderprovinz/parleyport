@@ -588,7 +588,7 @@ func (f *Fortress) NoteAddress(r *http.Request) {
 // fortress and the pairing alike, such as a direct address the app learned
 // after it opened the fortress. It goes out on the network at once.
 func (f *Fortress) SetSelf(s group.Self) {
-	for _, g := range []*group.Group{f.group, f.pairing, f.old} {
+	for _, g := range []*group.Group{f.group, f.pairing} {
 		if g != nil {
 			g.SetSelf(s)
 		}

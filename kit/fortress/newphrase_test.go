@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/junkerderprovinz/parleyport/kit/group"
 	"github.com/junkerderprovinz/parleyport/kit/relay"
 )
 
@@ -296,4 +297,37 @@ func TestNoNewPhraseIsHandedThirtyDaysAfterTheChange(t *testing.T) {
 
 	d.f = reopen(t, d, setup{relay: url})
 	handsNothing(t, url, d, a, b)
+}
+
+func TestANewAddressStaysOffThePhraseBefore(t *testing.T) {
+	url := relayServer(t)
+	a := open(t, "alpha", "alpha-1", setup{relay: url})
+	b := open(t, "bravo", "bravo-1", setup{relay: url})
+	waitFor(t, "alpha to see bravo", func() bool { return len(a.f.Members()) == 1 })
+	changePhrase(t, url, a, b)
+	if a.f.old == nil {
+		t.Fatal("alpha answers nobody on the old phrase")
+	}
+	c := asker(t, url, b)
+	waitFor(t, "alpha on the old phrase", func() bool { return seenOn(c, a.id) })
+	a.f.SetSelf(group.Self{Name: "alpha-moved", Deployment: "container", DirectURL: "http://192.0.2.7:8080"})
+	// A new announce goes out with the next connection, a few seconds on.
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, s := range c.Siblings() {
+			if s.InstanceID == a.id && (s.Name != "" || s.Address != "") {
+				t.Fatalf("alpha announces %q at %q on the old phrase", s.Name, s.Address)
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func seenOn(c *relay.Client, id string) bool {
+	for _, s := range c.Siblings() {
+		if s.InstanceID == id {
+			return true
+		}
+	}
+	return false
 }
