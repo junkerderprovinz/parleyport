@@ -154,6 +154,7 @@ func TestTheNewKeysOpenNoAppAndCarryNoSecret(t *testing.T) {
 	for _, n := range []*node{a, b, p} {
 		waitFor(t, n.name+" to see everybody", func() bool { return len(n.f.Members()) == 2 })
 	}
+	meet(t, a, p)
 	secret := changePhrase(t, url, a, b)
 	// Under the old phrase the plugin reaches nothing but the handover.
 	waitFor(t, "alpha to refuse its status on the old phrase", func() bool {
