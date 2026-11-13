@@ -66,17 +66,18 @@ func TestANewPhraseTakesTheMembersAlongAndLeavesTheRemovedOut(t *testing.T) {
 		}
 	}
 
-	// delta, away during the change, is out until the new phrase is entered
-	// there, and then in at once.
+	// delta, away during the change, reads nothing under the old phrase,
+	// takes the new one from alpha or bravo and is in at once.
 	d.f = reopen(t, d, setup{relay: url})
 	if _, err := d.f.Status(ctx(t), a.id, ""); err == nil {
 		t.Error("delta reads alpha under the old phrase")
 	}
+	waitFor(t, "delta to take the new phrase", func() bool { return bytes.Equal(d.lastKept(), secret) })
 	if err := d.f.Close(); err != nil {
 		t.Fatal(err)
 	}
-	d.f = reopen(t, d, setup{relay: url, secret: secret})
-	waitFor(t, "delta to see alpha", func() bool { _, ok := memberOf(d.f, a.id); return ok })
+	d.f = reopen(t, d, setup{relay: url, secret: secret, moved: testSecret})
+	waitFor(t, "delta to reach alpha", func() bool { m, _ := memberOf(d.f, a.id); return m.Online() })
 	if _, err := d.f.Status(ctx(t), a.id, ""); err != nil {
 		t.Errorf("delta reads alpha after entering the new phrase: %v", err)
 	}

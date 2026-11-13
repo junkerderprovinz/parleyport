@@ -1,6 +1,7 @@
 package fortress
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
@@ -301,13 +302,13 @@ func (f *Fortress) movedKeys(ctx context.Context, id string) (keys.Set, error) {
 }
 
 // openOld opens the fortress on cfg.Previous for the members from before the
-// change that hold only keys, which have no way to the new phrase but this.
+// change that were away for it, which have no way to the new phrase but this.
 // The phrase lets nobody in there: only the instances the fortress approved
-// under the same key are, and set is what they are handed. Whoever else holds
-// the old phrase learns neither this instance's name nor who is in the
-// fortress.
+// under the same key are, and they are handed set or, holding the old phrase,
+// the new secret. Whoever else holds the old phrase learns neither this
+// instance's name nor who is in the fortress.
 func (f *Fortress) openOld(cfg Config, set keys.Set) error {
-	f.set = set
+	f.set, f.previous = set, bytes.Clone(cfg.Previous)
 	old, err := group.Open(group.Config{
 		Domain:      Domain,
 		Secret:      cfg.Previous,
@@ -326,9 +327,10 @@ func (f *Fortress) openOld(cfg Config, set keys.Set) error {
 }
 
 // serveOld answers the members still on the phrase before: what this
-// instance is, marked as moved, and the keys under the new phrase. Whatever
-// else they ask waits until they followed. Every call is checked against the
-// fortress as it stands, so a member taken out since the change gets nothing.
+// instance is, marked as moved, the keys under the new phrase and, sealed
+// with handNewPhrase, its secret. Whatever else they ask waits until they
+// followed. Every call is checked against the fortress as it stands, so a
+// member taken out since the change gets nothing.
 func (f *Fortress) serveOld(w http.ResponseWriter, r *http.Request) {
 	caller, ok := group.CallerOf(r.Context())
 	switch {
@@ -342,6 +344,8 @@ func (f *Fortress) serveOld(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, a)
 	case r.URL.Path == movedPath && r.Method == http.MethodGet:
 		writeJSON(w, movedBody{Group: f.set.Group, Frame: f.set.Frame, PeerAuth: f.set.PeerAuth}) //nolint:gosec // G117: sealed to an approved member
+	case r.URL.Path == newPhrasePath && r.Method == http.MethodPost:
+		f.handNewPhrase(w, r, caller.ID)
 	default:
 		writeError(w, http.StatusGone, phraseChanged)
 	}

@@ -27,10 +27,12 @@
 // The phrase is the proof: a device that holds it is a member at once, with
 // the permissions as they stand. A member taken out is refused by all the
 // others for good, but whoever still holds the phrase can come back under a
-// new key until the phrase is changed. A member that holds only the keys,
-// such as a plugin, follows a change with NewKeys. A member names its app
-// itself and keeps the first name it gave, so the permissions keep apps
-// apart, not members that lie about their app.
+// new key until the phrase is changed. A member away for a change follows it
+// on its own: the Keeper of an instance that holds the phrase is handed the
+// new one, and a member that holds only the keys, such as a plugin, fetches
+// them with NewKeys. A member names its app itself and keeps the first name
+// it gave, so the permissions keep apps apart, not members that lie about
+// their app.
 package fortress
 
 import (
@@ -167,9 +169,10 @@ type Config struct {
 	// Previous is the secret of the phrase before ChangePhrase. Members,
 	// removals and permissions carry over to Secret, in the pairing as well
 	// unless Pairing.Group.Previous says otherwise. For 30 days after the
-	// change the fortress also answers on Previous, so that the members that
-	// hold only keys can fetch the new ones with NewKeys; the app keeps giving
-	// it until then.
+	// change the fortress also answers on Previous, so that the members away
+	// for the change follow it: an instance with a Keeper is handed the new
+	// secret, a member that holds only keys fetches the new ones with NewKeys.
+	// The app keeps giving it until then.
 	Previous []byte
 	// Keeper keeps a new phrase when the fortress changes it; nil for an app
 	// that has nowhere safe to keep one, which then enters the new phrase
@@ -283,8 +286,10 @@ func (cfg Config) check() error {
 // Keeper keeps the secret behind the phrase under the app's own seal, such as
 // its main key, so that the app can show the phrase again once its user
 // signed in. The fortress keeps no secret itself. Keep may run inside a call
-// the fortress serves, so it must not close the fortress; the app opens it
-// again afterwards, with the new secret and the old one as Config.Previous.
+// the fortress serves, or on its own goroutine when this instance follows a
+// change it was away for, so it must not close the fortress; the app opens
+// it again afterwards, with the new secret and the old one as
+// Config.Previous.
 type Keeper interface {
 	Keep(secret []byte) error
 }
@@ -351,10 +356,18 @@ type Fortress struct {
 	// that follows a move is handed in its place.
 	paired keys.Set
 	// old is the fortress on the phrase before, open for moveWindow after
-	// the change so that its members that hold only keys can fetch set, the
-	// keys under the new one. nil when the phrase did not change lately.
+	// the change so that its members away for it follow: those that hold
+	// only keys fetch set, the keys under the new one, and the others the
+	// secret. nil when the phrase did not change lately.
 	old *group.Group
 	set keys.Set
+	// secret is what the phrase encodes, and previous the phrase before it
+	// while old is open, so that an instance away for the change follows it
+	// with catchUp. Neither is kept anywhere.
+	secret, previous []byte
+	// catching is set while this instance asks for the phrase the fortress
+	// changed to, and stays set once it was handed it.
+	catching bool
 	// opened is closed once group is set.
 	opened chan struct{}
 	// asking lets one round of asking the members run at a time.
@@ -426,6 +439,7 @@ func Open(cfg Config) (*Fortress, error) {
 		opening:   make(chan struct{}, maxOpenCalls),
 		sending:   make(chan struct{}, maxSends),
 		onRemoved: cfg.OnRemoved,
+		secret:    bytes.Clone(cfg.Secret),
 		book:      bk,
 		// A book written at once tells a later change of phrase from a fresh
 		// start.
@@ -809,6 +823,7 @@ func (f *Fortress) describe(ctx context.Context, id string, now time.Time) bool 
 	}
 	if a.Moved {
 		f.shut(a.Changed)
+		f.catchUp(id)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
