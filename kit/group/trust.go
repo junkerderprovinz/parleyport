@@ -69,6 +69,9 @@ type state struct {
 	Revoked map[string]time.Time `json:"revoked,omitempty"`
 	// Left are the members that left the group themselves.
 	Left map[string]time.Time `json:"left,omitempty"`
+	// LeftSig is each such member's own signature on its leaving, which
+	// lets the others take it from a roster.
+	LeftSig map[string][]byte `json:"leftSig,omitempty"`
 	// Address is this instance's direct address as NoteAddress learned it.
 	Address string `json:"address,omitempty"`
 	// Retired is when Retire first ran under this group key.
@@ -598,13 +601,34 @@ func (g *Group) Remove(id string) error {
 // drop it at once, and the others hear it from their rosters. Close waits
 // until it went out. The app forgets the membership after it.
 func (g *Group) Leave() {
-	g.passOn(decision{Op: opLeave, ID: g.self}, g.instancesOnline(""))
+	at := time.Now().Unix()
+	sig := g.identity.Sign(g.leaveMessage(g.self, at))
+	g.passOn(decision{Op: opLeave, ID: g.self, At: at, Sig: sig}, g.instancesOnline(""))
+}
+
+// leaveMessage is what member id signs when it leaves, at the Unix time at.
+func (g *Group) leaveMessage(id string, at int64) []byte {
+	return member.Message(g.signing.Call+"/leave", uint64(at), []byte(id)) //nolint:gosec // G115: the bits of the time are signed as they are
+}
+
+// leftInOwnWordsLocked reports whether sig is member id's own signature on
+// its leaving at the Unix time at, under the key pinned here for it.
+func (g *Group) leftInOwnWordsLocked(id string, at int64, sig []byte) bool {
+	rec, ok := g.st.Members[id]
+	return ok && len(rec.Key) == ed25519.PublicKeySize && ed25519.Verify(rec.Key, g.leaveMessage(id, at), sig)
 }
 
 // dropLeft drops id here only and tells the app, the first time.
-func (g *Group) dropLeft(id string, now time.Time) {
+func (g *Group) dropLeft(id string, at int64, sig []byte) {
 	g.mu.Lock()
-	newly := g.leftLocked(id, now)
+	if !g.leftInOwnWordsLocked(id, at, sig) {
+		g.mu.Unlock()
+		return
+	}
+	newly := g.leftLocked(id, earliest(time.Unix(at, 0), time.Now()))
+	if newly {
+		g.keepLeaveLocked(id, sig)
+	}
 	if newly && g.saveLocked() != nil {
 		g.dirty = true
 	}
@@ -668,6 +692,9 @@ type decision struct {
 	ID   string      `json:"id"`
 	Kind member.Kind `json:"kind,omitempty"`
 	Key  []byte      `json:"key,omitempty"`
+	// At and Sig are when a member left and its own signature on it.
+	At  int64  `json:"at,omitempty"`
+	Sig []byte `json:"sig,omitempty"`
 }
 
 // passOn tells every instance in to of d in the background. One that misses it
@@ -736,7 +763,7 @@ func (g *Group) decide(d decision, from string, now time.Time) {
 		// Only a member itself leaves. Another one's word would be a removal
 		// nobody can see.
 		if d.ID == from && d.ID != g.self {
-			g.dropLeft(d.ID, now)
+			g.dropLeft(d.ID, d.At, d.Sig)
 		}
 	case opRemove:
 		if d.ID == g.self {

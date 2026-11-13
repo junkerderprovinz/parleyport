@@ -3,6 +3,7 @@ package group
 import (
 	"net/http"
 	"testing"
+	"time"
 )
 
 func TestAMemberThatLeavesIsDroppedAtOnceAndCountsAsNoRemoval(t *testing.T) {
@@ -65,5 +66,21 @@ func TestOnlyAMemberItselfSaysItLeft(t *testing.T) {
 	_, _, _ = call(t, c, a, http.MethodPost, decisionPath, body)
 	if got, _ := memberOf(a.g, b.id); got.State != StateApproved {
 		t.Errorf("alpha lists %+v after charlie said bravo left, want bravo still approved", got)
+	}
+}
+
+func TestARosterCannotSayAnotherMemberLeft(t *testing.T) {
+	n := onRelay(t, "alpha", "bravo", "charlie")
+	a, b := n[0], n[1]
+	meet(t, a, b)
+	at := time.Now()
+	for name, r := range map[string]roster{
+		"unsigned": {Left: map[string]time.Time{b.id: at}},
+		"forged":   {Left: map[string]time.Time{b.id: at}, LeftSig: map[string][]byte{b.id: make([]byte, 64)}},
+	} {
+		a.g.merge(r)
+		if got, _ := memberOf(a.g, b.id); got.State != StateApproved {
+			t.Errorf("%s: alpha lists %+v after a roster said bravo left", name, got)
+		}
 	}
 }

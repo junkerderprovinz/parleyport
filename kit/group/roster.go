@@ -234,6 +234,21 @@ func (g *Group) leftLocked(id string, at time.Time) bool {
 	return true
 }
 
+// keepLeaveLocked keeps sig, member id's word that it left, to pass on in
+// the roster, for as long as the leave is kept.
+func (g *Group) keepLeaveLocked(id string, sig []byte) {
+	st := &g.st
+	if st.LeftSig == nil {
+		st.LeftSig = map[string][]byte{}
+	}
+	st.LeftSig[id] = bytes.Clone(sig)
+	for k := range st.LeftSig {
+		if _, ok := st.Left[k]; !ok && k != id {
+			delete(st.LeftSig, k)
+		}
+	}
+}
+
 func (g *Group) revokeLocked(key string, at time.Time) {
 	if g.st.Revoked == nil {
 		g.st.Revoked = map[string]time.Time{}
@@ -273,6 +288,7 @@ type roster struct {
 	Members []rosterMember       `json:"members"`
 	Removed map[string]time.Time `json:"removed,omitempty"`
 	Left    map[string]time.Time `json:"left,omitempty"`
+	LeftSig map[string][]byte    `json:"leftSig,omitempty"`
 }
 
 type rosterMember struct {
@@ -287,7 +303,7 @@ type rosterMember struct {
 func (g *Group) roster() roster {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	r := roster{Members: []rosterMember{}, Removed: maps.Clone(g.st.Removed), Left: maps.Clone(g.st.Left)}
+	r := roster{Members: []rosterMember{}, Removed: maps.Clone(g.st.Removed), Left: maps.Clone(g.st.Left), LeftSig: maps.Clone(g.st.LeftSig)}
 	for id, rec := range g.st.Members {
 		if rec.Approved {
 			r.Members = append(r.Members, rosterMember{ID: id, Kind: rec.Kind, Key: bytes.Clone(rec.Key),
@@ -298,9 +314,21 @@ func (g *Group) roster() roster {
 }
 
 // merge takes from r, the roster of an approved instance, the approvals,
-// removals and sightings missing here.
+// removals and sightings missing here, and the members that left, in their
+// own words, since another member's word would drop one unseen.
 func (g *Group) merge(r roster) {
-	in := Roster{Removed: r.Removed, Left: r.Left}
+	in := Roster{Removed: r.Removed}
+	g.mu.Lock()
+	for id, at := range r.Left {
+		if g.leftInOwnWordsLocked(id, at.Unix(), r.LeftSig[id]) {
+			if in.Left == nil {
+				in.Left = map[string]time.Time{}
+			}
+			in.Left[id] = at
+			g.keepLeaveLocked(id, r.LeftSig[id])
+		}
+	}
+	g.mu.Unlock()
 	for i, m := range r.Members {
 		if i >= maxPinned {
 			break
