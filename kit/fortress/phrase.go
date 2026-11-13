@@ -101,17 +101,18 @@ func hand(ctx context.Context, g *group.Group, ids []string, path string, secret
 }
 
 // ChangePhrase gives the fortress a new phrase. This instance's keeper keeps
-// it first, then every instance in reach gets it to keep and the ids of those
-// that did come back. A member taken out does not get it. One that is away
-// gets it to keep from the first member it meets that took it, within 30
-// days, if it holds the old phrase and has a Keeper; otherwise it is out
-// until the new phrase is entered there, and then in again as the member it
-// was. A member that holds only keys follows with NewKeys instead. The app
-// opens the fortress again with the new secret and the old one as
-// Config.Previous; the old phrase lets nobody new in from then on.
+// it first, then every approved instance in reach that holds the phrase gets
+// it to keep, sealed for that instance alone, and the ids of those that did
+// come back. A member taken out does not get it. One that is away gets it to
+// keep from the first member it meets that took it, within 30 days, if it
+// holds the old phrase and has a Keeper; otherwise it is out until the new
+// phrase is entered there, and then in again as the member it was. A member
+// that holds only keys follows with NewKeys instead. The app opens the
+// fortress again with the new secret and the old one as Config.Previous; the
+// old phrase lets nobody new in from then on.
 func (f *Fortress) ChangePhrase(ctx context.Context) ([]string, error) {
-	if f.keeper == nil {
-		return nil, errors.New("fortress: no keeper for a new phrase")
+	if f.keeper == nil || len(f.secret) == 0 {
+		return nil, errors.New("fortress: a new phrase needs a keeper and the phrase itself")
 	}
 	secret, _, err := phrase.New()
 	if err != nil {
@@ -120,11 +121,58 @@ func (f *Fortress) ChangePhrase(ctx context.Context) ([]string, error) {
 	if err := f.keeper.Keep(secret); err != nil {
 		return nil, err
 	}
-	var ids []string
+	var (
+		mu   sync.Mutex
+		took []string
+		wg   sync.WaitGroup
+	)
 	for _, m := range f.group.Members() {
-		if m.Kind == member.KindInstance && m.Online() {
-			ids = append(ids, m.ID)
+		if m.Kind != member.KindInstance || m.State != group.StateApproved || !m.Online() {
+			continue
 		}
+		wg.Go(func() {
+			if f.handPhrase(ctx, m.ID, secret) == nil {
+				mu.Lock()
+				took = append(took, m.ID)
+				mu.Unlock()
+			}
+		})
 	}
-	return hand(ctx, f.group, ids, phrasePath, secret), nil
+	wg.Wait()
+	sort.Strings(took)
+	return took, nil
+}
+
+// handPhrase hands member id secret to keep: it asks id for a one-off key
+// and sends secret sealed for it.
+func (f *Fortress) handPhrase(ctx context.Context, id string, secret []byte) error {
+	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+	status, raw, err := f.group.Call(ctx, id, http.MethodPost, phraseKeyPath, nil)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return refusal(status, raw)
+	}
+	var key newPhraseAsk
+	if err := json.Unmarshal(raw, &key); err != nil {
+		return err
+	}
+	answer, err := sealNewPhrase(key.Key, secret, f.secret, f.self, id)
+	if err != nil {
+		return err
+	}
+	body, err := json.Marshal(answer)
+	if err != nil {
+		return err
+	}
+	status, raw, err = f.group.Call(ctx, id, http.MethodPost, phrasePath, body)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusNoContent {
+		return refusal(status, raw)
+	}
+	return nil
 }

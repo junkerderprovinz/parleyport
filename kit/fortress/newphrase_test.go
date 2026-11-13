@@ -19,12 +19,19 @@ import (
 // could.
 func asker(t *testing.T, url string, n *node) *relay.Client {
 	t.Helper()
+	return listen(t, url, n, nil)
+}
+
+// listen is asker answering the calls it gets with serve.
+func listen(t *testing.T, url string, n *node, serve relay.ProxyHandler) *relay.Client {
+	t.Helper()
 	id := identity(t, n.name)
 	old := Domain.Keys(testSecret)
 	c, err := relay.NewClient(relay.ClientOptions{
 		URL: url, Key: old.Group, FrameKey: old.Frame, Signing: Domain.Signing(),
 		Self:     relay.Announce{Name: n.name, Deployment: "container"},
 		Identity: &id,
+		Serve:    serve,
 	})
 	if err != nil {
 		t.Fatal(err)

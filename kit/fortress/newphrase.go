@@ -19,12 +19,13 @@ import (
 	"github.com/junkerderprovinz/parleyport/kit/phrase"
 )
 
-// An instance that was away while the phrase changed asks a member that took
-// the new one for it, on the phrase before. Calls there are sealed under that
-// phrase, which a member taken out still holds, so the secret travels sealed
-// once more: under a key from a one-off exchange between the two and the
-// phrase before, so only the instance that asked opens it, and only if it
-// held that phrase itself rather than the keys alone.
+// A new phrase travels on the phrase before, whose calls are sealed under keys
+// a member taken out still holds. So the secret is sealed once more, under a
+// key from a one-off exchange between the two ends and the phrase before:
+// only the instance it is meant for opens it, and only if it held that
+// phrase itself rather than the keys alone. ChangePhrase hands it this way to
+// the members in reach, and an instance away for the change asks for it at
+// newPhrasePath.
 const newPhrasePath = prefix + "new-phrase"
 
 type newPhraseAsk struct {
@@ -178,4 +179,55 @@ func newPhraseSeal(own *ecdh.PrivateKey, peer *ecdh.PublicKey, held []byte, from
 		return nil, err
 	}
 	return cipher.NewGCM(block)
+}
+
+// offer is the one-off key a member that changes the phrase seals the new
+// one for, and when it runs out.
+type offer struct {
+	key   *ecdh.PrivateKey
+	until time.Time
+}
+
+// offerPhraseKey answers member from, which is about to change the phrase,
+// with a one-off key to seal the new one for, one per member at a time.
+func (f *Fortress) offerPhraseKey(w http.ResponseWriter, from string) {
+	key, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal")
+		return
+	}
+	now := time.Now()
+	f.mu.Lock()
+	for id, o := range f.offered {
+		if now.After(o.until) {
+			delete(f.offered, id)
+		}
+	}
+	f.offered[from] = offer{key: key, until: now.Add(callTimeout)}
+	f.mu.Unlock()
+	writeJSON(w, newPhraseAsk{Key: key.PublicKey().Bytes()})
+}
+
+// takePhrase opens the phrase member from sent, sealed for the key it was
+// offered, and hands it to the keeper.
+func (f *Fortress) takePhrase(w http.ResponseWriter, r *http.Request, from string) {
+	f.mu.Lock()
+	o, ok := f.offered[from]
+	delete(f.offered, from)
+	f.mu.Unlock()
+	raw, err := io.ReadAll(r.Body)
+	if !ok || time.Now().After(o.until) || err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request")
+		return
+	}
+	secret, err := openNewPhrase(o.key, raw, f.secret, from, f.self)
+	if err != nil || len(secret) != phrase.SecretLen || bytes.Equal(secret, f.secret) {
+		writeError(w, http.StatusBadRequest, "bad_request")
+		return
+	}
+	if err := f.keeper.Keep(secret); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

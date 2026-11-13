@@ -78,6 +78,7 @@ const (
 	movePath        = prefix + "move"
 	movedPath       = prefix + "moved"
 	phrasePath      = prefix + "phrase"
+	phraseKeyPath   = prefix + "phrase-key"
 )
 
 const (
@@ -368,6 +369,9 @@ type Fortress struct {
 	// catching is set while this instance asks for the phrase the fortress
 	// changed to, and stays set once it was handed it.
 	catching bool
+	// offered holds the one-off key each member that changes the phrase
+	// seals it for, until it sends it.
+	offered map[string]offer
 	// opened is closed once group is set.
 	opened chan struct{}
 	// asking lets one round of asking the members run at a time.
@@ -448,6 +452,7 @@ func Open(cfg Config) (*Fortress, error) {
 		synced:    map[string]time.Time{},
 		greeted:   map[string]time.Time{},
 		watched:   map[string]time.Time{},
+		offered:   map[string]offer{},
 		opened:    make(chan struct{}),
 		asking:    make(chan struct{}, 1),
 		ctx:       ctx,
@@ -876,8 +881,10 @@ func (f *Fortress) serve(w http.ResponseWriter, r *http.Request) {
 		f.serveStream(w, r, caller.ID)
 	case path == uiCheckPath && r.Method == http.MethodPost:
 		f.checkUI(w, r, caller.ID)
-	case path == phrasePath && r.Method == http.MethodPost && f.keeper != nil:
-		takeSecret(w, r, f.keeper)
+	case path == phraseKeyPath && r.Method == http.MethodPost && f.keeper != nil && len(f.secret) > 0:
+		f.offerPhraseKey(w, caller.ID)
+	case path == phrasePath && r.Method == http.MethodPost && f.keeper != nil && len(f.secret) > 0:
+		f.takePhrase(w, r, caller.ID)
 	case len(path) > len(actPrefix) && path[:len(actPrefix)] == actPrefix && r.Method == http.MethodPost:
 		f.serveAction(w, r, caller.ID, path[len(actPrefix):])
 	case (path == status.StatusPath || path == status.LogPath) && f.status != nil:
