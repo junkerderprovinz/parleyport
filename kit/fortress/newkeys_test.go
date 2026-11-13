@@ -362,3 +362,66 @@ func TestAPluginShutsOutANewcomerOnceItHearsThePhraseChanged(t *testing.T) {
 		t.Error("the plugin still reads the newcomer")
 	}
 }
+
+// forgetFirstHeard opens n again on a book without the times it first heard
+// from each member, as a kit before them kept it.
+func forgetFirstHeard(t *testing.T, url string, n *node) {
+	t.Helper()
+	closeAll(t, n)
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(n.store.data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	var bk map[string]any
+	if err := json.Unmarshal(doc["fortress"], &bk); err != nil {
+		t.Fatal(err)
+	}
+	delete(bk, "heard")
+	raw, err := json.Marshal(bk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc["fortress"] = raw
+	if n.store.data, err = json.Marshal(doc); err != nil {
+		t.Fatal(err)
+	}
+	n.f = reopen(t, n, setup{relay: url})
+}
+
+func TestAPluginKnownBeforeTwoRemovalsFollowsTheChange(t *testing.T) {
+	url := relayServer(t)
+	a := open(t, "alpha", "alpha-1", setup{relay: url})
+	b := open(t, "bravo", "bravo-1", setup{relay: url})
+	r := open(t, "romeo", "romeo-1", setup{relay: url})
+	s := open(t, "sierra", "sierra-1", setup{relay: url})
+	p := openKeysOnly(t, url, "watcher", "watcher-1", Domain.Keys(testSecret))
+	for _, n := range []*node{a, b, r, s, p} {
+		waitFor(t, n.name+" to see everybody", func() bool { return len(n.f.Members()) == 4 })
+	}
+	meet(t, a, p)
+	closeAll(t, p)
+	forgetFirstHeard(t, url, a)
+	waitFor(t, "alpha to reach bravo again", func() bool { m, _ := memberOf(a.f, b.id); return m.Online() })
+	meet(t, a, b)
+	for _, out := range []*node{r, s} {
+		if err := a.f.Remove(out.id); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, "bravo to take "+out.name+" out", func() bool { _, ok := memberOf(b.f, out.id); return !ok })
+	}
+	// The plugin runs again only after both removals.
+	p.f = reopenKeysOnly(t, p, url, Domain.Keys(testSecret))
+	meet(t, a, p)
+	closeAll(t, p, r)
+	secret := changePhrase(t, url, a, b)
+
+	p.f = reopenKeysOnly(t, p, url, Domain.Keys(testSecret))
+	set, err := newKeys(t, p)
+	if err != nil {
+		t.Fatalf("the plugin, a member since before both removals, got no new keys: %v", err)
+	}
+	if set.Group != Domain.Keys(secret).Group {
+		t.Error("the plugin got keys of another phrase")
+	}
+	neverHanded(t, url, r, a)
+}

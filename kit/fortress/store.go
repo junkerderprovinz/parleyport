@@ -93,6 +93,15 @@ func loadBook(raw []byte, groupKey, previous string) (book, error) {
 	if err := json.Unmarshal(raw, &b); err != nil {
 		return book{}, fmt.Errorf("fortress: the store is damaged: %w", err)
 	}
+	// A book kept before the first-heard times has none for the members it
+	// knew. Nothing tells when they came, so they count as heard before any
+	// removal.
+	if b.Heard == nil && len(b.Members) > 0 {
+		b.Heard = make(map[string]time.Time, len(b.Members))
+		for id := range b.Members {
+			b.Heard[id] = time.Time{}
+		}
+	}
 	switch {
 	case b.Group == groupKey:
 		return b, nil
