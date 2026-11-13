@@ -22,7 +22,10 @@
 // forgets DIR. Every command but join takes part for as long as it runs,
 // waits up to -wait for the members to show, and leaves. A command that finds
 // this member taken out by another forgets the membership, leaves the file
-// removed-here in DIR and fails until join runs again.
+// removed-here in DIR and fails until join runs again. One the members turn
+// away, since a member was taken out and the phrase has not changed since,
+// prints what it found and exits with 3, closedUntilNewPhrase on standard
+// error, until it joins with the new phrase.
 package main
 
 import (
@@ -65,6 +68,10 @@ var errUsage = errors.New("usage")
 // errRemoved is a command that found this member taken out of its fortress.
 var errRemoved = errors.New("this member was taken out of the fortress; join again with the current phrase")
 
+// errShutOut is a command the members turned away because one of them was
+// taken out and the phrase has not changed since; it exits with 3.
+var errShutOut = errors.New(group.ClosedUntilNewPhrase + ": the fortress takes no new member until its phrase changes; join again with the new phrase once it has")
+
 // removedHere is all that stays in DIR of a membership another member ended,
 // so the plugin can still say so on its next run.
 const removedHere = "removed-here"
@@ -84,6 +91,9 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	case errors.Is(err, errUsage):
 		_, _ = fmt.Fprintln(stderr, err)
 		return 2
+	case errors.Is(err, errShutOut):
+		_, _ = fmt.Fprintln(stderr, "fortress:", err)
+		return 3
 	default:
 		// The fortress package already starts its errors with the command's
 		// name.
@@ -202,9 +212,14 @@ func withFortress(ctx context.Context, dir string, wait time.Duration, do func(*
 			return err
 		}
 	}
-	err = errors.Join(do(f), f.Close(), leave())
+	err = do(f)
+	shut := f.ShutOut()
+	err = errors.Join(err, f.Close(), leave())
 	if removed.Load() {
 		return errors.Join(forget(dir), errRemoved)
+	}
+	if err == nil && shut {
+		return errShutOut
 	}
 	return err
 }

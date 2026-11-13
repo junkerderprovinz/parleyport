@@ -148,7 +148,10 @@ func (g *Group) noteAnswer(id string, status int, body []byte, now time.Time) {
 	if status >= 200 && status < 300 {
 		g.heard[id] = true
 	}
-	if status == http.StatusForbidden && bytes.Contains(body, []byte(`"groupClosed"`)) {
+	if status == http.StatusForbidden && bytes.Contains(body, []byte(`"`+ClosedUntilNewPhrase+`"`)) {
+		g.shutOut = now
+	}
+	if status == http.StatusForbidden && (bytes.Contains(body, []byte(`"groupClosed"`)) || bytes.Contains(body, []byte(`"`+ClosedUntilNewPhrase+`"`))) {
 		g.strangerTo[id] = true
 		if _, ok := g.st.Members[id]; ok {
 			delete(g.st.Members, id)

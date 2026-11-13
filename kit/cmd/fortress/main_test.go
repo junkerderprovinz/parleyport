@@ -17,6 +17,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"go.uber.org/goleak"
 
@@ -526,5 +527,31 @@ func TestAPluginTakenOutWhileAwayForgetsTheFortressAndSaysSo(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, removedHere)); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("joining again kept the word of the removal: %v", err)
+	}
+}
+
+func TestAPluginJoiningAfterARemovalIsToldToWaitForTheNewPhrase(t *testing.T) {
+	url := relayServer(t)
+	a := openApp(t, url)
+	var heard atomic.Int32
+	_, bravo := openBeta(t, url, &heard, "shed")
+	waitFor := time.Now().Add(10 * time.Second)
+	for !listedIn(a.f, bravo) && time.Now().Before(waitFor) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err := a.f.Remove(bravo); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	words, err := phrase.Encode(secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, _, stderr := cli(t, words+"\n", "join", "-dir", dir, "-app", "watcher", "-name", "tower", "-relay", url); code != 0 {
+		t.Fatalf("join: %d %s", code, stderr)
+	}
+	code, out, stderr := cli(t, "", "members", "-dir", dir, "-json", "-wait", "5s")
+	if code != 3 || !strings.Contains(stderr, group.ClosedUntilNewPhrase) || strings.Contains(out, a.id) {
+		t.Errorf("members right after a removal: %d %s %s, want 3 and nobody", code, out, stderr)
 	}
 }

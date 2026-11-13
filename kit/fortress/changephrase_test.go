@@ -242,11 +242,12 @@ func TestNoMemberFirstMetAfterARemovalIsHandedTheNewPhrase(t *testing.T) {
 	waitFor(t, "bravo to take charlie out", func() bool { _, ok := memberOf(b.f, c.id); return !ok })
 	closeAll(t, c)
 	// charlie is back at once under a key of its own, with the phrase that
-	// still holds, and echo joins as well before the phrase changes.
+	// still holds, and echo tries to join as well before the phrase changes.
 	back := open(t, "charlie", "charlie-2", setup{relay: url})
 	e := open(t, "echo", "echo-1", setup{relay: url})
-	meet(t, a, back)
-	meet(t, a, e)
+	for _, n := range []*node{back, e} {
+		waitFor(t, "alpha to turn "+n.name+" away", func() bool { return waitsForNewPhrase(t, n, a) })
+	}
 
 	moved, err := a.f.ChangePhrase(ctx(t))
 	if err != nil {

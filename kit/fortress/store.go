@@ -51,6 +51,9 @@ type book struct {
 	// instance took it only after the change.
 	Changed time.Time `json:"changed,omitzero"`
 	Late    bool      `json:"late,omitempty"`
+	// Opened is when this instance began a book under the phrase, for one
+	// that did not move here from the phrase before.
+	Opened time.Time `json:"opened,omitzero"`
 	// Before is when the fortress took the phrase it changed from.
 	Before time.Time `json:"before,omitzero"`
 	// Heard is when this instance first heard from each member, on any
@@ -85,7 +88,7 @@ type straggler struct {
 // loadBook reads the book kept under groupKey, or under previous, the group
 // key of the phrase the fortress changed from.
 func loadBook(raw []byte, groupKey, previous string) (book, error) {
-	fresh := book{Group: groupKey}
+	fresh := book{Group: groupKey, Opened: time.Now().Round(0)}
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return fresh, nil
 	}

@@ -289,6 +289,12 @@ type Group struct {
 	// closedSince is when the group stopped taking newcomers, zero while it
 	// takes them.
 	closedSince time.Time
+	// keepsKnown keeps serving the members pinned before closedSince,
+	// met here under this phrase or not.
+	keepsKnown bool
+	// shutOut is when a member last turned this instance away with
+	// ClosedUntilNewPhrase.
+	shutOut time.Time
 	// strangerTo are the instances that refused this one as a stranger.
 	strangerTo map[string]bool
 	heard      map[string]bool
@@ -620,27 +626,65 @@ func (g *Group) Retire() time.Time {
 // phrase says, and forgets every member first met here after since. Such a
 // member, and one never met here, is refused as a stranger and handed
 // nothing; a later call with an earlier since forgets more.
-func (g *Group) CloseToNew(since time.Time) {
+func (g *Group) CloseToNew(since time.Time) { g.close(since, false) }
+
+// TakeNoNew takes nobody new into the group from now on, whatever the phrase
+// says, and forgets every member first pinned here after since. Unlike
+// CloseToNew it keeps the members pinned before, met here under this phrase
+// or not, such as those it took along to a changed phrase. A newcomer is
+// refused with ClosedUntilNewPhrase.
+func (g *Group) TakeNoNew(since time.Time) { g.close(since, true) }
+
+func (g *Group) close(since time.Time, keepKnown bool) {
 	g.mu.Lock()
-	if !g.closedSince.IsZero() && !since.Before(g.closedSince) {
-		g.mu.Unlock()
-		return
+	if g.closedSince.IsZero() {
+		g.keepsKnown = keepKnown
+	} else {
+		g.keepsKnown = g.keepsKnown && keepKnown
 	}
-	g.closedSince = since
-	for id, rec := range g.st.Members {
-		if rec.Met.After(since) {
-			delete(g.st.Members, id)
-			g.dirty = true
+	if g.closedSince.IsZero() || since.Before(g.closedSince) {
+		g.closedSince = since
+		for id, rec := range g.st.Members {
+			first := rec.Met
+			if g.keepsKnown {
+				first = rec.Pinned
+			}
+			if first.After(since) {
+				delete(g.st.Members, id)
+				g.dirty = true
+			}
 		}
 	}
 	g.mu.Unlock()
 	g.stir()
 }
 
+// closedRefusalLocked is how a closed group turns a newcomer away.
+func (g *Group) closedRefusalLocked() *refusal {
+	if g.keepsKnown && !g.vouchedOnly {
+		return newPhraseRefusal
+	}
+	return strangerRefusal
+}
+
+// ShutOut reports whether a member turned this instance away lately because
+// the group takes nobody new until its phrase changes.
+func (g *Group) ShutOut() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return !g.shutOut.IsZero() && time.Since(g.shutOut) < awaitWindow
+}
+
 // closedToLocked reports whether the group, closed to newcomers, refuses the
 // member rec is kept for.
 func (g *Group) closedToLocked(rec record) bool {
-	return !g.closedSince.IsZero() && (rec.Met.IsZero() || rec.Met.After(g.closedSince))
+	switch {
+	case g.closedSince.IsZero():
+		return false
+	case g.keepsKnown:
+		return rec.Pinned.After(g.closedSince)
+	}
+	return rec.Met.IsZero() || rec.Met.After(g.closedSince)
 }
 
 // asks reports whether MayJoin has to be asked before member id is met here.
@@ -811,3 +855,8 @@ func (g *Group) hello() []byte {
 	b, _ := json.Marshal(hello{ID: g.self, Name: info.Name, Deployment: info.Deployment, URL: g.directURL(), Address: info.Address})
 	return b
 }
+
+// ClosedUntilNewPhrase is the code a member of a group closed with TakeNoNew
+// refuses a newcomer with, such as a fortress after a removal. The newcomer
+// gets in once the phrase changed and it holds the new one; ShutOut tells it.
+const ClosedUntilNewPhrase = "closedUntilNewPhrase"

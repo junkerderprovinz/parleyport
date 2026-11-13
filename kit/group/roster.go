@@ -140,7 +140,7 @@ func (g *Group) takeLocked(m Member, now time.Time) bool {
 		if used.IsZero() {
 			used = now
 		}
-		rec = record{Kind: m.Kind, Key: bytes.Clone(m.Key), Approved: approved, Used: used, Seen: seen}
+		rec = record{Kind: m.Kind, Key: bytes.Clone(m.Key), Approved: approved, Used: used, Seen: seen, Pinned: now}
 		rec.describe(m, true)
 		if st.Members == nil {
 			st.Members = map[string]record{}

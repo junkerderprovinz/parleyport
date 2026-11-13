@@ -94,8 +94,10 @@ type record struct {
 	// when the group opens again.
 	Direct string `json:"direct,omitempty"`
 	// Met is when the key first signed a call or an answer here under the
-	// group key the state is kept under.
-	Met time.Time `json:"met,omitzero"`
+	// group key the state is kept under, Pinned when it was first pinned
+	// here under any.
+	Met    time.Time `json:"met,omitzero"`
+	Pinned time.Time `json:"pinned,omitzero"`
 }
 
 // meet records that the key pinned in r signed something here at now.
@@ -229,6 +231,7 @@ var (
 	// group, such as a phone where only instances pair.
 	kindNotTakenRefusal = refuse(http.StatusForbidden, "memberKindRefused", "this group takes no devices of this kind")
 	strangerRefusal     = refuse(http.StatusForbidden, "groupClosed", "this instance takes no new members on this phrase")
+	newPhraseRefusal    = refuse(http.StatusForbidden, ClosedUntilNewPhrase, "this group takes no new members until its phrase changes")
 	// askFirst never leaves the group: admitCall asks MayJoin and admits the
 	// call again.
 	askFirst = &refusal{}
@@ -377,7 +380,7 @@ func (g *Group) admit(call relay.ProxyCall, source string, vouched, asked bool, 
 	ask := g.mayJoin != nil && g.byPhrase && !vouched && !asked && g.closedSince.IsZero()
 	if rec, ok := st.Members[call.From]; ok {
 		if g.closedToLocked(rec) && !vouched {
-			return Caller{}, strangerRefusal
+			return Caller{}, g.closedRefusalLocked()
 		}
 		if ask && rec.Met.IsZero() {
 			return Caller{}, askFirst
@@ -405,7 +408,7 @@ func (g *Group) admit(call relay.ProxyCall, source string, vouched, asked bool, 
 		return Caller{ID: call.From, Kind: rec.Kind, Key: rec.Key}, nil
 	}
 	if (g.vouchedOnly || !g.closedSince.IsZero()) && !vouched {
-		return Caller{}, strangerRefusal
+		return Caller{}, g.closedRefusalLocked()
 	}
 	for _, rec := range st.Members {
 		if bytes.Equal(rec.Key, call.Key) {
@@ -428,7 +431,7 @@ func (g *Group) admit(call relay.ProxyCall, source string, vouched, asked bool, 
 		return Caller{}, refuse(http.StatusTooManyRequests, "groupJoinsBusy", "too many new devices joined this group within the hour")
 	}
 	approved := g.byPhrase || vouched
-	if err := g.pinLocked(call.From, record{Kind: call.Kind, Key: bytes.Clone(call.Key), Approved: approved, Used: now, Met: now}, idle); err != nil {
+	if err := g.pinLocked(call.From, record{Kind: call.Kind, Key: bytes.Clone(call.Key), Approved: approved, Used: now, Met: now, Pinned: now}, idle); err != nil {
 		return Caller{}, refuse(http.StatusInternalServerError, "memberNotPinned", "this instance could not record the device's key")
 	}
 	g.replay.Admit(call)
@@ -541,7 +544,7 @@ func (g *Group) pinAnswerLocked(id string, key []byte, vouched bool) (record, bo
 	if !g.limits.mayPin("", now) {
 		return record{}, false
 	}
-	rec := record{Kind: member.KindInstance, Key: bytes.Clone(key), Approved: g.byPhrase || vouched, Used: now, Met: now}
+	rec := record{Kind: member.KindInstance, Key: bytes.Clone(key), Approved: g.byPhrase || vouched, Used: now, Met: now, Pinned: now}
 	if g.pinLocked(id, rec, "") != nil {
 		return record{}, false
 	}

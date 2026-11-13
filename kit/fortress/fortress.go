@@ -535,6 +535,7 @@ func Open(cfg Config) (*Fortress, error) {
 	for _, id := range early {
 		f.pairingRemoved(id)
 	}
+	f.closeIfRemoved()
 	f.wg.Go(f.run)
 	return f, nil
 }
@@ -682,6 +683,7 @@ func (f *Fortress) fortressRemoved(id string) {
 			_ = f.pairing.Remove(id)
 		}
 	}
+	f.closeIfRemoved()
 }
 
 // forgetMember drops what the fortress keeps of member id, which left or was
@@ -945,4 +947,27 @@ func writeError(w http.ResponseWriter, status int, code string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": code})
+}
+
+// ShutOut reports whether the members turn this instance away because one of
+// them was taken out and the phrase has not changed since. Its user enters
+// the new phrase once it was changed, and the instance is in.
+func (f *Fortress) ShutOut() bool { return f.group.ShutOut() }
+
+// closeIfRemoved takes nobody new into the fortress once a member was taken
+// out on the phrase it runs on, since that member still holds the phrase.
+// Only a new phrase opens it again.
+func (f *Fortress) closeIfRemoved() {
+	f.mu.Lock()
+	g, start := f.group, f.book.Changed
+	if start.IsZero() {
+		start = f.book.Opened
+	}
+	f.mu.Unlock()
+	if g == nil {
+		return
+	}
+	if at := f.removedSince(start); !at.IsZero() {
+		g.TakeNoNew(at)
+	}
 }
