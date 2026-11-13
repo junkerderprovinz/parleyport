@@ -583,6 +583,17 @@ func (f *Fortress) NoteAddress(r *http.Request) {
 	}
 }
 
+// SetSelf changes what the other members see of this instance, for the
+// fortress and the pairing alike, such as a direct address the app learned
+// after it opened the fortress. It goes out on the network at once.
+func (f *Fortress) SetSelf(s group.Self) {
+	for _, g := range []*group.Group{f.group, f.pairing, f.old} {
+		if g != nil {
+			g.SetSelf(s)
+		}
+	}
+}
+
 // DirectHandler answers the direct calls of the fortress, on the phrase
 // before as well for a while after a change, the pairing and the other groups
 // given, which all arrive on the same path, such as the app's group on its
