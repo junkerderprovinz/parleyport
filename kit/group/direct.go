@@ -63,15 +63,19 @@ const (
 	// directHeaderTimeout and maxDirectHeaderBytes bound the headers of a
 	// request at a port ServeDirect answers on. An upload's call travels in
 	// them.
-	directHeaderTimeout  = 10 * time.Second
+	directHeaderTimeout  = 3 * time.Second
 	maxDirectHeaderBytes = 64 << 10
+	// maxHeadsKept bounds the head tags kept to tell a played back one.
+	maxHeadsKept = 4096
 )
 
 // directIdle is how long ServeDirect keeps a connection open with no request
-// on it, and maxDirectConns how many it holds at once.
+// on it, maxDirectConns how many it holds at once and maxConnsFromSource how
+// many of them from one address.
 var (
-	directIdle     = time.Minute
-	maxDirectConns = 64
+	directIdle         = time.Minute
+	maxDirectConns     = 64
+	maxConnsFromSource = 4
 )
 
 // probeTarget stands in for a member id on a call whose sender does not know
@@ -84,13 +88,14 @@ const probeTarget = "*"
 type headers struct {
 	peer, target, time, signature string
 	// call carries the call of an upload, whose body is the upload.
-	call string
-	head string
+	call    string
+	head    string
+	request string
 }
 
 func headersFor(d keys.Domain) headers {
 	name := func(s string) string { return http.CanonicalHeaderKey("X-" + string(d) + "-" + s) }
-	return headers{peer: name("Peer"), target: name("Target"), time: name("Time"), signature: name("Signature"), call: name("Call"), head: name("Head")}
+	return headers{peer: name("Peer"), target: name("Target"), time: name("Time"), signature: name("Signature"), call: name("Call"), head: name("Head"), request: name("Request")}
 }
 
 // announceTag signs everything an announce claims, its time included, so a
@@ -111,12 +116,12 @@ func directSignature(peerAuth []byte, sender, unix string, body []byte) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-// headSignature binds what a direct call's headers say, its length
-// included, to the peer-auth key, so the call can be told from a stranger's
-// before its body arrives.
-func headSignature(peerAuth []byte, sender, target, unix string, length int64) string {
+// headSignature binds what a direct call's headers say, its request and
+// length included, to the peer-auth key, so the call can be told from a
+// stranger's before its body arrives.
+func headSignature(peerAuth []byte, sender, target, unix, request string, length int64) string {
 	mac := hmac.New(sha256.New, peerAuth)
-	mac.Write([]byte("direct-head\x00" + sender + "\x00" + target + "\x00" + unix + "\x00" + strconv.FormatInt(length, 10)))
+	mac.Write([]byte("direct-head\x00" + sender + "\x00" + target + "\x00" + unix + "\x00" + request + "\x00" + strconv.FormatInt(length, 10)))
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
@@ -207,9 +212,10 @@ func forbid(w http.ResponseWriter) {
 type envelope struct {
 	sender, target, unix, signature string
 	// upload means the call travels in a header and the body is the upload.
-	upload bool
-	call   string
-	head   string
+	upload  bool
+	call    string
+	head    string
+	request string
 }
 
 // envelopeOf reads the headers of a direct request to this instance, and
@@ -221,7 +227,7 @@ func (g *Group) envelopeOf(r *http.Request) (envelope, bool) {
 	e := envelope{
 		sender: r.Header.Get(h.peer), target: r.Header.Get(h.target), unix: r.Header.Get(h.time),
 		signature: r.Header.Get(h.signature), upload: r.Header.Get("Content-Type") == uploadType, call: r.Header.Get(h.call),
-		head: r.Header.Get(h.head),
+		head: r.Header.Get(h.head), request: r.Header.Get(h.request),
 	}
 	sent, err := strconv.ParseInt(e.unix, 10, 64)
 	ok := err == nil && e.sender != "" && len(e.sender) <= maxSenderBytes && (e.target == g.self || e.target == probeTarget) &&
@@ -253,7 +259,7 @@ func (e envelope) tagged(peerAuth []byte, length int64) bool {
 		return err == nil && e.tags(peerAuth, call)
 	}
 	return e.head != "" && length >= 0 &&
-		hmac.Equal([]byte(e.head), []byte(headSignature(peerAuth, e.sender, e.target, e.unix, length)))
+		e.request != "" && hmac.Equal([]byte(e.head), []byte(headSignature(peerAuth, e.sender, e.target, e.unix, e.request, length)))
 }
 
 // untagged bounds the calls without a head tag that are read at once, in
@@ -283,6 +289,83 @@ func (u *untagged) enter(source string) (leave func(), ok bool) {
 			delete(u.from, source)
 		}
 	}, true
+}
+
+// heads keeps the head tags taken lately, so a tag played back holds no slot
+// while its body never comes. A tag is good for relay.ClockSkew either way.
+type heads struct {
+	mu   sync.Mutex
+	seen map[string]time.Time
+}
+
+// first records key, the sender and request a head tag names, and reports
+// whether it was not taken before.
+func (h *heads) first(key string, now time.Time) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if _, ok := h.seen[key]; ok {
+		return false
+	}
+	if h.seen == nil {
+		h.seen = map[string]time.Time{}
+	}
+	for k, at := range h.seen {
+		if now.Sub(at) > 2*relay.ClockSkew {
+			delete(h.seen, k)
+		}
+	}
+	if len(h.seen) >= maxHeadsKept {
+		return false
+	}
+	h.seen[key] = now
+	return true
+}
+
+// fromSource holds at most maxConnsFromSource connections from one address,
+// so one host cannot keep the members out with half sent requests.
+type fromSource struct {
+	net.Listener
+	mu sync.Mutex
+	n  map[string]int
+}
+
+func (l *fromSource) Accept() (net.Conn, error) {
+	for {
+		c, err := l.Listener.Accept()
+		if err != nil {
+			return nil, err
+		}
+		host := c.RemoteAddr().String()
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		l.mu.Lock()
+		if l.n[host] >= maxConnsFromSource {
+			l.mu.Unlock()
+			_ = c.Close()
+			continue
+		}
+		l.n[host]++
+		l.mu.Unlock()
+		return &sourceConn{Conn: c, leave: func() {
+			l.mu.Lock()
+			defer l.mu.Unlock()
+			if l.n[host]--; l.n[host] == 0 {
+				delete(l.n, host)
+			}
+		}}, nil
+	}
+}
+
+type sourceConn struct {
+	net.Conn
+	once  sync.Once
+	leave func()
+}
+
+func (c *sourceConn) Close() error {
+	c.once.Do(c.leave)
+	return c.Conn.Close()
 }
 
 // sourceOf is the address a direct call came from.
@@ -383,6 +466,10 @@ func (g *Group) receive(w http.ResponseWriter, r *http.Request, e envelope) ([]b
 		return nil, false
 	}
 	leave := func() {}
+	if tagged && !e.upload && !g.heads.first(e.sender+"\x00"+e.request, time.Now()) {
+		forbid(w)
+		return nil, false
+	}
 	if tagged {
 		if !g.take() {
 			busy(w)
@@ -437,7 +524,9 @@ func ServeDirect(ln net.Listener, h http.Handler) *http.Server {
 		MaxHeaderBytes:    maxDirectHeaderBytes,
 		ErrorLog:          log.New(io.Discard, "", 0),
 	}
-	go func() { _ = srv.Serve(netutil.LimitListener(ln, maxDirectConns)) }()
+	go func() {
+		_ = srv.Serve(netutil.LimitListener(&fromSource{Listener: ln, n: map[string]int{}}, maxDirectConns))
+	}()
 	return srv
 }
 
@@ -464,7 +553,7 @@ func (g *Group) serveDirect(w http.ResponseWriter, r *http.Request) {
 	defer func() { <-g.slots }()
 	target, upload := e.target, e.upload
 	var req relay.ProxyRequest
-	if json.Unmarshal(body, &req) != nil || req.RequestID == "" || req.Target != target {
+	if json.Unmarshal(body, &req) != nil || req.RequestID == "" || req.Target != target || e.head != "" && req.RequestID != e.request {
 		forbid(w)
 		return
 	}
@@ -558,7 +647,8 @@ func (g *Group) newDirectRequest(ctx context.Context, base, target string, call 
 	req.Header.Set(g.headers.target, target)
 	req.Header.Set(g.headers.time, now)
 	req.Header.Set(g.headers.signature, directSignature(g.peerAuth, g.self, now, payload))
-	req.Header.Set(g.headers.head, headSignature(g.peerAuth, g.self, target, now, int64(len(payload))))
+	req.Header.Set(g.headers.request, id)
+	req.Header.Set(g.headers.head, headSignature(g.peerAuth, g.self, target, now, id, int64(len(payload))))
 	return req, sealed, id, nil
 }
 

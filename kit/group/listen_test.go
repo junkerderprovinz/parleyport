@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -74,7 +75,7 @@ func TestAForgedHeadTagIsTurnedAwayBeforeTheBody(t *testing.T) {
 	a, b := onOneNetwork(t, setup{})
 	req, body := direct(t, a, b, "/api/whoami")
 	h := headersFor(testDomain)
-	req.Header.Set(h.head, headSignature(make([]byte, 32), a.id, b.id, req.Header.Get(h.time), int64(len(body))))
+	req.Header.Set(h.head, headSignature(make([]byte, 32), a.id, b.id, req.Header.Get(h.time), req.Header.Get(h.request), int64(len(body))))
 	if w := serveDirect(b.g, req, body); w.Code != http.StatusForbidden {
 		t.Errorf("= %d %s, want 403", w.Code, w.Body)
 	}
@@ -173,5 +174,74 @@ func TestADirectListenerHoldsABoundedNumberOfConnections(t *testing.T) {
 	}
 	for _, c := range held[1:] {
 		_ = c.Close()
+	}
+}
+
+func TestADirectListenerHoldsFewConnectionsFromOneAddress(t *testing.T) {
+	most := maxConnsFromSource
+	maxConnsFromSource = 2
+	t.Cleanup(func() { maxConnsFromSource = most })
+	n := open(t, "alpha", setup{})
+	addr := listenDirect(t, n.g)
+	var held []net.Conn
+	t.Cleanup(func() {
+		for _, c := range held {
+			_ = c.Close()
+		}
+	})
+	for range maxConnsFromSource {
+		conn, err := net.Dial("tcp", addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		held = append(held, conn)
+	}
+	extra, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer extra.Close() //nolint:errcheck // a read-only test connection
+	_ = extra.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := extra.Read(make([]byte, 1)); err != io.EOF {
+		t.Errorf("a connection over what one address may hold stays open: %v", err)
+	}
+}
+
+func TestAHeadTagIsTakenOnce(t *testing.T) {
+	a, b := onOneNetwork(t, setup{})
+	req, body := direct(t, a, b, "/api/whoami")
+	if w := serveDirect(b.g, req, body); w.Code != http.StatusOK {
+		t.Fatalf("first = %d %s", w.Code, w.Body)
+	}
+	// The same headers again, with a body that never comes.
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pw.Close() })
+	r := httptest.NewRequest(http.MethodPost, DirectPath, pr)
+	r.Header = req.Header.Clone()
+	r.ContentLength = int64(len(body))
+	done := make(chan int, 1)
+	go func() {
+		w := httptest.NewRecorder()
+		b.g.DirectHandler().ServeHTTP(w, r)
+		done <- w.Code
+	}()
+	select {
+	case code := <-done:
+		if code != http.StatusForbidden {
+			t.Errorf("again = %d, want 403", code)
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("a head tag seen before waits for its body")
+	}
+}
+
+func TestABodyMustCarryTheRequestItsHeadNames(t *testing.T) {
+	a, b := onOneNetwork(t, setup{})
+	req, _ := direct(t, a, b, "/api/whoami")
+	_, other := direct(t, a, b, "/api/whoami")
+	h := headersFor(testDomain)
+	req.Header.Set(h.head, headSignature(a.g.peerAuth, a.id, b.id, req.Header.Get(h.time), req.Header.Get(h.request), int64(len(other))))
+	if w := serveDirect(b.g, req, signedBody(a, req, other)); w.Code != http.StatusForbidden {
+		t.Errorf("= %d %s, want 403", w.Code, w.Body)
 	}
 }
