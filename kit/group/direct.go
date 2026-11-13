@@ -12,23 +12,27 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/junkerderprovinz/parleyport/kit/keys"
 	"github.com/junkerderprovinz/parleyport/kit/lan"
 	"github.com/junkerderprovinz/parleyport/kit/member"
 	"github.com/junkerderprovinz/parleyport/kit/relay"
+	"golang.org/x/net/netutil"
 )
 
 // The direct route: members on one network call each other over HTTP at the
 // address they announce. The call inside is the one the relay would carry,
 // sealed and signed, and the request around it is tagged with the peer-auth
-// key, so a stranger who reaches the route is turned away before the body is
-// even read.
+// key, its headers apart as well, so a stranger who reaches the route is
+// turned away before the body is even read. A call without that head tag,
+// from an older release, is still taken, but read in a small pool of its own.
 
 const (
 	// maxDirectRequest caps a direct call as it arrives: MaxCallBytes with
@@ -52,6 +56,22 @@ const (
 	// directReadTimeout bounds how long a call's body may take to arrive, so
 	// a stranger sending slowly holds a connection no longer than that.
 	directReadTimeout = 10 * time.Second
+	// maxUntaggedCalls and maxUntaggedFromSource bound the calls without a
+	// head tag that are read at once, in all and from one address.
+	maxUntaggedCalls      = 4
+	maxUntaggedFromSource = 2
+	// directHeaderTimeout and maxDirectHeaderBytes bound the headers of a
+	// request at a port ServeDirect answers on. An upload's call travels in
+	// them.
+	directHeaderTimeout  = 10 * time.Second
+	maxDirectHeaderBytes = 64 << 10
+)
+
+// directIdle is how long ServeDirect keeps a connection open with no request
+// on it, and maxDirectConns how many it holds at once.
+var (
+	directIdle     = time.Minute
+	maxDirectConns = 64
 )
 
 // probeTarget stands in for a member id on a call whose sender does not know
@@ -65,11 +85,12 @@ type headers struct {
 	peer, target, time, signature string
 	// call carries the call of an upload, whose body is the upload.
 	call string
+	head string
 }
 
 func headersFor(d keys.Domain) headers {
 	name := func(s string) string { return http.CanonicalHeaderKey("X-" + string(d) + "-" + s) }
-	return headers{peer: name("Peer"), target: name("Target"), time: name("Time"), signature: name("Signature"), call: name("Call")}
+	return headers{peer: name("Peer"), target: name("Target"), time: name("Time"), signature: name("Signature"), call: name("Call"), head: name("Head")}
 }
 
 // announceTag signs everything an announce claims, its time included, so a
@@ -87,6 +108,15 @@ func directSignature(peerAuth []byte, sender, unix string, body []byte) string {
 	sum := sha256.Sum256(body)
 	mac := hmac.New(sha256.New, peerAuth)
 	mac.Write([]byte("direct\x00" + sender + "\x00" + unix + "\x00" + hex.EncodeToString(sum[:])))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// headSignature binds what a direct call's headers say, its length
+// included, to the peer-auth key, so the call can be told from a stranger's
+// before its body arrives.
+func headSignature(peerAuth []byte, sender, target, unix string, length int64) string {
+	mac := hmac.New(sha256.New, peerAuth)
+	mac.Write([]byte("direct-head\x00" + sender + "\x00" + target + "\x00" + unix + "\x00" + strconv.FormatInt(length, 10)))
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
@@ -179,6 +209,7 @@ type envelope struct {
 	// upload means the call travels in a header and the body is the upload.
 	upload bool
 	call   string
+	head   string
 }
 
 // envelopeOf reads the headers of a direct request to this instance, and
@@ -190,6 +221,7 @@ func (g *Group) envelopeOf(r *http.Request) (envelope, bool) {
 	e := envelope{
 		sender: r.Header.Get(h.peer), target: r.Header.Get(h.target), unix: r.Header.Get(h.time),
 		signature: r.Header.Get(h.signature), upload: r.Header.Get("Content-Type") == uploadType, call: r.Header.Get(h.call),
+		head: r.Header.Get(h.head),
 	}
 	sent, err := strconv.ParseInt(e.unix, 10, 64)
 	ok := err == nil && e.sender != "" && len(e.sender) <= maxSenderBytes && (e.target == g.self || e.target == probeTarget) &&
@@ -212,6 +244,59 @@ func (e envelope) tags(peerAuth, body []byte) bool {
 	return hmac.Equal([]byte(e.signature), []byte(directSignature(peerAuth, e.sender, e.unix, body)))
 }
 
+// tagged reports whether the headers of the call e describes, length long,
+// are tagged under peerAuth: an upload's call, which travels in them, or the
+// head tag of any other.
+func (e envelope) tagged(peerAuth []byte, length int64) bool {
+	if e.upload {
+		call, err := base64.StdEncoding.DecodeString(e.call)
+		return err == nil && e.tags(peerAuth, call)
+	}
+	return e.head != "" && length >= 0 &&
+		hmac.Equal([]byte(e.head), []byte(headSignature(peerAuth, e.sender, e.target, e.unix, length)))
+}
+
+// untagged bounds the calls without a head tag that are read at once, in
+// all and from each address.
+type untagged struct {
+	mu   sync.Mutex
+	all  int
+	from map[string]int
+}
+
+func (u *untagged) enter(source string) (leave func(), ok bool) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.all >= maxUntaggedCalls || u.from[source] >= maxUntaggedFromSource {
+		return nil, false
+	}
+	if u.from == nil {
+		u.from = map[string]int{}
+	}
+	u.all++
+	u.from[source]++
+	return func() {
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		u.all--
+		if u.from[source]--; u.from[source] == 0 {
+			delete(u.from, source)
+		}
+	}, true
+}
+
+// sourceOf is the address a direct call came from.
+func sourceOf(r *http.Request) string {
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
+}
+
+func busy(w http.ResponseWriter) {
+	http.Error(w, "busy", http.StatusServiceUnavailable)
+}
+
 // Direct answers at DirectPath the direct calls of several groups this
 // instance is in, such as an app's group on its old phrase and the one it
 // moves to, which go by the same domain and so send the same headers. Each
@@ -230,7 +315,7 @@ func Direct(groups ...*Group) http.Handler {
 	case 1:
 		return gs[0].DirectHandler()
 	}
-	slots := make(chan struct{}, maxDirectCalls)
+	var pool untagged
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		type fit struct {
 			g *Group
@@ -250,39 +335,110 @@ func Direct(groups ...*Group) http.Handler {
 			fits[0].g.serveDirect(w, r)
 			return
 		}
-		select {
-		case slots <- struct{}{}:
-			defer func() { <-slots }()
-		default:
-			http.Error(w, "busy", http.StatusServiceUnavailable)
+		// Only the tags tell the groups apart: those over the headers before
+		// anything is read, else the one over the body, which is read once
+		// here and handed on.
+		if e := fits[0].e; e.upload || e.head != "" {
+			for _, f := range fits {
+				if f.e.tagged(f.g.peerAuth, r.ContentLength) {
+					f.g.serveDirect(w, r)
+					return
+				}
+			}
+			forbid(w)
 			return
 		}
-		// Only the tag tells the groups apart, and it covers the body, which
-		// is read once here and handed on.
+		leave, ok := pool.enter(sourceOf(r))
+		if !ok {
+			busy(w)
+			return
+		}
 		_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(directReadTimeout))
-		upload := fits[0].e.upload
-		var body []byte
-		if !upload {
-			var err error
-			if body, err = fits[0].e.signed(w, r); err != nil {
-				forbid(w)
-				return
-			}
-			r.Body = io.NopCloser(bytes.NewReader(body))
+		body, err := fits[0].e.signed(w, r)
+		leave()
+		if err != nil {
+			forbid(w)
+			return
 		}
 		for _, f := range fits {
-			signed := body
-			if upload {
-				// A call header that does not decode tags nothing.
-				signed, _ = f.e.signed(w, r)
-			}
-			if f.e.tags(f.g.peerAuth, signed) {
+			if f.e.tags(f.g.peerAuth, body) {
+				r.Body = io.NopCloser(bytes.NewReader(body))
 				f.g.serveDirect(w, r)
 				return
 			}
 		}
 		forbid(w)
 	})
+}
+
+// receive reads the call e describes and holds one of the group's slots for
+// it, which the caller gives back. A call with tagged headers takes its slot
+// before anything is read. Any other is read in the small pool first and
+// takes a slot once its tag holds, so a stranger that sends slowly keeps no
+// member waiting. It answers the call itself when it returns false.
+func (g *Group) receive(w http.ResponseWriter, r *http.Request, e envelope) ([]byte, bool) {
+	tagged := e.tagged(g.peerAuth, r.ContentLength)
+	if !tagged && (e.upload || e.head != "") {
+		forbid(w)
+		return nil, false
+	}
+	leave := func() {}
+	if tagged {
+		if !g.take() {
+			busy(w)
+			return nil, false
+		}
+	} else {
+		var ok bool
+		if leave, ok = g.untagged.enter(sourceOf(r)); !ok {
+			busy(w)
+			return nil, false
+		}
+	}
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(directReadTimeout))
+	body, err := e.signed(w, r)
+	leave()
+	switch {
+	case err != nil || !e.tags(g.peerAuth, body):
+		if tagged {
+			<-g.slots
+		}
+		forbid(w)
+		return nil, false
+	case !tagged && !g.take():
+		busy(w)
+		return nil, false
+	}
+	return body, true
+}
+
+func (g *Group) take() bool {
+	select {
+	case g.slots <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+// ServeDirect answers the direct calls h takes, Direct's or a group's
+// DirectHandler, at ln and nothing else, for a member with a port of its own
+// for them, such as a plugin. It holds a bounded number of connections, lets
+// go of slow and idle ones, and logs nothing, since its errors name the
+// caller's address. Closing the server stops it.
+func ServeDirect(ln net.Listener, h http.Handler) *http.Server {
+	mux := http.NewServeMux()
+	mux.Handle(DirectPath, h)
+	srv := &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: directHeaderTimeout,
+		ReadTimeout:       directHeaderTimeout + directReadTimeout,
+		IdleTimeout:       directIdle,
+		MaxHeaderBytes:    maxDirectHeaderBytes,
+		ErrorLog:          log.New(io.Discard, "", 0),
+	}
+	go func() { _ = srv.Serve(netutil.LimitListener(ln, maxDirectConns)) }()
+	return srv
 }
 
 func (g *Group) serveDirect(w http.ResponseWriter, r *http.Request) {
@@ -301,19 +457,11 @@ func (g *Group) serveDirect(w http.ResponseWriter, r *http.Request) {
 		forbid(w)
 		return
 	}
-	select {
-	case g.slots <- struct{}{}:
-		defer func() { <-g.slots }()
-	default:
-		http.Error(w, "busy", http.StatusServiceUnavailable)
+	body, ok := g.receive(w, r, e)
+	if !ok {
 		return
 	}
-	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(directReadTimeout))
-	body, err := e.signed(w, r)
-	if err != nil || !e.tags(g.peerAuth, body) {
-		forbid(w)
-		return
-	}
+	defer func() { <-g.slots }()
 	target, upload := e.target, e.upload
 	var req relay.ProxyRequest
 	if json.Unmarshal(body, &req) != nil || req.RequestID == "" || req.Target != target {
@@ -337,11 +485,7 @@ func (g *Group) serveDirect(w http.ResponseWriter, r *http.Request) {
 		g.probeBack(call)
 		status, out = http.StatusOK, g.hello()
 	default:
-		source := r.RemoteAddr
-		if host, _, err := net.SplitHostPort(source); err == nil {
-			source = host
-		}
-		ctx := relay.WithSource(r.Context(), directSource+source)
+		ctx := relay.WithSource(r.Context(), directSource+sourceOf(r))
 		if upload {
 			if !strings.HasPrefix(call.Path, uploadPrefix) {
 				forbid(w)
@@ -414,6 +558,7 @@ func (g *Group) newDirectRequest(ctx context.Context, base, target string, call 
 	req.Header.Set(g.headers.target, target)
 	req.Header.Set(g.headers.time, now)
 	req.Header.Set(g.headers.signature, directSignature(g.peerAuth, g.self, now, payload))
+	req.Header.Set(g.headers.head, headSignature(g.peerAuth, g.self, target, now, int64(len(payload))))
 	return req, sealed, id, nil
 }
 

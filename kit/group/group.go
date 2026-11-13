@@ -265,6 +265,7 @@ type Group struct {
 	streamer *http.Client
 	uploader *http.Client
 	slots    chan struct{}
+	untagged untagged
 	streams  chan struct{}
 	uploads  chan struct{}
 	probing  chan struct{}
