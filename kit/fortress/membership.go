@@ -159,11 +159,18 @@ func readMembership(dir string) (membershipFormat, error) {
 // Load reads the membership Join kept in dir as the Config to open it with.
 // The fortress keeps its state next to it. A membership on this network comes
 // with a LAN service on Multicast that the caller starts before Open and
-// closes after Close. Where nobody joined, the error is fs.ErrNotExist.
+// closes after Close. The keys kept from before a phrase change go once 30
+// days have passed. Where nobody joined, the error is fs.ErrNotExist.
 func Load(dir string) (Config, error) {
 	s, err := readMembership(dir)
 	if err != nil {
 		return Config{}, err
+	}
+	if s.Before != nil && time.Since(s.Before.Changed) >= moveWindow {
+		s.Before = nil
+		if err := s.write(dir); err != nil {
+			return Config{}, err
+		}
 	}
 	cfg, err := s.config(dir)
 	if err != nil {
@@ -189,7 +196,7 @@ func (s membershipFormat) config(dir string) (Config, error) {
 		return Config{}, err
 	}
 	var before keys.Set
-	if b := s.Before; b != nil && time.Since(b.Changed) < moveWindow {
+	if b := s.Before; b != nil {
 		if before, err = keysOf(b.Group, b.Frame, b.PeerAuth); err != nil {
 			return Config{}, err
 		}

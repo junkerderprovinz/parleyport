@@ -145,6 +145,9 @@ func TestAPluginThatFollowedAnswersTheOldKeysForThirtyDays(t *testing.T) {
 	if s.f.old != nil {
 		t.Error("the plugin still answers on its old keys 30 days after the change")
 	}
+	if raw, err = os.ReadFile(path); err != nil || bytes.Contains(raw, []byte(`"before"`)) {
+		t.Errorf("the membership still keeps the old keys: %s %v", raw, err)
+	}
 }
 
 func TestAPluginStopsAnsweringTheOldKeysWhenTheThirtyDaysEndWhileItRuns(t *testing.T) {
