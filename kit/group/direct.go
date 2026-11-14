@@ -15,6 +15,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -648,7 +649,11 @@ func (g *Group) newDirectRequest(ctx context.Context, base, target string, call 
 	if err != nil {
 		return nil, nil, "", err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(base, "/")+DirectPath, bytes.NewReader(payload))
+	endpoint, err := directEndpoint(base)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return nil, nil, "", err
 	}
@@ -661,6 +666,19 @@ func (g *Group) newDirectRequest(ctx context.Context, base, target string, call 
 	req.Header.Set(g.headers.request, id)
 	req.Header.Set(g.headers.head, headSignature(g.peerAuth, g.self, target, now, id, int64(len(payload))))
 	return req, sealed, id, nil
+}
+
+// directEndpoint is where the member at base takes direct calls. A query or
+// fragment in an address a phrase holder announces would swallow DirectPath
+// and send the call wherever the address points, so only the path counts.
+func directEndpoint(base string) (string, error) {
+	u, err := url.Parse(base)
+	if err != nil {
+		return "", err
+	}
+	u.Path = strings.TrimRight(u.Path, "/") + DirectPath
+	u.RawPath, u.RawQuery, u.Fragment, u.ForceQuery = "", "", "", false
+	return u.String(), nil
 }
 
 // directRefusal is the error for a direct call that base answered with status

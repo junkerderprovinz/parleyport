@@ -68,6 +68,27 @@ func TestAMemberOnTheNetworkIsCalledDirectly(t *testing.T) {
 	}
 }
 
+func TestADirectCallGoesToTheDirectPathWhateverQueryTheAddressCarries(t *testing.T) {
+	a, b := onOneNetwork(t, setup{})
+	meet(t, a, b)
+	asked := make(chan string, 4)
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked <- r.URL.RequestURI()
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(elsewhere.Close)
+	a.g.lan.Observe(tagged(a.g, lan.Peer{ID: b.id, Name: "bravo", URL: elsewhere.URL + "/admin/stop?then=#x"}))
+	_, _, _ = call(t, a, b, http.MethodGet, "/api/whoami", nil)
+	select {
+	case got := <-asked:
+		if got != "/admin/stop"+DirectPath {
+			t.Fatalf("the direct call went to %q", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("nothing was called at the announced address")
+	}
+}
+
 func TestADirectAnswerMayBeAsLargeAsTheAppAllows(t *testing.T) {
 	sizes := func(t *testing.T, a, b *node, fits, tooLarge int) {
 		t.Helper()
