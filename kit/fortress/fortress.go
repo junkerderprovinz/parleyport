@@ -366,9 +366,11 @@ type Fortress struct {
 	// secret. An instance that took the change late, or holds only keys,
 	// tells them there that the phrase changed and nothing more. nil when
 	// the phrase did not change lately.
-	old    *group.Group
-	oldLAN *lan.Service
-	set    keys.Set
+	old     *group.Group
+	oldLAN  *lan.Service
+	oldOnce sync.Once
+	oldErr  error
+	set     keys.Set
 	// secret is what the phrase encodes, and previous the phrase before it
 	// while old is open, so that an instance away for the change follows it
 	// with catchUp. Neither is kept anywhere.
@@ -566,10 +568,7 @@ func (f *Fortress) Close() error {
 			err = errors.Join(err, f.pairing.Close())
 		}
 		if f.old != nil {
-			err = errors.Join(err, f.old.Close())
-		}
-		if f.oldLAN != nil {
-			err = errors.Join(err, f.oldLAN.Close())
+			err = errors.Join(err, f.closeOld())
 		}
 		f.mu.Lock()
 		if f.dirty {
@@ -853,6 +852,7 @@ func (f *Fortress) tick(now time.Time) {
 	f.follow(now)
 	f.watch(now)
 	f.prune()
+	f.retireOld(now)
 	f.mu.Lock()
 	if f.dirty {
 		_ = f.saveLocked()

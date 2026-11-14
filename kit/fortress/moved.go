@@ -351,6 +351,24 @@ func (f *Fortress) openOld(cfg Config, before keys.Set, serve http.HandlerFunc) 
 	return nil
 }
 
+// retireOld closes the fortress on the phrase before once 30 days have
+// passed since the change, for an instance that runs that long.
+func (f *Fortress) retireOld(now time.Time) {
+	if f.old != nil && now.Sub(f.changed()) >= moveWindow {
+		_ = f.closeOld()
+	}
+}
+
+func (f *Fortress) closeOld() error {
+	f.oldOnce.Do(func() {
+		f.oldErr = f.old.Close()
+		if f.oldLAN != nil {
+			f.oldErr = errors.Join(f.oldErr, f.oldLAN.Close())
+		}
+	})
+	return f.oldErr
+}
+
 // serveOld answers the members still on the phrase before: what this
 // instance is, marked as moved, the keys under the new phrase and, sealed
 // with handNewPhrase, its secret. Whatever else they ask waits until they

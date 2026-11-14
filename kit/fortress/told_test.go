@@ -147,6 +147,27 @@ func TestAPluginThatFollowedAnswersTheOldKeysForThirtyDays(t *testing.T) {
 	}
 }
 
+func TestAPluginStopsAnsweringTheOldKeysWhenTheThirtyDaysEndWhileItRuns(t *testing.T) {
+	url := relayServer(t)
+	a := open(t, "alpha", "alpha-1", setup{relay: url})
+	b := open(t, "bravo", "bravo-1", setup{relay: url})
+	s, dir := openPlugin(t, url, "ledger", "tower", false)
+	for _, n := range []*node{a, b, s} {
+		waitFor(t, n.name+" to see everybody", func() bool { return len(n.f.Members()) == 2 })
+	}
+	movedAway(t, url, a, b, s, dir)
+	c := asker(t, url, a)
+	waitFor(t, "the plugin to answer on its old keys", func() bool {
+		_, status, _ := c.Proxy(ctx(t), s.id, http.MethodGet, aboutPath, nil)
+		return status == http.StatusGone
+	})
+
+	s.f.mu.Lock()
+	s.f.book.Changed = time.Now().Add(-moveWindow - time.Hour)
+	s.f.mu.Unlock()
+	waitFor(t, "the plugin to leave its old keys", func() bool { return !seenOn(c, s.id) })
+}
+
 func TestAMemberTakenOutReachesNothingOnTheOldKeysOfAPluginThatMoved(t *testing.T) {
 	url := relayServer(t)
 	a := open(t, "alpha", "alpha-1", setup{relay: url})
