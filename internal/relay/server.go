@@ -17,7 +17,9 @@ package relay
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -190,6 +192,14 @@ func (s *Server) failHandshake(addr string) {
 	}
 }
 
+// who names a connection in the log: its key by the start of the key's hash,
+// which tells two groups apart without writing down their credential, and the
+// id it announced, cut short because the client chooses it freely.
+func who(key, id string) string {
+	sum := sha256.Sum256([]byte(key))
+	return fmt.Sprintf("key %x instance %.16q", sum[:4], id)
+}
+
 // admits reports whether key may connect. Admit is read without the lock
 // because it is set once before the server is mounted, to a closure that
 // reads live configuration itself.
@@ -317,11 +327,12 @@ func (s *Server) Join(key string, c Conn, a Announce, proven bool) error {
 	s.mu.Unlock()
 
 	if replaced != nil {
+		log.Printf("relay: %s closed: replaced by a newer connection with the same id", who(key, a.InstanceID))
 		replaced.stop()
 	}
 	s.failPending(failures, "the instance that would have answered this reconnected before it replied; retry")
 	for _, gone := range stale {
-		s.Leave(gone)
+		s.Leave(gone, "its key is kept to another instance than when it joined")
 	}
 	go s.writeLoop(cl)
 
@@ -345,9 +356,9 @@ var (
 
 // Leave unregisters a connection, stops its writer (which closes the socket),
 // tells its siblings it went offline and fails any request still waiting on
-// it. It is safe for a connection that never joined and safe to call twice, so
-// callers can defer it.
-func (s *Server) Leave(c Conn) {
+// it. The first call for a connection logs why it closed; a later one, or one
+// for a connection that never joined, does nothing.
+func (s *Server) Leave(c Conn, why string) {
 	s.mu.Lock()
 	cl, failures := s.removeLocked(c)
 	var siblings []*client
@@ -362,6 +373,7 @@ func (s *Server) Leave(c Conn) {
 	if cl == nil {
 		return
 	}
+	log.Printf("relay: %s closed: %s", who(cl.key, cl.announce.InstanceID), why)
 	cl.stop()
 	s.failPending(failures, "the instance that would have answered this disconnected before it replied")
 	gone := frameOf(TypePresence, Presence{InstanceID: cl.announce.InstanceID})
@@ -566,7 +578,7 @@ func (s *Server) enqueue(cl *client, frame []byte) {
 	select {
 	case cl.send <- frame:
 	default:
-		s.Leave(cl.conn)
+		s.Leave(cl.conn, fmt.Sprintf("its queue of %d frames was full", queueDepth))
 	}
 }
 
@@ -589,7 +601,11 @@ func (s *Server) writeLoop(cl *client) {
 			return
 		case frame := <-cl.send:
 			if err := sendFrame(context.Background(), cl.conn, frame, writeTimeout); err != nil {
-				s.Leave(cl.conn)
+				why := "write: " + err.Error()
+				if errors.Is(err, errStalled) {
+					why = fmt.Sprintf("write: no progress for %s", writeTimeout)
+				}
+				s.Leave(cl.conn, why)
 				return
 			}
 		}
@@ -641,12 +657,18 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	err = c.Write(writeCtx, websocket.MessageText, frameOf(TypeChallenge, Challenge{Nonce: challenge}))
 	cancel()
 	if err != nil {
+		log.Printf("relay: a connection ended before its challenge went out: %v", err)
 		_ = c.CloseNow()
 		return
 	}
 
 	hello, err := readHello(r.Context(), c)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			log.Printf("relay: a connection sent no hello within %s", helloTimeout)
+		} else {
+			log.Printf("relay: a connection ended before its hello was accepted: %v", err)
+		}
 		s.failHandshake(addr)
 		_ = c.Close(websocket.StatusPolicyViolation, "the first frame must be a hello with a relay key of at least 32 characters and an instance id")
 		return
@@ -654,22 +676,27 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Checked before Join, so an unserved key never enters the registry. The
 	// close reason tells an instance whose key stopped matching what happened.
 	if !s.admits(hello.Key) {
+		log.Printf("relay: %s turned away: this relay does not serve its key", who(hello.Key, hello.Announce.InstanceID))
 		s.failHandshake(addr)
 		_ = c.Close(websocket.StatusPolicyViolation, "this relay does not serve that relay key")
 		return
 	}
 	s.limiter.succeed(addr)
 	if err := s.Join(hello.Key, c, hello.Announce, hello.proves(challenge, s.names(r))); err != nil {
+		log.Printf("relay: %s turned away: %v", who(hello.Key, hello.Announce.InstanceID), err)
 		_ = c.Close(websocket.StatusPolicyViolation, err.Error())
 		return
 	}
 	c.SetReadLimit(readLimit)
 	// Leave stops the writer, which closes the socket, so this is the whole
-	// teardown.
-	defer s.Leave(c)
+	// teardown. When the relay closed the socket itself, the connection has
+	// already left with the real reason and this read error is only its echo.
+	why := "its handler stopped"
+	defer func() { s.Leave(c, why) }()
 	for {
 		_, frame, err := c.Read(r.Context())
 		if err != nil {
+			why = "read: " + err.Error()
 			return
 		}
 		s.Route(c, frame)

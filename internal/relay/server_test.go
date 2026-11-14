@@ -115,7 +115,7 @@ func joinAs(t *testing.T, s *Server, key, id string, proven bool) *fakeConn {
 	if err := s.Join(key, c, Announce{InstanceID: id, Name: id, Deployment: "container"}, proven); err != nil {
 		t.Fatalf("join %s: %v", id, err)
 	}
-	t.Cleanup(func() { s.Leave(c) })
+	t.Cleanup(func() { s.Leave(c, "it left") })
 	return c
 }
 
@@ -177,7 +177,7 @@ func TestLeaveTellsSiblingsTheInstanceWentOffline(t *testing.T) {
 	next(t, a, "no arrival announce")
 	next(t, b, "no sibling announce")
 
-	s.Leave(b)
+	s.Leave(b, "it left")
 
 	env := next(t, a, "no presence frame after a sibling disconnected")
 	var p Presence
@@ -452,7 +452,7 @@ func TestAConfinedKeyReachesOnlyItsInstance(t *testing.T) {
 		t.Fatalf("the instance got a %q frame, want the call", got.Type)
 	}
 
-	s.Leave(phone)
+	s.Leave(phone, "it left")
 	next(t, retired, "the instance was not told the phone left")
 	nothing(t, other, "a device heard of another device leaving")
 }
@@ -622,7 +622,7 @@ func TestTargetDisconnectFailsThePendingRequestFast(t *testing.T) {
 	send(t, s, a, TypeProxyRequest, ProxyRequest{RequestID: "r1", Target: "bravo"})
 	next(t, b, "the target never received the request")
 
-	s.Leave(b)
+	s.Leave(b, "it left")
 
 	env := next(t, a, "the pending request was never failed fast")
 	var resp ProxyResponse

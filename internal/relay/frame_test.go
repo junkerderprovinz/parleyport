@@ -3,6 +3,7 @@ package relay
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"sync"
 	"testing"
@@ -81,8 +82,8 @@ func TestAFrameStopsWhenTheLinkStalls(t *testing.T) {
 	go func() { done <- sendFrame(context.Background(), conn, frame, 50*time.Millisecond) }()
 	select {
 	case err := <-done:
-		if err == nil {
-			t.Error("a stalled link took the frame")
+		if !errors.Is(err, errStalled) {
+			t.Errorf("a stalled link ended the write with %v, want it named as a stall", err)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("a stalled link held the write")
