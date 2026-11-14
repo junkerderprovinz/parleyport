@@ -170,7 +170,7 @@ func TestAMembershipFollowsANewPhraseInItsDirectory(t *testing.T) {
 
 	f = openDir()
 	waitFor(t, "the plugin to learn alpha moved", func() bool {
-		m, _ := memberOf(f, a.id)
+		m, _ := pairedWith(f.group, a.id)
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		return m.Online() && f.book.Members[a.id].Moved

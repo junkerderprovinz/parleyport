@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/junkerderprovinz/parleyport/kit/group"
 	"github.com/junkerderprovinz/parleyport/kit/keys"
@@ -48,6 +49,16 @@ type membershipFormat struct {
 	Group    string   `json:"group"`
 	Frame    string   `json:"frame"`
 	PeerAuth string   `json:"peerAuth"`
+	// Before are the keys Follow moved on from, kept for 30 days after the
+	// fortress changed its phrase.
+	Before *keptKeys `json:"before,omitempty"`
+}
+
+type keptKeys struct {
+	Group    string    `json:"group"`
+	Frame    string    `json:"frame"`
+	PeerAuth string    `json:"peerAuth"`
+	Changed  time.Time `json:"changed"`
 }
 
 // Join keeps m in dir with the keys the fortress derives from secret, under
@@ -96,9 +107,11 @@ func Join(dir string, secret []byte, m Membership) error {
 // Follow takes into the membership kept in dir the keys of the phrase the
 // fortress changed to, which f, opened from dir, fetches with NewKeys. It
 // reports whether it did; dir then opens under the new phrase as the same
-// member. Where no member in reach took a new phrase it changes nothing.
+// member, with the members and removals it knew, and for 30 days after the
+// change tells the members still on the old keys that the phrase changed.
+// Where no member in reach took a new phrase it changes nothing.
 func Follow(ctx context.Context, dir string, f *Fortress) (bool, error) {
-	set, err := f.NewKeys(ctx)
+	set, changed, err := f.newKeys(ctx)
 	if errors.Is(err, ErrNoNewPhrase) {
 		return false, nil
 	}
@@ -109,6 +122,10 @@ func Follow(ctx context.Context, dir string, f *Fortress) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	if err := f.moveBook(&handed{Changed: changed, Late: true}); err != nil {
+		return false, err
+	}
+	s.Before = &keptKeys{Group: s.Group, Frame: s.Frame, PeerAuth: s.PeerAuth, Changed: changed}
 	s.setKeys(set)
 	return true, s.write(dir)
 }
@@ -167,17 +184,15 @@ func (s membershipFormat) config(dir string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	frame, err := hex.DecodeString(s.Frame)
+	set, err := keysOf(s.Group, s.Frame, s.PeerAuth)
 	if err != nil {
 		return Config{}, err
 	}
-	peerAuth, err := hex.DecodeString(s.PeerAuth)
-	if err != nil {
-		return Config{}, err
-	}
-	set := keys.Set{Group: s.Group, Frame: frame, PeerAuth: peerAuth}
-	if !set.Complete() {
-		return Config{}, errors.New("the keys are incomplete")
+	var before keys.Set
+	if b := s.Before; b != nil && time.Since(b.Changed) < moveWindow {
+		if before, err = keysOf(b.Group, b.Frame, b.PeerAuth); err != nil {
+			return Config{}, err
+		}
 	}
 	cfg := Config{
 		App:      App{ID: s.App, Name: s.App, Icon: s.Icon},
@@ -187,6 +202,7 @@ func (s membershipFormat) config(dir string) (Config, error) {
 		Store:    fileStore(filepath.Join(dir, stateFile)),
 		Uses:     s.Uses,
 	}
+	cfg.PreviousKeys = before
 	switch s.Relay {
 	case "":
 		cfg.Relay = group.RelayProject
@@ -196,6 +212,23 @@ func (s membershipFormat) config(dir string) (Config, error) {
 		cfg.Relay, cfg.RelayURL = group.RelayOwn, s.Relay
 	}
 	return cfg, nil
+}
+
+// keysOf reads the keys a membership keeps in hex.
+func keysOf(group, frame, peerAuth string) (keys.Set, error) {
+	f, err := hex.DecodeString(frame)
+	if err != nil {
+		return keys.Set{}, err
+	}
+	p, err := hex.DecodeString(peerAuth)
+	if err != nil {
+		return keys.Set{}, err
+	}
+	set := keys.Set{Group: group, Frame: f, PeerAuth: p}
+	if !set.Complete() {
+		return keys.Set{}, errors.New("the keys are incomplete")
+	}
+	return set, nil
 }
 
 // writeFile replaces path with raw, so that a crash leaves the old file or the

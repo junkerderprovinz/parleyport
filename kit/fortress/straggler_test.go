@@ -84,9 +84,6 @@ func TestAnInstanceThatFollowedLateHandsAMemberTakenOutNothing(t *testing.T) {
 	// Nobody who was there for the change is in reach any more.
 	closeAll(t, a, b, d)
 	d.f = reopen(t, d, setup{relay: url, secret: secret, moved: testSecret})
-	if d.f.old != nil {
-		t.Error("delta, which followed late, answers on the old phrase")
-	}
 	neverHanded(t, url, c, d)
 }
 

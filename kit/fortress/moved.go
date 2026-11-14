@@ -1,19 +1,21 @@
 package fortress
 
 import (
-	"bytes"
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
+	"slices"
 	"sort"
 	"sync"
 	"time"
 
 	"github.com/junkerderprovinz/parleyport/kit/group"
 	"github.com/junkerderprovinz/parleyport/kit/keys"
+	"github.com/junkerderprovinz/parleyport/kit/lan"
 	"github.com/junkerderprovinz/parleyport/kit/member"
 	"github.com/junkerderprovinz/parleyport/kit/relay"
 )
@@ -269,16 +271,23 @@ var ErrNoNewPhrase = errors.New("fortress: no member in reach took a new phrase"
 // member it was. Neither the secret nor the keys of any app's pairing come
 // with them.
 func (f *Fortress) NewKeys(ctx context.Context) (keys.Set, error) {
+	set, _, err := f.newKeys(ctx)
+	return set, err
+}
+
+// newKeys is NewKeys, and when the member that handed the keys says the
+// fortress took them.
+func (f *Fortress) newKeys(ctx context.Context) (keys.Set, time.Time, error) {
 	f.mu.Lock()
 	current := f.book.Group
-	var ids []string
+	moved := map[string]time.Time{}
 	for id, a := range f.book.Members {
 		if a.Moved {
-			ids = append(ids, id)
+			moved[id] = a.Changed
 		}
 	}
 	f.mu.Unlock()
-	sort.Strings(ids)
+	ids := slices.Sorted(maps.Keys(moved))
 	err := ErrNoNewPhrase
 	for _, id := range ids {
 		set, e := f.movedKeys(ctx, id)
@@ -286,10 +295,10 @@ func (f *Fortress) NewKeys(ctx context.Context) (keys.Set, error) {
 		case e != nil:
 			err = e
 		case set.Group != current:
-			return set, nil
+			return set, moved[id], nil
 		}
 	}
-	return keys.Set{}, err
+	return keys.Set{}, time.Time{}, err
 }
 
 // movedKeys asks member id for the keys under the new phrase.
@@ -303,25 +312,37 @@ func (f *Fortress) movedKeys(ctx context.Context, id string) (keys.Set, error) {
 	return movedSet(id, status, body)
 }
 
-// openOld opens the fortress on cfg.Previous for the members from before the
-// change that were away for it, which have no way to the new phrase but this.
-// The phrase lets nobody in there: only the instances the fortress approved
-// under the same key are, and they are handed set or, holding the old phrase,
-// the new secret. Whoever else holds the old phrase learns neither this
-// instance's name nor who is in the fortress.
-func (f *Fortress) openOld(cfg Config, set keys.Set) error {
-	f.set, f.previous = set, bytes.Clone(cfg.Previous)
+// openOld opens the fortress on before, the keys of the phrase it changed
+// from, for the members from before the change that were away for it, which
+// have no way to the new phrase but this. The phrase lets nobody in there:
+// only the instances the fortress approved under the same key are, and serve
+// answers them. Whoever else holds the old phrase learns neither this
+// instance's name nor who is in the fortress. On this network it announces
+// where it takes direct calls, which the announce under the new phrase sends
+// in the clear already.
+func (f *Fortress) openOld(cfg Config, before keys.Set, serve http.HandlerFunc) error {
+	var self group.Self
+	if cfg.LAN != nil {
+		f.oldLAN = lan.New(cfg.LAN.Config())
+		f.oldLAN.Start()
+		self.DirectURL = cfg.Self.DirectURL
+	}
 	old, err := group.Open(group.Config{
 		Domain:      Domain,
-		Secret:      cfg.Previous,
+		Keys:        before,
 		Identity:    cfg.Identity,
+		Self:        self,
 		Relay:       cfg.Relay,
 		RelayURL:    cfg.RelayURL,
+		LAN:         f.oldLAN,
 		Store:       &memory{},
 		Vouch:       func(id string, key ed25519.PublicKey) bool { return approvedIn(f.group, id, key) },
 		VouchedOnly: true,
-	}, http.HandlerFunc(f.serveOld))
+	}, serve)
 	if err != nil {
+		if f.oldLAN != nil {
+			_ = f.oldLAN.Close()
+		}
 		return err
 	}
 	f.old = old
@@ -355,4 +376,52 @@ func (f *Fortress) serveOld(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusGone, phraseChanged)
 	}
+}
+
+// serveChanged answers the members still on the phrase before at an instance
+// that cannot hand them the new one: that the phrase changed, and nothing
+// else. A member taken out since, or one the fortress never approved, is not
+// told even that.
+func (f *Fortress) serveChanged(w http.ResponseWriter, r *http.Request) {
+	if caller, ok := group.CallerOf(r.Context()); !ok || !approvedIn(f.group, caller.ID, caller.Key) {
+		writeError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	writeError(w, http.StatusGone, phraseChanged)
+}
+
+// PhraseChanged reports whether a member says the fortress left the phrase
+// this instance is on. Where nothing hands the new one over, the app asks
+// its user for the new words. The plugins read the same from the book.
+func (f *Fortress) PhraseChanged() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, a := range f.book.Members {
+		if a.Moved {
+			return true
+		}
+	}
+	return false
+}
+
+// toldChanged takes member id's word that the fortress left this phrase and
+// reports whether it counts, which it does from an approved instance known
+// from before. The book keeps it as moved until it answers as usual again,
+// and the fortress takes nobody new on this phrase.
+func (f *Fortress) toldChanged(id string) bool {
+	if m, ok := listed(f.group, id); !ok || m.Kind != member.KindInstance || m.State != group.StateApproved {
+		return false
+	}
+	f.mu.Lock()
+	a, known := f.book.Members[id]
+	if known && !a.Moved {
+		a.Moved = true
+		f.book.Members[id] = a
+		f.dirty = true
+	}
+	f.mu.Unlock()
+	if known {
+		f.shut(time.Time{})
+	}
+	return known
 }

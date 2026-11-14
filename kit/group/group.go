@@ -100,6 +100,8 @@ type Config struct {
 	// to a new phrase. Who was approved or taken out under it stays so under
 	// Secret; a store written under any other phrase starts over.
 	Previous []byte
+	// PreviousKeys stand in for Previous on a device that keeps only keys.
+	PreviousKeys keys.Set
 	// Identity is this instance's member key, of kind member.KindInstance.
 	Identity member.Identity
 	Self     Self
@@ -340,7 +342,7 @@ func Open(cfg Config, serve http.Handler) (*Group, error) {
 	if err != nil {
 		return nil, fmt.Errorf("group: reading the store: %w", err)
 	}
-	previous := ""
+	previous := cfg.PreviousKeys.Group
 	if len(cfg.Previous) > 0 {
 		previous = cfg.Domain.GroupKey(cfg.Previous)
 	}

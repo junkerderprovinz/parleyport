@@ -110,6 +110,9 @@ func New(cfg Config) *Service {
 	}
 }
 
+// Config is where the Service meets the others.
+func (s *Service) Config() Config { return s.cfg }
+
 // SetSelf replaces what this instance announces and sends it at once. An empty
 // ID or URL stops the announcing. Each announce is stamped with the time it
 // goes out and tagged with what sign returns for it; without sign it carries

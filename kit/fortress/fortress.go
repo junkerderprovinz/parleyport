@@ -175,6 +175,10 @@ type Config struct {
 	// secret, a member that holds only keys fetches the new ones with NewKeys.
 	// The app keeps giving it until then.
 	Previous []byte
+	// PreviousKeys stand in for Previous on a device that keeps only keys,
+	// which Follow and Load do for a plugin. On them the fortress tells the
+	// members away for the change that the phrase changed, and nothing else.
+	PreviousKeys keys.Set
 	// Keeper keeps a new phrase when the fortress changes it; nil for an app
 	// that has nowhere safe to keep one, which then enters the new phrase
 	// like a new member.
@@ -359,9 +363,12 @@ type Fortress struct {
 	// old is the fortress on the phrase before, open for moveWindow after
 	// the change so that its members away for it follow: those that hold
 	// only keys fetch set, the keys under the new one, and the others the
-	// secret. nil when the phrase did not change lately.
-	old *group.Group
-	set keys.Set
+	// secret. An instance that took the change late, or holds only keys,
+	// tells them there that the phrase changed and nothing more. nil when
+	// the phrase did not change lately.
+	old    *group.Group
+	oldLAN *lan.Service
+	set    keys.Set
 	// secret is what the phrase encodes, and previous the phrase before it
 	// while old is open, so that an instance away for the change follows it
 	// with catchUp. Neither is kept anywhere.
@@ -413,11 +420,11 @@ func Open(cfg Config) (*Fortress, error) {
 	if len(cfg.Secret) > 0 {
 		set = Domain.Keys(cfg.Secret)
 	}
-	previous := ""
+	before := cfg.PreviousKeys
 	if len(cfg.Previous) > 0 {
-		previous = Domain.GroupKey(cfg.Previous)
+		before = Domain.Keys(cfg.Previous)
 	}
-	bk, err := loadBook(store.fortress(), set.Group, previous)
+	bk, err := loadBook(store.fortress(), set.Group, before.Group)
 	if err != nil {
 		return nil, err
 	}
@@ -493,6 +500,7 @@ func Open(cfg Config) (*Fortress, error) {
 		Domain:              Domain,
 		Keys:                set,
 		Previous:            cfg.Previous,
+		PreviousKeys:        cfg.PreviousKeys,
 		JoinByPhrase:        true,
 		Identity:            cfg.Identity,
 		Self:                cfg.Self,
@@ -522,8 +530,12 @@ func Open(cfg Config) (*Fortress, error) {
 	f.early = nil
 	f.mu.Unlock()
 	close(f.opened)
-	if len(cfg.Secret) > 0 && len(cfg.Previous) > 0 && !bk.Late && time.Since(bk.Changed) < moveWindow {
-		if err := f.openOld(cfg, set); err != nil {
+	if before.Complete() && time.Since(bk.Changed) < moveWindow {
+		serve := f.serveChanged
+		if len(cfg.Secret) > 0 && len(cfg.Previous) > 0 && !bk.Late {
+			f.set, f.previous, serve = set, bytes.Clone(cfg.Previous), f.serveOld
+		}
+		if err := f.openOld(cfg, before, serve); err != nil {
 			cancel()
 			_ = g.Close()
 			if f.pairing != nil {
@@ -555,6 +567,9 @@ func (f *Fortress) Close() error {
 		}
 		if f.old != nil {
 			err = errors.Join(err, f.old.Close())
+		}
+		if f.oldLAN != nil {
+			err = errors.Join(err, f.oldLAN.Close())
 		}
 		f.mu.Lock()
 		if f.dirty {
@@ -606,7 +621,8 @@ func (f *Fortress) DirectHandler(others ...*group.Group) http.Handler {
 }
 
 // Members lists every other instance in the fortress this one knows, sorted
-// by app and device.
+// by app and device. A member that moved to a new phrase is away on this one,
+// whatever still answers for it here.
 func (f *Fortress) Members() []Member {
 	listed := f.group.Members()
 	f.mu.Lock()
@@ -619,7 +635,7 @@ func (f *Fortress) Members() []Member {
 		a := f.book.Members[m.ID]
 		out = append(out, Member{
 			ID: m.ID, Kind: m.Kind, App: a.App, Device: m.Name, Deployment: m.Deployment, Host: a.Host, Address: m.Address,
-			State: m.State, Direct: m.Direct, Relay: m.Relay, LastSeen: m.LastSeen,
+			State: m.State, Direct: m.Direct && !a.Moved, Relay: m.Relay && !a.Moved, LastSeen: m.LastSeen,
 			Actions: append([]string(nil), a.Actions...), Uses: append([]string(nil), a.Uses...),
 		})
 	}
@@ -857,6 +873,10 @@ func (f *Fortress) describe(ctx context.Context, id string, now time.Time) bool 
 	ctx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
 	body, err := f.get(ctx, id, aboutPath)
+	if no := (*Refusal)(nil); errors.As(err, &no) && no.Code == phraseChanged && f.toldChanged(id) {
+		f.again(f.described, id, now.Add(describeEvery))
+		return false
+	}
 	var a about
 	if err != nil || json.Unmarshal(body, &a) != nil || !a.valid() {
 		f.again(f.described, id, now.Add(retryAfter))

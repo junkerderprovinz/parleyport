@@ -19,7 +19,8 @@ type about struct {
 	Actions []string `json:"actions,omitempty"`
 	Uses    []string `json:"uses,omitempty"`
 	// Moved says the member answers on a phrase the fortress has left, and
-	// hands the members from before the new keys at movedPath.
+	// hands the members from before the new keys at movedPath unless all it
+	// said there is that the phrase changed.
 	Moved bool `json:"moved,omitempty"`
 	// Changed is when that member took the new phrase.
 	Changed time.Time `json:"changed,omitzero"`
@@ -115,6 +116,11 @@ func loadBook(raw []byte, groupKey, previous string) (book, error) {
 			b.Changed = b.Next.Changed
 		}
 		b.Next = nil
+		// Under the new phrase nobody answers on one the fortress left.
+		for id, a := range b.Members {
+			a.Moved, a.Changed = false, time.Time{}
+			b.Members[id] = a
+		}
 		return b, nil
 	}
 	return fresh, nil
