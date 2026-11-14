@@ -2,6 +2,22 @@
 
 Every version of the kit, written by hand. The kit is versioned apart from the server, with tags of the form `kit/vX.Y.Z`. What changed in the relay itself is in the [server's release notes](https://github.com/junkerderprovinz/parleyport/releases).
 
+## 1.0.1 - 2026-11-14
+
+Security fixes for direct calls and fortress frames.
+
+**Adopting apps:**
+
+- **Moving up:** `go get github.com/junkerderprovinz/parleyport/kit@v1.0.1`. Nothing in the API changes.
+- **Plugins:** take `cmd/fortress` and `cmd/notify` from ParleyPort 1.2.1.
+
+## 🐛 Fixed
+
+- **A direct call stays on `DirectPath`.** A query or fragment in an announced address used to swallow the path, so anyone holding the phrase could make a member post its call to any page of a host it reaches. `group` now puts only the address's own path in front of `DirectPath`.
+- **`fortress` checks a frame's head and body against the limit before it allocates them.** A part past the limit is refused instead of overflowing the size or the four-byte length on a 32-bit platform.
+- **The websocket of an opened page is dialed under a fixed host.** The target was already checked to be a path and the dial only reaches the app's own pipe. The host is now part of the constant prefix as well.
+- **golang.org/x/net 0.62.0**, with the fix for GHSA-5cv4-jp36-h3mw in the HTML parser.
+
 ## 1.0.0 - 2026-11-14
 
 The first version: everything an app needs to pair its instances, join a fortress and talk to the rest of the household.
