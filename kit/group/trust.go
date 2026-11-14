@@ -332,7 +332,9 @@ func (g *Group) admitCall(ctx context.Context, call relay.ProxyCall) (Caller, *r
 }
 
 // vouched reports whether Vouch lets in instance id under key, which is
-// asked only of an instance not approved here yet. It runs without g.mu, so
+// asked only of an instance not approved here yet, unless the group serves
+// the vouched alone: there it is asked on every call and answer, since a
+// member taken out elsewhere stays approved here. It runs without g.mu, so
 // Vouch may look at another group.
 func (g *Group) vouched(id string, kind member.Kind, key ed25519.PublicKey) bool {
 	if g.vouch == nil || kind != member.KindInstance || !claimFits(id, kind, key) {
@@ -341,7 +343,7 @@ func (g *Group) vouched(id string, kind member.Kind, key ed25519.PublicKey) bool
 	g.mu.Lock()
 	rec, ok := g.st.Members[id]
 	g.mu.Unlock()
-	if ok && rec.Approved {
+	if ok && rec.Approved && !g.vouchedOnly {
 		return false
 	}
 	return g.vouch(id, key)
@@ -379,6 +381,9 @@ func (g *Group) admit(call relay.ProxyCall, source string, vouched, asked bool, 
 	}
 	ask := g.mayJoin != nil && g.byPhrase && !vouched && !asked && g.closedSince.IsZero()
 	if rec, ok := st.Members[call.From]; ok {
+		if g.vouchedOnly && !vouched {
+			return Caller{}, strangerRefusal
+		}
 		if g.closedToLocked(rec) && !vouched {
 			return Caller{}, g.closedRefusalLocked()
 		}
@@ -491,6 +496,9 @@ func waitingLocked(st *state) int {
 // instance not pinned yet is pinned by its answer.
 func (g *Group) trustsAnswer(target string, key ed25519.PublicKey) bool {
 	vouched := g.vouched(target, member.KindInstance, key)
+	if g.vouchedOnly && !vouched {
+		return false
+	}
 	if g.asks(target, vouched) {
 		// MayJoin may be waiting for this very answer, so it gets no longer
 		// than a call.
@@ -735,9 +743,10 @@ func (g *Group) enterPassing() bool {
 }
 
 // internal answers the routes the group serves itself. Only an approved
-// instance decides who else is in the group or reads who is.
+// instance decides who else is in the group or reads who is, and in a group
+// for the vouched alone nobody does, since Vouch decides that elsewhere.
 func (g *Group) internal(caller Caller, call relay.ProxyCall) (int, []byte) {
-	instance := caller.Kind == member.KindInstance
+	instance := caller.Kind == member.KindInstance && !g.vouchedOnly
 	switch {
 	case call.Path == helloPath:
 		return http.StatusOK, g.hello()

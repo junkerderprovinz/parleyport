@@ -136,8 +136,11 @@ func (g *Group) refresh(ctx context.Context, now time.Time) {
 
 // syncRosters asks every approved instance in reach for its roster, at most
 // once every rosterEvery, so one that was away when a device was approved or
-// removed catches up.
+// removed catches up. A group for the vouched alone takes no roster.
 func (g *Group) syncRosters(ctx context.Context, now time.Time) {
+	if g.vouchedOnly {
+		return
+	}
 	for _, id := range g.instancesOnline("") {
 		g.mu.Lock()
 		due := now.Sub(g.synced[id]) >= rosterEvery

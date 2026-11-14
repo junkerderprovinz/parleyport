@@ -147,6 +147,45 @@ func TestAPluginThatFollowedAnswersTheOldKeysForThirtyDays(t *testing.T) {
 	}
 }
 
+func TestAMemberTakenOutReachesNothingOnTheOldKeysOfAPluginThatMoved(t *testing.T) {
+	url := relayServer(t)
+	a := open(t, "alpha", "alpha-1", setup{relay: url})
+	b := open(t, "bravo", "bravo-1", setup{relay: url})
+	s, dir := openPlugin(t, url, "ledger", "tower", false)
+	w := openKeysOnly(t, url, "watcher", "watcher-1", Domain.Keys(testSecret))
+	p := openKeysOnly(t, url, "guard", "guard-1", Domain.Keys(testSecret))
+	for _, n := range []*node{a, b, s, w, p} {
+		waitFor(t, n.name+" to see everybody", func() bool { return len(n.f.Members()) == 4 })
+	}
+	meet(t, a, s)
+	meet(t, s, w)
+	meet(t, s, p)
+	closeAll(t, p)
+	movedAway(t, url, a, b, s, dir)
+
+	// The watcher asks on the old keys, and is taken out after.
+	w.f.again(w.f.described, s.id, time.Time{})
+	waitFor(t, "the watcher to hear the phrase changed", w.f.PhraseChanged)
+	if err := s.f.Remove(w.id); err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(map[string]string{"op": "remove", "id": p.id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status, raw, err := w.f.group.Call(ctx(t), s.id, http.MethodPost, "/kit/group/v1/decision", body); err == nil && status == http.StatusNoContent {
+		t.Errorf("the plugin took the word of a member taken out: %d %s", status, raw)
+	}
+	closeAll(t, w)
+
+	p.f = reopenKeysOnly(t, p, url, Domain.Keys(testSecret))
+	waitFor(t, "the guard to hear the phrase changed", p.f.PhraseChanged)
+	time.Sleep(3 * time.Second)
+	if n := p.removed.Load(); n != 0 {
+		t.Errorf("the guard heard %d times that it was taken out, which nobody did", n)
+	}
+}
+
 func TestOnTheOldKeysAMovedPluginTellsOnlyItsMembersThatThePhraseChanged(t *testing.T) {
 	url := relayServer(t)
 	a := open(t, "alpha", "alpha-1", setup{relay: url})

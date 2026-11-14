@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -326,5 +327,39 @@ func TestAGroupAsksBeforeItTakesInANewcomerByThePhrase(t *testing.T) {
 	defer mu.Unlock()
 	if asked[b.id] != 1 {
 		t.Errorf("alpha asked about bravo %d times, want once, before it first met it", asked[b.id])
+	}
+}
+
+func TestAGroupForTheVouchedAloneAsksOnEveryCallAndTakesNoDecisions(t *testing.T) {
+	url := relayServer(t)
+	bravo := identity(t, "bravo")
+	var vouched atomic.Bool
+	vouched.Store(true)
+	a := open(t, "alpha", setup{relay: url, vouchedOnly: true, vouch: func(id string, key ed25519.PublicKey) bool {
+		return vouched.Load() && id == bravo.ID() && bytes.Equal(key, bravo.Public())
+	}})
+	b := open(t, "bravo", setup{relay: url, byPhrase: true})
+	c := open(t, "charlie", setup{relay: url, byPhrase: true})
+	waitFor(t, "bravo to see alpha", func() bool { m, _ := memberOf(b.g, a.id); return m.Relay })
+	if status, body, err := call(t, b, a, http.MethodGet, "/api/whoami", nil); err != nil || status != http.StatusOK {
+		t.Fatalf("bravo, vouched for, calls alpha = %d %s %v", status, body, err)
+	}
+
+	// Who is in the group is decided elsewhere, so alpha neither takes
+	// decisions nor hands out whom it knows.
+	body, _ := json.Marshal(decision{Op: opRemove, ID: c.id})
+	if status, _, err := call(t, b, a, http.MethodPost, decisionPath, body); err == nil && status == http.StatusNoContent {
+		t.Error("alpha took a removal from bravo")
+	}
+	if _, gone := a.g.Roster().Removed[c.id]; gone {
+		t.Error("alpha took charlie out on bravo's word")
+	}
+	if status, raw, err := call(t, b, a, http.MethodGet, rosterPath, nil); err == nil && status == http.StatusOK {
+		t.Errorf("alpha handed bravo its roster %s", raw)
+	}
+
+	vouched.Store(false)
+	if status, raw, err := call(t, b, a, http.MethodGet, "/api/whoami", nil); err == nil && status == http.StatusOK {
+		t.Errorf("bravo, turned down by Vouch, calls alpha = %d %s, want it refused", status, raw)
 	}
 }

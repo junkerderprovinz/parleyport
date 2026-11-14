@@ -345,7 +345,9 @@ func (f *Fortress) openOld(cfg Config, before keys.Set, serve http.HandlerFunc) 
 		}
 		return err
 	}
+	f.mu.Lock()
 	f.old = old
+	f.mu.Unlock()
 	return nil
 }
 

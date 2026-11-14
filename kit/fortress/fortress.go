@@ -691,9 +691,15 @@ func (f *Fortress) leave() {
 }
 
 // fortressRemoved follows a removal in the fortress, made here or passed on,
-// into the pairing.
+// into the pairing and the fortress on the phrase before.
 func (f *Fortress) fortressRemoved(id string) {
 	f.forgetMember(id)
+	f.mu.Lock()
+	old := f.old
+	f.mu.Unlock()
+	if old != nil {
+		_ = old.Import(group.Roster{Removed: map[string]time.Time{id: time.Now()}})
+	}
 	if f.pairing != nil {
 		if _, ok := listed(f.pairing, id); ok {
 			_ = f.pairing.Remove(id)
