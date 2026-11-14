@@ -63,9 +63,7 @@ func TestAReplacedConnectionIsLoggedWithoutItsKey(t *testing.T) {
 	if strings.Contains(buf.String(), logTestKey) {
 		t.Fatalf("the relay key reached the log: %s", line)
 	}
-	if !old.closed.Load() {
-		t.Error("the replaced connection was left open")
-	}
+	waitFor(t, "the replaced connection to close", old.closed.Load)
 	if n := strings.Count(buf.String(), `"alpha"`); n != 1 {
 		t.Errorf("the replacement was logged %d times, want once:\n%s", n, buf.String())
 	}
