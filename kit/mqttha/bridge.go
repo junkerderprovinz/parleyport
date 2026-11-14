@@ -300,7 +300,8 @@ func (b *Bridge) onConnect(s *session, c mqtt.Client) {
 	b.log.Info("connected to the broker", "host", s.cfg.host())
 	presses := c.Subscribe(s.cfg.pressTopic("+"), 1, func(_ mqtt.Client, m mqtt.Message) { b.onPress(s, m) })
 	seen := c.Subscribe(s.cfg.discoveryFilter(), 1, func(_ mqtt.Client, m mqtt.Message) { s.noteRetained(m) })
-	for _, t := range []mqtt.Token{presses, seen} {
+	availability := c.Subscribe(s.cfg.availabilityTopic(), 1, func(_ mqtt.Client, m mqtt.Message) { s.answerWill(m) })
+	for _, t := range []mqtt.Token{presses, seen, availability} {
 		if !t.WaitTimeout(waitFor) || t.Error() != nil {
 			b.log.Warn("could not subscribe, the device stays unavailable until the next connect", "error", t.Error())
 			return
@@ -327,6 +328,19 @@ func (b *Bridge) onConnect(s *session, c mqtt.Client) {
 			b.log.Warn("could not publish the device", "error", err)
 		}
 	})
+}
+
+// answerWill says online again when the will of a dropped connection reaches
+// the broker only after the reconnect did.
+func (s *session) answerWill(m mqtt.Message) {
+	if string(m.Payload()) != "offline" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.stopped {
+		s.client.Publish(s.cfg.availabilityTopic(), 1, true, "online")
+	}
 }
 
 func (s *session) noteRetained(m mqtt.Message) {
@@ -448,7 +462,7 @@ func (b *Bridge) remove(s *session) error {
 	// when the connection closes. The socket then resets, the broker never
 	// sees the DISCONNECT and publishes the will onto the cleared topic.
 	s.mu.Lock()
-	filters := []string{s.cfg.pressTopic("+"), s.cfg.discoveryFilter()}
+	filters := []string{s.cfg.pressTopic("+"), s.cfg.discoveryFilter(), s.cfg.availabilityTopic()}
 	for topic := range s.subscribed {
 		filters = append(filters, topic)
 	}

@@ -185,6 +185,47 @@ func (tb *testBroker) watch(topic string) func() []string {
 	}
 }
 
+// lateWill holds back the will of a dropped connection until the client has
+// reconnected and said it is online, as a broker does that notices the dead
+// connection only after the new one.
+type lateWill struct {
+	mochi.HookBase
+	topic      string
+	online     chan struct{}
+	sent       chan struct{}
+	onlineOnce sync.Once
+	sentOnce   sync.Once
+}
+
+func newLateWill(topic string) *lateWill {
+	return &lateWill{topic: topic, online: make(chan struct{}), sent: make(chan struct{})}
+}
+
+func (h *lateWill) ID() string { return "late-will" }
+
+func (h *lateWill) Provides(b byte) bool {
+	return b == mochi.OnWill || b == mochi.OnWillSent || b == mochi.OnPublish
+}
+
+func (h *lateWill) OnWill(_ *mochi.Client, w mochi.Will) (mochi.Will, error) {
+	select {
+	case <-h.online:
+	case <-time.After(waitFor):
+	}
+	return w, nil
+}
+
+func (h *lateWill) OnWillSent(*mochi.Client, mochipackets.Packet) {
+	h.sentOnce.Do(func() { close(h.sent) })
+}
+
+func (h *lateWill) OnPublish(_ *mochi.Client, pk mochipackets.Packet) (mochipackets.Packet, error) {
+	if pk.TopicName == h.topic && string(pk.Payload) == "online" {
+		h.onlineOnce.Do(func() { close(h.online) })
+	}
+	return pk, nil
+}
+
 // testSource is the app side: what it shows and the buttons pressed.
 type testSource struct {
 	mu      sync.Mutex
@@ -614,6 +655,28 @@ func TestARetainedPressRunsNothingOnReconnect(t *testing.T) {
 		return i >= 0 && slices.Contains(got[i:], "online")
 	})
 	expectNoPress(t, src, "the retained press replayed on reconnect")
+}
+
+func TestAWillThatArrivesAfterTheReconnectIsAnsweredWithOnline(t *testing.T) {
+	t.Parallel()
+	tb := startBroker(t)
+	b := newTestBridge(t, newSource())
+	cfg := alphaConfig(tb)
+	if err := b.Apply(cfg); err != nil {
+		t.Fatal(err)
+	}
+	waitAnnounced(t, tb, cfg)
+	late := newLateWill(cfg.availabilityTopic())
+	if err := tb.server().AddHook(late, nil); err != nil {
+		t.Fatal(err)
+	}
+	tb.drop(cfg.ID)
+	select {
+	case <-late.sent:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the broker never sent the will of the dropped connection")
+	}
+	waitOnline(t, tb, cfg)
 }
 
 func TestAPressWhileTheLastOneRunsIsIgnored(t *testing.T) {
