@@ -331,9 +331,10 @@ func (b *Bridge) onConnect(s *session, c mqtt.Client) {
 }
 
 // answerWill says online again when the will of a dropped connection reaches
-// the broker only after the reconnect did.
+// the broker only after the reconnect did. A retained offline comes with the
+// subscription, before onConnect says online anyway.
 func (s *session) answerWill(m mqtt.Message) {
-	if string(m.Payload()) != "offline" {
+	if m.Retained() || string(m.Payload()) != "offline" {
 		return
 	}
 	s.mu.Lock()
@@ -366,7 +367,13 @@ func (b *Bridge) notice(s *session, n mqtt.ConnectionNotification) {
 			st.Error = n.Reason.Error()
 		}
 		b.log.Warn("lost the connection to the broker", "host", s.cfg.host(), "error", n.Reason)
-		b.setStatus(s, st)
+		// paho reports the loss from a goroutine of its own, which can run
+		// only once the reconnect stands.
+		b.mu.Lock()
+		if b.cur == s && !s.client.IsConnectionOpen() {
+			b.status = st
+		}
+		b.mu.Unlock()
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	mqtt "github.com/eclipse/paho.mqtt.golang"
 	mochi "github.com/mochi-mqtt/server/v2"
 	"github.com/mochi-mqtt/server/v2/hooks/auth"
 	"github.com/mochi-mqtt/server/v2/listeners"
@@ -29,6 +30,8 @@ type testBroker struct {
 	addr   string
 	ledger *auth.Ledger
 
+	gate *dropGate
+
 	mu     sync.Mutex
 	srv    *mochi.Server
 	closed bool
@@ -43,7 +46,7 @@ func startBroker(t *testing.T) *testBroker {
 // everyone when ledger is nil.
 func startBrokerWith(t *testing.T, ledger *auth.Ledger) *testBroker {
 	t.Helper()
-	tb := &testBroker{t: t, addr: "127.0.0.1:0", ledger: ledger}
+	tb := &testBroker{t: t, addr: "127.0.0.1:0", ledger: ledger, gate: &dropGate{held: map[string]chan struct{}{}}}
 	tb.serve()
 	t.Cleanup(tb.close)
 	return tb
@@ -59,6 +62,9 @@ func (tb *testBroker) serve() {
 		err = srv.AddHook(new(auth.AllowHook), nil)
 	}
 	if err != nil {
+		tb.t.Fatal(err)
+	}
+	if err := srv.AddHook(tb.gate, nil); err != nil {
 		tb.t.Fatal(err)
 	}
 	tcp := listeners.NewTCP(listeners.Config{ID: "test", Address: tb.addr})
@@ -159,10 +165,53 @@ func (tb *testBroker) drop(clientID string) {
 	if !ok {
 		tb.t.Fatalf("no client %s on the broker", clientID)
 	}
+	tb.gate.hold(clientID)
 	// cl.Stop would race the broker's read loop, which ends quietly and skips
 	// the will when it sees the client stopped first. A closed socket always
 	// fails the read, as a dead network does.
 	_ = cl.Net.Conn.Close()
+}
+
+// dropGate holds the reconnect of a dropped client until the broker has
+// turned to its will. A reconnect that came first would take the session over
+// while the old one still handles a packet, which then ends without the will.
+type dropGate struct {
+	mochi.HookBase
+	mu   sync.Mutex
+	held map[string]chan struct{}
+}
+
+func (g *dropGate) ID() string { return "drop-gate" }
+
+func (g *dropGate) Provides(b byte) bool { return b == mochi.OnConnect || b == mochi.OnWill }
+
+func (g *dropGate) hold(clientID string) {
+	g.mu.Lock()
+	g.held[clientID] = make(chan struct{})
+	g.mu.Unlock()
+}
+
+func (g *dropGate) OnConnect(cl *mochi.Client, _ mochipackets.Packet) error {
+	g.mu.Lock()
+	held := g.held[cl.ID]
+	g.mu.Unlock()
+	if held != nil {
+		select {
+		case <-held:
+		case <-time.After(waitFor):
+		}
+	}
+	return nil
+}
+
+func (g *dropGate) OnWill(cl *mochi.Client, w mochi.Will) (mochi.Will, error) {
+	g.mu.Lock()
+	if held := g.held[cl.ID]; held != nil {
+		close(held)
+		delete(g.held, cl.ID)
+	}
+	g.mu.Unlock()
+	return w, nil
 }
 
 // watch records every payload published to topic from now on.
@@ -773,6 +822,25 @@ func TestALostConnectionMarksTheDeviceUnavailableUntilItReturns(t *testing.T) {
 		return i >= 0 && slices.Contains(got[i:], "online")
 	})
 	waitUntil(t, "the bridge reports the connection again", func() bool { return b.Status().Connected })
+}
+
+func TestALostConnectionReportedAfterTheReconnectLeavesTheStatusConnected(t *testing.T) {
+	t.Parallel()
+	tb := startBroker(t)
+	b := newTestBridge(t, newSource())
+	cfg := alphaConfig(tb)
+	if err := b.Apply(cfg); err != nil {
+		t.Fatal(err)
+	}
+	waitAnnounced(t, tb, cfg)
+	waitUntil(t, "the bridge reports the connection", func() bool { return b.Status().Connected })
+	b.mu.Lock()
+	s := b.cur
+	b.mu.Unlock()
+	b.notice(s, mqtt.ConnectionNotificationLost{Reason: errors.New("EOF")})
+	if st := b.Status(); !st.Connected {
+		t.Fatalf("status %+v after a late notice of a lost connection", st)
+	}
 }
 
 func TestAReconnectRepublishesToABrokerThatForgotEverything(t *testing.T) {

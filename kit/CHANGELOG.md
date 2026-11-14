@@ -8,6 +8,7 @@ Every version of the kit, written by hand. The kit is versioned apart from the s
 
 - **golang.org/x/net 0.62.0.** The kit asked for 0.44.0, which Dependabot flags for a denial of service in its HTML parser (CVE-2026-25680). The kit never calls that parser, but an app gets the fixed version without pinning it itself.
 - **Home Assistant shows the device again after a quick reconnect.** When the broker sent the will of a dropped connection only after `mqttha` had reconnected, the device stayed unavailable until the next reconnect. The bridge answers that late `offline` with `online`.
+- **`mqttha` reports the connection right after a reconnect.** A lost connection that paho reported only once the reconnect stood left `Bridge.Status` at `lost` while the bridge was connected.
 
 ## 1.0.0 - 2026-11-14
 
