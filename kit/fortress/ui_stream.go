@@ -591,7 +591,11 @@ func (l *oneConn) Addr() net.Addr { return l.conn.LocalAddr() }
 
 // streamCall is one step of a live stream at member.
 func (f *Fortress) streamCall(ctx context.Context, member string, op streamOp, data []byte) (streamAnswer, error) {
-	status, out, err := f.group.Call(ctx, member, http.MethodPost, uiStreamPath, frame(op, data))
+	framed, err := frame(op, data)
+	if err != nil {
+		return streamAnswer{}, err
+	}
+	status, out, err := f.group.Call(ctx, member, http.MethodPost, uiStreamPath, framed)
 	if err != nil {
 		return streamAnswer{}, err
 	}

@@ -533,7 +533,11 @@ func TestTextIsPackedBeforeItTravels(t *testing.T) {
 // through OpenHandler could.
 func ask(t *testing.T, a, b *node, q uiAsk) (int, uiAnswer) {
 	t.Helper()
-	status, out, err := a.f.group.Call(ctx(t), b.id, http.MethodPost, uiPath, q.encode(nil))
+	framed, err := q.encode(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, out, err := a.f.group.Call(ctx(t), b.id, http.MethodPost, uiPath, framed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -597,7 +601,11 @@ func TestTheOpenedAppKeepsItsOwnLimits(t *testing.T) {
 
 func TestUIAskRoundTrips(t *testing.T) {
 	q := uiAsk{Method: "POST", Target: "/x?y=1", Header: http.Header{"Content-Type": {"application/json"}}, Jar: "j", Prefix: "/p/"}
-	got, body, err := decodeAsk(q.encode([]byte(`{"a":1}`)))
+	framed, err := q.encode([]byte(`{"a":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, body, err := decodeAsk(framed)
 	if err != nil || string(body) != `{"a":1}` || got.Target != q.Target || got.Header.Get("Content-Type") != "application/json" {
 		t.Fatalf("%+v %q %v", got, body, err)
 	}
@@ -607,6 +615,16 @@ func TestUIAskRoundTrips(t *testing.T) {
 	}
 	if _, _, err := decodeAsk([]byte{0, 0, 0, 200, '{'}); err == nil {
 		t.Fatal("an ask shorter than it says was read")
+	}
+}
+
+func TestAFrameWithAHeadOverTheLimitIsRefused(t *testing.T) {
+	q := uiAsk{Method: "GET", Target: "/" + strings.Repeat("a", maxFrameHead)}
+	if _, err := frame(q, nil); err == nil {
+		t.Fatal("a head over the limit was framed")
+	}
+	if _, err := frame(uiAsk{Method: "GET", Target: "/"}, make([]byte, 64)); err != nil {
+		t.Fatalf("a small frame was refused: %v", err)
 	}
 }
 

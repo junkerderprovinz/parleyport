@@ -73,7 +73,14 @@ const (
 	maxUIAnswer = 4 << 20
 	// packFrom is the size from which text is packed before it travels.
 	packFrom = 1 << 10
+	// maxFrameHead and maxFrameBody lie far above anything a call carries.
+	// They keep a frame's length within its four bytes and its size within
+	// an int on 32-bit platforms as well.
+	maxFrameHead = 4 << 20
+	maxFrameBody = 1 << 30
 )
+
+var errFrameTooLarge = errors.New("fortress: a frame too large to send")
 
 var (
 	jarPattern    = regexp.MustCompile(`^[0-9a-f]{32}$`)
@@ -124,10 +131,16 @@ type uiAnswer struct {
 	Header http.Header `json:"header,omitempty"`
 }
 
-func frame(head any, body []byte) []byte {
-	h, _ := json.Marshal(head)
+func frame(head any, body []byte) ([]byte, error) {
+	h, err := json.Marshal(head)
+	if err != nil {
+		return nil, err
+	}
+	if len(h) > maxFrameHead || len(body) > maxFrameBody {
+		return nil, errFrameTooLarge
+	}
 	out := binary.BigEndian.AppendUint32(make([]byte, 0, 4+len(h)+len(body)), uint32(len(h)))
-	return append(append(out, h...), body...)
+	return append(append(out, h...), body...), nil
 }
 
 func unframe(raw []byte, head any) ([]byte, error) {
@@ -144,7 +157,7 @@ func unframe(raw []byte, head any) ([]byte, error) {
 	return raw[4+n:], nil
 }
 
-func (q uiAsk) encode(body []byte) []byte { return frame(q, body) }
+func (q uiAsk) encode(body []byte) ([]byte, error) { return frame(q, body) }
 
 func decodeAsk(raw []byte) (uiAsk, []byte, error) {
 	var q uiAsk
@@ -270,8 +283,13 @@ func (f *Fortress) serveUI(w http.ResponseWriter, r *http.Request, caller string
 		writeError(w, http.StatusBadGateway, "bad_answer")
 		return
 	}
+	framed, err := frame(uiAnswer{Status: rec.code(), Header: header}, out)
+	if err != nil {
+		writeError(w, http.StatusRequestEntityTooLarge, "too_large")
+		return
+	}
 	w.Header().Set("Content-Type", "application/octet-stream")
-	_, _ = w.Write(frame(uiAnswer{Status: rec.code(), Header: header}, out))
+	_, _ = w.Write(framed)
 }
 
 // pack compresses text the handler left as it was, when the browser takes
