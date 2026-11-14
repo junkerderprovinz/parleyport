@@ -2,6 +2,12 @@
 
 Every version of the kit, written by hand. The kit is versioned apart from the server, with tags of the form `kit/vX.Y.Z`. What changed in the relay itself is in the [server's release notes](https://github.com/junkerderprovinz/parleyport/releases).
 
+## Unreleased
+
+## 🐛 Fixed
+
+- **golang.org/x/net 0.62.0.** The kit asked for 0.44.0, which Dependabot flags for a denial of service in its HTML parser (CVE-2026-25680). The kit never calls that parser, but an app gets the fixed version without pinning it itself.
+
 ## 1.0.0 - 2026-11-14
 
 The first version: everything an app needs to pair its instances, join a fortress and talk to the rest of the household.
