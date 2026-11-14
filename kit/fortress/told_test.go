@@ -82,14 +82,14 @@ func TestAPluginThatKnowsOnlyPluginsThatMovedIsToldThePhraseChanged(t *testing.T
 	url := relayServer(t)
 	a := open(t, "alpha", "alpha-1", setup{relay: url})
 	b := open(t, "bravo", "bravo-1", setup{relay: url})
-	s, dir := openPlugin(t, url, "shiplog", "tower", false)
+	s, dir := openPlugin(t, url, "ledger", "tower", false)
 	for _, n := range []*node{a, b, s} {
 		waitFor(t, n.name+" to see everybody", func() bool { return len(n.f.Members()) == 2 })
 	}
 	meet(t, a, s)
 	// The plugin joins while the instances that hold the phrase are away.
 	closeAll(t, a, b)
-	p := openKeysOnly(t, url, "firesquire", "firesquire-1", Domain.Keys(testSecret))
+	p := openKeysOnly(t, url, "guard", "guard-1", Domain.Keys(testSecret))
 	meet(t, s, p)
 	closeAll(t, p)
 	a.f = reopen(t, a, setup{relay: url})
@@ -111,7 +111,7 @@ func TestAPluginThatFollowedAnswersTheOldKeysForThirtyDays(t *testing.T) {
 	url := relayServer(t)
 	a := open(t, "alpha", "alpha-1", setup{relay: url})
 	b := open(t, "bravo", "bravo-1", setup{relay: url})
-	s, dir := openPlugin(t, url, "shiplog", "tower", false)
+	s, dir := openPlugin(t, url, "ledger", "tower", false)
 	for _, n := range []*node{a, b, s} {
 		waitFor(t, n.name+" to see everybody", func() bool { return len(n.f.Members()) == 2 })
 	}
@@ -151,8 +151,8 @@ func TestOnTheOldKeysAMovedPluginTellsOnlyItsMembersThatThePhraseChanged(t *test
 	url := relayServer(t)
 	a := open(t, "alpha", "alpha-1", setup{relay: url})
 	b := open(t, "bravo", "bravo-1", setup{relay: url})
-	s, dir := openPlugin(t, url, "shiplog", "tower", false)
-	p := openKeysOnly(t, url, "firesquire", "firesquire-1", Domain.Keys(testSecret))
+	s, dir := openPlugin(t, url, "ledger", "tower", false)
+	p := openKeysOnly(t, url, "guard", "guard-1", Domain.Keys(testSecret))
 	out := openKeysOnly(t, url, "watcher", "watcher-out", Domain.Keys(testSecret))
 	for _, n := range []*node{a, b, s, p, out} {
 		waitFor(t, n.name+" to see everybody", func() bool { return len(n.f.Members()) == 4 })
@@ -218,7 +218,7 @@ func changing(t *testing.T, url string, n *node) (*relay.Client, *atomic.Int32) 
 func TestOnlyAMemberOfTheBookCanSayThePhraseChanged(t *testing.T) {
 	url := relayServer(t)
 	a := open(t, "alpha", "alpha-1", setup{relay: url})
-	p := openKeysOnly(t, url, "firesquire", "firesquire-1", Domain.Keys(testSecret))
+	p := openKeysOnly(t, url, "guard", "guard-1", Domain.Keys(testSecret))
 	out := openKeysOnly(t, url, "watcher", "watcher-out", Domain.Keys(testSecret))
 	for _, n := range []*node{a, p, out} {
 		waitFor(t, n.name+" to see everybody", func() bool { return len(n.f.Members()) == 2 })
@@ -246,7 +246,7 @@ func TestOnlyAMemberOfTheBookCanSayThePhraseChanged(t *testing.T) {
 
 func TestBeingToldThePhraseChangedOnlyAsksForTheNewWords(t *testing.T) {
 	url := relayServer(t)
-	p := openKeysOnly(t, url, "firesquire", "firesquire-1", Domain.Keys(testSecret))
+	p := openKeysOnly(t, url, "guard", "guard-1", Domain.Keys(testSecret))
 	w := openKeysOnly(t, url, "watcher", "watcher-1", Domain.Keys(testSecret))
 	meet(t, p, w)
 	closeAll(t, w)
@@ -298,7 +298,7 @@ func TestAnInstanceOnThisNetworkAloneHearsFromAPluginThatMoved(t *testing.T) {
 	a := open(t, "alpha", "alpha-1", setup{lan: network(), noPair: true})
 	b := open(t, "bravo", "bravo-1", setup{relay: url})
 	c := open(t, "charlie", "charlie-1", setup{relay: url})
-	s, dir := openPlugin(t, url, "shiplog", "tower", true)
+	s, dir := openPlugin(t, url, "ledger", "tower", true)
 	waitFor(t, "alpha to reach the plugin on this network", func() bool { m, _ := memberOf(a.f, s.id); return m.Direct })
 	meet(t, a, s)
 	meet(t, b, s)
