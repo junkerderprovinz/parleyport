@@ -525,7 +525,9 @@ func (f *Fortress) startSocket(ctx context.Context, s *stream, target string, he
 	}
 	dial, cancel := context.WithTimeout(ctx, startFor)
 	defer cancel()
-	c, res, err := websocket.Dial(dial, "ws://fortress"+target, &websocket.DialOptions{
+	// target starts with a slash, which the fixed prefix already ends with,
+	// so nothing a member asks for can change the host.
+	c, res, err := websocket.Dial(dial, "ws://fortress/"+strings.TrimPrefix(target, "/"), &websocket.DialOptions{
 		HTTPClient: &http.Client{Transport: &http.Transport{
 			DialContext: func(context.Context, string, string) (net.Conn, error) { return client, nil },
 		}},

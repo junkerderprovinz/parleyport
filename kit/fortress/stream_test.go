@@ -41,6 +41,15 @@ func live(ui *UI) *UI {
 			}
 		}
 	})
+	mux.HandleFunc("GET /where-ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer func() { _ = c.CloseNow() }()
+		_ = c.Write(r.Context(), websocket.MessageText, []byte(r.Host+" "+r.URL.RequestURI()))
+		_, _, _ = c.Read(r.Context())
+	})
 	mux.HandleFunc("GET /big-ws", func(w http.ResponseWriter, r *http.Request) {
 		c, err := websocket.Accept(w, r, nil)
 		if err != nil {
@@ -118,6 +127,18 @@ func TestAWebsocketOfTheOpenedAppWorksThroughTheRelay(t *testing.T) {
 		if err != nil || typ != websocket.MessageText || string(got) != "echo "+msg {
 			t.Fatalf("read %v %q %v", typ, got[:min(len(got), 20)], err)
 		}
+	}
+}
+
+func TestAWebsocketReachesTheOpenedAppAtThePathAndQueryThePageAsked(t *testing.T) {
+	_, _, path, br := liveOpening(t)
+	c, err := dialThrough(t, br, path+"/where-ws?x=1&y=%2F%2Fother")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, got, err := c.Read(ctx(t))
+	if err != nil || string(got) != " /where-ws?x=1&y=%2F%2Fother" {
+		t.Fatalf("the app saw %q, %v", got, err)
 	}
 }
 
