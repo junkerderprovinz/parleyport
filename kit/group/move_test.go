@@ -217,12 +217,20 @@ func TestAGroupForTheVouchedAloneShowsAStrangerNothing(t *testing.T) {
 		return id == bravo.ID() && bytes.Equal(key, bravo.Public())
 	}})
 	b := open(t, "bravo", setup{relay: url, byPhrase: true})
-	c := open(t, "charlie", setup{relay: url, byPhrase: true})
 	waitFor(t, "bravo to see alpha", func() bool { m, _ := memberOf(b.g, a.id); return m.Relay })
 
 	if status, body, err := call(t, b, a, http.MethodGet, "/api/whoami", nil); err != nil || status != http.StatusOK {
 		t.Errorf("bravo, vouched for, calls alpha = %d %s %v, want it served", status, body, err)
 	}
+	if m, ok := memberOf(b.g, a.id); !ok || !m.Relay {
+		t.Errorf("bravo lists alpha as %+v, want it reachable", m)
+	}
+	// Bravo passes on whom it knows, alpha too, which is not alpha showing
+	// itself, so charlie meets alpha alone.
+	if err := b.g.Close(); err != nil {
+		t.Fatal(err)
+	}
+	c := open(t, "charlie", setup{relay: url, byPhrase: true})
 	var status int
 	var body []byte
 	waitFor(t, "alpha to answer charlie", func() bool {
@@ -236,9 +244,6 @@ func TestAGroupForTheVouchedAloneShowsAStrangerNothing(t *testing.T) {
 		t.Errorf("alpha lists charlie as %q, want its key not pinned", m.State)
 	}
 	waitFor(t, "charlie to list alpha no more", func() bool { _, ok := memberOf(c.g, a.id); return !ok })
-	if m, ok := memberOf(b.g, a.id); !ok || !m.Relay {
-		t.Errorf("bravo lists alpha as %+v, want it reachable", m)
-	}
 	if err := c.g.Close(); err != nil {
 		t.Fatal(err)
 	}
