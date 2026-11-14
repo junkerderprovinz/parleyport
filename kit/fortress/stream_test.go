@@ -47,7 +47,7 @@ func live(ui *UI) *UI {
 			return
 		}
 		defer func() { _ = c.CloseNow() }()
-		_ = c.Write(r.Context(), websocket.MessageText, []byte(r.Host+" "+r.URL.RequestURI()))
+		_ = c.Write(r.Context(), websocket.MessageText, []byte(r.URL.RequestURI()))
 		_, _, _ = c.Read(r.Context())
 	})
 	mux.HandleFunc("GET /big-ws", func(w http.ResponseWriter, r *http.Request) {
@@ -137,7 +137,7 @@ func TestAWebsocketReachesTheOpenedAppAtThePathAndQueryThePageAsked(t *testing.T
 		t.Fatal(err)
 	}
 	_, got, err := c.Read(ctx(t))
-	if err != nil || string(got) != " /where-ws?x=1&y=%2F%2Fother" {
+	if err != nil || string(got) != "/where-ws?x=1&y=%2F%2Fother" {
 		t.Fatalf("the app saw %q, %v", got, err)
 	}
 }

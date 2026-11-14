@@ -71,9 +71,12 @@ func TestAMemberOnTheNetworkIsCalledDirectly(t *testing.T) {
 func TestADirectCallGoesToTheDirectPathWhateverQueryTheAddressCarries(t *testing.T) {
 	a, b := onOneNetwork(t, setup{})
 	meet(t, a, b)
-	asked := make(chan string, 4)
+	asked := make(chan string, 1)
 	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		asked <- r.URL.RequestURI()
+		select {
+		case asked <- r.URL.RequestURI():
+		default:
+		}
 		http.NotFound(w, r)
 	}))
 	t.Cleanup(elsewhere.Close)
