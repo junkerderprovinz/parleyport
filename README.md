@@ -77,7 +77,7 @@ If it has earned a place on your server or computer, toss a coin to your knight:
 
 <p><a id="3-what-it-looks-like" href="#3-what-it-looks-like"><picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/sections/3-what-it-looks-like-dark.svg"><img src=".github/assets/sections/3-what-it-looks-like.svg" alt="3. What it looks like" width="100%"></picture></a></p>
 
-ParleyPort has no web page of its own. What you see of it is the relay setting in your apps and the container's log.
+Its address shows a short page that says what it is, and that is all of ParleyPort a browser sees. The rest is the relay setting in your apps and the container's log.
 
 <p align="center">
   <img src=".github/assets/screenshots/parleyport-1.png" alt="An app's relay settings with Own relay selected and the address of a ParleyPort relay filled in" width="100%">
