@@ -155,18 +155,12 @@ func (s *Service) Start() {
 	}
 	// The standard library joins on one interface only and turns loopback
 	// off, which on a host with several networks delivered nothing at all.
+	// A join on the interface it already took fails, and in a container with
+	// one network that is the only interface there is.
 	p := ipv4.NewPacketConn(c)
 	_ = p.SetMulticastLoopback(true)
-	joined := 0
-	for _, ifc := range multicastInterfaces() {
-		if p.JoinGroup(&ifc, addr) == nil {
-			joined++
-		}
-	}
-	if joined == 0 {
-		_ = p.Close()
-		close(s.done)
-		return
+	for _, ifc := range interfaces() {
+		_ = p.JoinGroup(&ifc, addr)
 	}
 	s.mu.Lock()
 	if s.closing {
@@ -289,7 +283,7 @@ func (s *Service) announce(conn *ipv4.PacketConn, addr *net.UDPAddr) {
 	}
 	// Out of every interface, since on a NAS with a Docker bridge the routing
 	// table can pick the wrong one.
-	for _, ifc := range multicastInterfaces() {
+	for _, ifc := range interfaces() {
 		if conn.SetMulticastInterface(&ifc) == nil {
 			_, _ = conn.WriteTo(payload, nil, addr)
 		}
@@ -347,6 +341,9 @@ func (s *Service) Observe(p Peer) {
 	}
 	into[p.ID] = p
 }
+
+// interfaces lists the interfaces to join and announce on. Tests narrow it.
+var interfaces = multicastInterfaces
 
 func multicastInterfaces() []net.Interface {
 	ifs, err := net.Interfaces()
