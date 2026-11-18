@@ -39,6 +39,8 @@ func reopenKeysOnly(t *testing.T, n *node, url string, set keys.Set) *Fortress {
 // again under the new one. It returns the new secret.
 func changePhrase(t *testing.T, url string, a, b *node) []byte {
 	t.Helper()
+	// ChangePhrase hands the phrase only to the members it sees online.
+	waitFor(t, a.name+" to see "+b.name+" online", func() bool { m, ok := memberOf(a.f, b.id); return ok && m.Online() })
 	if _, err := a.f.ChangePhrase(ctx(t)); err != nil {
 		t.Fatal(err)
 	}
