@@ -330,6 +330,36 @@ func TestAGroupAsksBeforeItTakesInANewcomerByThePhrase(t *testing.T) {
 	}
 }
 
+func TestAMemberThatClosesWhileItAsksAboutANewcomerDoesNotTurnItAway(t *testing.T) {
+	url := relayServer(t)
+	asking := make(chan struct{})
+	var once sync.Once
+	a := open(t, "alpha", setup{relay: url, byPhrase: true, noListener: true, mayJoin: func(ctx context.Context, _ string) bool {
+		once.Do(func() { close(asking) })
+		<-ctx.Done()
+		return false
+	}})
+	b := open(t, "bravo", setup{relay: url, byPhrase: true})
+	waitFor(t, "bravo to see alpha", func() bool { m, _ := memberOf(b.g, a.id); return m.Relay })
+	answered := make(chan struct{})
+	go func() {
+		defer close(answered)
+		_, _, _ = call(t, b, a, http.MethodGet, "/api/whoami", nil)
+	}()
+	select {
+	case <-asking:
+	case <-time.After(10 * time.Second):
+		t.Fatal("alpha never asked about bravo")
+	}
+	if err := a.g.Close(); err != nil {
+		t.Fatal(err)
+	}
+	<-answered
+
+	a.g = openGroup(t, a, setup{relay: url, byPhrase: true, noListener: true})
+	waitFor(t, "bravo to list alpha again", func() bool { m, _ := memberOf(b.g, a.id); return m.Relay })
+}
+
 func TestAGroupForTheVouchedAloneAsksOnEveryCallAndTakesNoDecisions(t *testing.T) {
 	url := relayServer(t)
 	bravo := identity(t, "bravo")

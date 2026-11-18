@@ -326,6 +326,11 @@ func (g *Group) admitCall(ctx context.Context, call relay.ProxyCall) (Caller, *r
 		return caller, r
 	}
 	if !g.mayJoin(ctx, call.From) {
+		// Cut short, as when this instance closes, MayJoin decided nothing,
+		// and a caller turned away as a stranger stops listing this one.
+		if ctx.Err() != nil {
+			return Caller{}, dropped
+		}
 		return Caller{}, strangerRefusal
 	}
 	return g.admit(call, relay.SourceOf(ctx), vouched, true, time.Now())

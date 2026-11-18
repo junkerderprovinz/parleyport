@@ -2,6 +2,12 @@
 
 Every version of the kit, written by hand. The kit is versioned apart from the server, with tags of the form `kit/vX.Y.Z`. What changed in the relay itself is in the [server's release notes](https://github.com/junkerderprovinz/parleyport/releases).
 
+## Unreleased
+
+## 🐛 Fixed
+
+- **A member that closes while it checks a newcomer no longer shuts that newcomer out.** It answered the call as if the group took nobody new on this phrase, and the newcomer stopped listing it for good, so two fortress instances that first met while one of them restarted could never learn each other's app. Such a call goes unanswered, and the newcomer tries again.
+
 ## 1.0.4 - 2026-11-18
 
 Notifications that say a problem is over, and a steadier MQTT bridge.
