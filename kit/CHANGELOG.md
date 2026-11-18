@@ -2,6 +2,12 @@
 
 Every version of the kit, written by hand. The kit is versioned apart from the server, with tags of the form `kit/vX.Y.Z`. What changed in the relay itself is in the [server's release notes](https://github.com/junkerderprovinz/parleyport/releases).
 
+## Unreleased
+
+## ✨ Added
+
+- **`notify.Event.Recovery` marks the news that a problem is over.** A channel set to failures only carries such an event whatever its severity, so whoever heard of the problem also hears that it ended. `cmd/notify send` reads it as `"recovery": true`.
+
 ## 1.0.3 - 2026-11-18
 
 A phrase change counts every member that took the new phrase.

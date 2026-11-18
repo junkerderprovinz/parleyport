@@ -34,8 +34,8 @@ type On string
 
 const (
 	OnNever On = "never"
-	// OnFailure carries warnings, failures and critical events. It is what an
-	// empty On means.
+	// OnFailure carries warnings, failures and critical events, and the
+	// recovery from them. It is what an empty On means.
 	OnFailure On = "failure"
 	OnAlways  On = "always"
 )

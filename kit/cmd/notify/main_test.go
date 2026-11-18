@@ -108,6 +108,18 @@ func TestSendSkipsGoodNewsOnAFailureChannel(t *testing.T) {
 	}
 }
 
+func TestSendDeliversARecoveryToAFailureChannel(t *testing.T) {
+	h := newHook(t, 200)
+	path := saved(t, webhook("a", h.URL, "failure"))
+	code, out, stderr := cli(t, `{"kind":"disk.ok","severity":"success","recovery":true,"title":"space again"}`, "send", "-channels", path)
+	if code != 0 {
+		t.Fatalf("send: %d %s %s", code, out, stderr)
+	}
+	if got, _ := h.received(); len(got) != 1 {
+		t.Errorf("the channel got %q, want the recovery", got)
+	}
+}
+
 func TestSendWithoutChannelsSendsNothing(t *testing.T) {
 	code, out, stderr := cli(t, `{"severity":"failure","title":"x"}`, "send", "-channels", filepath.Join(t.TempDir(), "none.json"))
 	if code != 0 || strings.TrimSpace(out) != "[]" {

@@ -165,6 +165,7 @@ func dispatch(ctx context.Context, args []string, stdin io.Reader, stdout io.Wri
 type event struct {
 	Kind     string            `json:"kind"`
 	Severity notify.Severity   `json:"severity"`
+	Recovery bool              `json:"recovery"`
 	Title    string            `json:"title"`
 	Body     string            `json:"body"`
 	HTML     string            `json:"html"`
@@ -179,7 +180,7 @@ type event struct {
 }
 
 func (e event) notify() notify.Event {
-	n := notify.Event{Kind: e.Kind, Severity: e.Severity, Title: e.Title, Body: e.Body, HTML: e.HTML,
+	n := notify.Event{Kind: e.Kind, Severity: e.Severity, Recovery: e.Recovery, Title: e.Title, Body: e.Body, HTML: e.HTML,
 		Link: e.Link, Key: e.Key, Ping: e.Ping, Fields: e.Fields}
 	for _, f := range e.Facts {
 		n.Facts = append(n.Facts, notify.Fact{Name: f.Name, Value: f.Value})
