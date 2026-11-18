@@ -9,6 +9,19 @@ Every version of the kit, written by hand. The kit is versioned apart from the s
 - **Home Assistant shows the device again after a quick reconnect.** When the broker sent the will of a dropped connection only after `mqttha` had reconnected, the device stayed unavailable until the next reconnect. The bridge answers that late `offline` with `online`.
 - **`mqttha` reports the connection right after a reconnect.** A lost connection that paho reported only once the reconnect stood left `Bridge.Status` at `lost` while the bridge was connected.
 
+## 1.0.3 - 2026-11-18
+
+A phrase change counts every member that took the new phrase.
+
+**Adopting apps:**
+
+- **Moving up:** `go get github.com/junkerderprovinz/parleyport/kit@v1.0.3`. Nothing in the API changes.
+- **Plugins:** nothing to do. `cmd/fortress` and `cmd/notify` work as in ParleyPort 1.2.3.
+
+## 🐛 Fixed
+
+- **A member whose answer gets lost during a phrase change still counts as having taken it.** `ChangePhrase` handed the new phrase to each member once, so a member whose answer never came back was reported as left although it held the new phrase. The hand-over is tried twice more after a short pause, and a member answers a change it already took without keeping the phrase again.
+
 ## 1.0.2 - 2026-11-18
 
 Local network discovery on hosts with one network interface.
