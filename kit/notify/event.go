@@ -73,6 +73,10 @@ type Event struct {
 	// channel's Events list matches it.
 	Kind     string
 	Severity Severity
+	// Recovery marks the news that a problem is over. A channel with On
+	// "failure" carries it whatever its severity, so whoever heard of the
+	// problem also hears that it ended.
+	Recovery bool
 	Title    string
 	Body     string
 	// HTML is the body as HTML for Matrix, which shows it in place of Body.

@@ -124,7 +124,7 @@ func (d *Dispatcher) Send(ctx context.Context, e Event) []Result {
 		case OnAlways:
 			return true
 		case OnFailure:
-			return e.Severity.bad()
+			return e.Severity.bad() || e.Recovery
 		default:
 			return false
 		}

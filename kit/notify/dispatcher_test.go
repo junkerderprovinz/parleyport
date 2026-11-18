@@ -62,6 +62,28 @@ func TestDispatcher_Send_FollowsOnAndSeverity(t *testing.T) {
 	}
 }
 
+func TestDispatcher_Send_TakesARecoveryToAFailureChannel(t *testing.T) {
+	rec := newRecorder(t, nil)
+	chs := []notify.Channel{
+		slack("always", rec.URL+"/always", notify.OnAlways),
+		slack("failure", rec.URL+"/failure", notify.OnFailure),
+		slack("default", rec.URL+"/default", ""),
+		slack("never", rec.URL+"/never", notify.OnNever),
+	}
+	d, _ := dispatcher(t, chs, notify.Options{})
+
+	var got []string
+	for _, r := range d.Send(t.Context(), notify.Event{Severity: notify.SeveritySuccess, Recovery: true, Title: "back"}) {
+		if !r.OK() {
+			t.Errorf("%s: %v", r.Channel, r.Err)
+		}
+		got = append(got, r.Channel)
+	}
+	if strings.Join(got, ",") != "always,failure,default" {
+		t.Errorf("a recovery went to %v, want every channel but the one switched to never", got)
+	}
+}
+
 func TestDispatcher_Send_HonoursEvents(t *testing.T) {
 	rec := newRecorder(t, nil)
 	ch := slack("s", rec.URL, notify.OnAlways)

@@ -4,6 +4,10 @@ Every version of the kit, written by hand. The kit is versioned apart from the s
 
 ## Unreleased
 
+## ✨ Added
+
+- **`notify.Event.Recovery` marks the news that a problem is over.** A channel set to failures only carries such an event whatever its severity, so whoever heard of the problem also hears that it ended. `cmd/notify send` reads it as `"recovery": true`.
+
 ## 🐛 Fixed
 
 - **Home Assistant shows the device again after a quick reconnect.** When the broker sent the will of a dropped connection only after `mqttha` had reconnected, the device stayed unavailable until the next reconnect. The bridge answers that late `offline` with `online`.
