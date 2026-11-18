@@ -146,7 +146,7 @@ func (f *Fortress) ChangePhrase(ctx context.Context) ([]string, error) {
 			continue
 		}
 		wg.Go(func() {
-			if f.handPhrase(ctx, m.ID, p) == nil {
+			if f.handPhraseAgain(ctx, m.ID, p) == nil {
 				mu.Lock()
 				took = append(took, m.ID)
 				mu.Unlock()
@@ -156,6 +156,30 @@ func (f *Fortress) ChangePhrase(ctx context.Context) ([]string, error) {
 	wg.Wait()
 	sort.Strings(took)
 	return took, nil
+}
+
+// handAgainAfter are the pauses before handing the new phrase to a member
+// once more. An answer lost on the way back leaves a member that took the
+// phrase looking as if it had not, and a member takes the same change again
+// without keeping it twice.
+var handAgainAfter = []time.Duration{250 * time.Millisecond, time.Second}
+
+// handPhraseAgain is handPhrase, tried again after each pause in
+// handAgainAfter until member id took p.
+func (f *Fortress) handPhraseAgain(ctx context.Context, id string, p newPhrase) error {
+	err := f.handPhrase(ctx, id, p)
+	for _, wait := range handAgainAfter {
+		if err == nil {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(wait):
+		}
+		err = f.handPhrase(ctx, id, p)
+	}
+	return err
 }
 
 // handPhrase hands member id p to take: it asks id for a one-off key and
