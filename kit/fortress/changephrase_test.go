@@ -114,6 +114,25 @@ func TestWhatChangePhraseSendsOpensOnlyForTheMemberItWentTo(t *testing.T) {
 	}
 }
 
+func TestAMemberWhoseAnswerGetsLostStillCountsAsHavingTakenThePhrase(t *testing.T) {
+	url := relayServer(t)
+	a := open(t, "alpha", "alpha-1", setup{relay: url})
+	b := open(t, "bravo", "bravo-1", setup{relay: url})
+	waitFor(t, "alpha to see bravo online", func() bool { m, ok := memberOf(a.f, b.id); return ok && m.Online() })
+	b.loseKeptAnswer.Store(true)
+
+	moved, err := a.f.ChangePhrase(ctx(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(moved, []string{b.id}) {
+		t.Errorf("the new phrase reached %v, want bravo, which took it", moved)
+	}
+	if got := b.keptCount(); got != 1 || !bytes.Equal(b.lastKept(), a.lastKept()) {
+		t.Errorf("bravo kept %d secrets, want the new phrase once", got)
+	}
+}
+
 func TestChangePhraseSendsNothingToAMemberTakenOut(t *testing.T) {
 	url := relayServer(t)
 	a := open(t, "alpha", "alpha-1", setup{relay: url})

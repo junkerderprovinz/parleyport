@@ -99,6 +99,9 @@ type node struct {
 	removed   atomic.Int32
 	// current is the fortress the server hands direct calls to.
 	current atomic.Pointer[Fortress]
+	// loseKeptAnswer drops the answer to the next direct call that has the
+	// app keep a secret, after the app kept it.
+	loseKeptAnswer atomic.Bool
 
 	mu      sync.Mutex
 	dropped []string
@@ -120,6 +123,12 @@ func (n *node) lastKept() []byte {
 		return nil
 	}
 	return n.kept[len(n.kept)-1]
+}
+
+func (n *node) keptCount() int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return len(n.kept)
 }
 
 func (n *node) drops() []string {
@@ -161,7 +170,21 @@ func open(t *testing.T, app, name string, s setup) *node {
 	n := &node{name: name, app: app, id: identity(t, name).ID(), store: &memStore{}, pairStore: &memStore{}}
 	n.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if f := n.current.Load(); f != nil && r.URL.Path == group.DirectPath {
-			f.DirectHandler().ServeHTTP(w, r)
+			if !n.loseKeptAnswer.Load() {
+				f.DirectHandler().ServeHTTP(w, r)
+				return
+			}
+			before := n.keptCount()
+			rec := httptest.NewRecorder()
+			f.DirectHandler().ServeHTTP(rec, r)
+			if n.keptCount() > before && n.loseKeptAnswer.CompareAndSwap(true, false) {
+				panic(http.ErrAbortHandler)
+			}
+			for k, v := range rec.Header() {
+				w.Header()[k] = v
+			}
+			w.WriteHeader(rec.Code)
+			_, _ = w.Write(rec.Body.Bytes())
 			return
 		}
 		http.NotFound(w, r)

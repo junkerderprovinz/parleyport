@@ -297,6 +297,14 @@ func (f *Fortress) takePhrase(w http.ResponseWriter, r *http.Request, from strin
 		writeError(w, http.StatusBadRequest, "bad_request")
 		return
 	}
+	// The answer to an earlier hand-over of this change may have been lost.
+	f.mu.Lock()
+	taken := f.book.Next != nil && f.book.Next.Changed.Equal(p.Changed)
+	f.mu.Unlock()
+	if taken {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	if err := f.takeNew(p, false); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request")
 		return
