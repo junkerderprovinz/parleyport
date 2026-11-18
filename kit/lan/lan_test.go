@@ -232,6 +232,51 @@ func TestMembersAreSortedByName(t *testing.T) {
 	}
 }
 
+// systemInterface is the interface the system sends to cfg's group on, which
+// is where the standard library joins it.
+func systemInterface(t *testing.T, cfg Config) net.Interface {
+	t.Helper()
+	c, err := net.DialUDP("udp4", nil, net.UDPAddrFromAddrPort(cfg.Group))
+	if err != nil {
+		t.Skipf("this host has no route to a multicast group: %v", err)
+	}
+	local := c.LocalAddr().(*net.UDPAddr).IP
+	_ = c.Close()
+	for _, ifc := range multicastInterfaces() {
+		addrs, _ := ifc.Addrs()
+		for _, a := range addrs {
+			if n, ok := a.(*net.IPNet); ok && n.IP.Equal(local) {
+				return ifc
+			}
+		}
+	}
+	t.Skipf("no multicast interface holds %s", local)
+	return net.Interface{}
+}
+
+// A container on a bridge network has that one interface only.
+func TestMembersOnAHostWithOneNetworkFindEachOther(t *testing.T) {
+	cfg := testConfig(t)
+	only := systemInterface(t, cfg)
+	was := interfaces
+	interfaces = func() []net.Interface { return []net.Interface{only} }
+	t.Cleanup(func() { interfaces = was })
+
+	a, b := New(cfg), New(cfg)
+	a.SetAccept(tagged)
+	b.SetAccept(tagged)
+	a.SetSelf(Peer{ID: idOf("a"), URL: "https://192.168.1.10:3443"}, sign)
+	b.SetSelf(Peer{ID: idOf("b"), URL: "https://192.168.1.11:3443"}, sign)
+	for _, s := range []*Service{a, b} {
+		s.Start()
+		t.Cleanup(func() { _ = s.Close() })
+		if !s.listening() {
+			t.Fatalf("Start on %s alone left the service deaf", only.Name)
+		}
+	}
+	waitFor(t, "both to see each other", func() bool { return len(a.Members()) == 1 && len(b.Members()) == 1 })
+}
+
 func TestCloseWithoutStartReturns(t *testing.T) {
 	s := New(Config{})
 	done := make(chan struct{})
