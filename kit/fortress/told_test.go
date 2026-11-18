@@ -220,6 +220,8 @@ func TestOnTheOldKeysAMovedPluginTellsOnlyItsMembersThatThePhraseChanged(t *test
 	for _, n := range []*node{a, b, s, p, out} {
 		waitFor(t, n.name+" to see everybody", func() bool { return len(n.f.Members()) == 4 })
 	}
+	// A member first heard of after a removal is handed no new phrase.
+	meet(t, a, b)
 	meet(t, a, s)
 	meet(t, s, p)
 	if err := a.f.Remove(out.id); err != nil {
