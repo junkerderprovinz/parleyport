@@ -2,7 +2,14 @@
 
 Every version of the kit, written by hand. The kit is versioned apart from the server, with tags of the form `kit/vX.Y.Z`. What changed in the relay itself is in the [server's release notes](https://github.com/junkerderprovinz/parleyport/releases).
 
-## Unreleased
+## 1.0.4 - 2026-11-18
+
+Notifications that say a problem is over, and a steadier MQTT bridge.
+
+**Adopting apps:**
+
+- **Moving up:** `go get github.com/junkerderprovinz/parleyport/kit@v1.0.4`. `notify.Event` gains the field `Recovery`, and existing code builds unchanged.
+- **Plugins:** take `cmd/fortress` and `cmd/notify` from ParleyPort 1.3.0. A plugin that kept a second channel for the all-clear can drop it.
 
 ## ✨ Added
 
@@ -10,8 +17,8 @@ Every version of the kit, written by hand. The kit is versioned apart from the s
 
 ## 🐛 Fixed
 
-- **Home Assistant shows the device again after a quick reconnect.** When the broker sent the will of a dropped connection only after `mqttha` had reconnected, the device stayed unavailable until the next reconnect. The bridge answers that late `offline` with `online`.
-- **`mqttha` reports the connection right after a reconnect.** A lost connection that paho reported only once the reconnect stood left `Bridge.Status` at `lost` while the bridge was connected.
+- **`mqttha` keeps the device available after a quick reconnect.** When the broker published the will of a dropped connection only after the bridge had reconnected, the device stayed unavailable until the next reconnect. The bridge answers that late `offline` with `online`.
+- **`mqttha` reports the connection right after a reconnect.** A lost connection that the MQTT client reported only once the reconnect stood left `Bridge.Status` at `lost` while the bridge was connected.
 
 ## 1.0.3 - 2026-11-18
 
