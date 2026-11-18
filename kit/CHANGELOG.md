@@ -2,7 +2,14 @@
 
 Every version of the kit, written by hand. The kit is versioned apart from the server, with tags of the form `kit/vX.Y.Z`. What changed in the relay itself is in the [server's release notes](https://github.com/junkerderprovinz/parleyport/releases).
 
-## Unreleased
+## 1.0.5 - 2026-11-19
+
+A member that closes while it checks a newcomer no longer shuts that newcomer out.
+
+**Adopting apps:**
+
+- **Moving up:** `go get github.com/junkerderprovinz/parleyport/kit@v1.0.5`. Nothing else changes.
+- **Plugins:** take `cmd/fortress` and `cmd/notify` from ParleyPort 1.3.1.
 
 ## 🐛 Fixed
 
