@@ -13,10 +13,11 @@ func TestAMemberThatLeavesIsGoneFromTheFortressAndThePairing(t *testing.T) {
 	meet(t, a1, a2)
 	meet(t, a1, b)
 	meet(t, a2, b)
+	// A leave goes only to the members alpha-2 sees online in each group.
 	waitFor(t, "the pairing to follow the fortress", func() bool {
 		p1, _ := pairedWith(a1.f.Pairing(), a2.id)
 		p2, _ := pairedWith(a2.f.Pairing(), a1.id)
-		return p1.State == group.StateApproved && p2.State == group.StateApproved
+		return p1.State == group.StateApproved && p2.State == group.StateApproved && p2.Online()
 	})
 
 	a2.f.Leave()
