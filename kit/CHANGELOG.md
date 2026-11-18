@@ -27,7 +27,7 @@ A phrase change counts every member that took the new phrase.
 **Adopting apps:**
 
 - **Moving up:** `go get github.com/junkerderprovinz/parleyport/kit@v1.0.3`. Nothing in the API changes.
-- **Plugins:** nothing to do. `cmd/fortress` and `cmd/notify` work as in ParleyPort 1.2.3.
+- **Plugins:** nothing to do. `cmd/fortress` and `cmd/notify` work as in ParleyPort 1.3.0.
 
 ## 🐛 Fixed
 
@@ -40,7 +40,7 @@ Local network discovery on hosts with one network interface.
 **Adopting apps:**
 
 - **Moving up:** `go get github.com/junkerderprovinz/parleyport/kit@v1.0.2`. Nothing in the API changes.
-- **Plugins:** take `cmd/fortress` and `cmd/notify` from ParleyPort 1.2.3.
+- **Plugins:** take `cmd/fortress` and `cmd/notify` from ParleyPort 1.3.0.
 
 ## ⚡ Improved
 
@@ -57,7 +57,7 @@ Security fixes for direct calls and fortress frames.
 **Adopting apps:**
 
 - **Moving up:** `go get github.com/junkerderprovinz/parleyport/kit@v1.0.1`. Nothing in the API changes.
-- **Plugins:** take `cmd/fortress` and `cmd/notify` from ParleyPort 1.2.1.
+- **Plugins:** take `cmd/fortress` and `cmd/notify` from ParleyPort 1.3.0.
 
 ## 🐛 Fixed
 
