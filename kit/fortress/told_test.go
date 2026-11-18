@@ -158,6 +158,9 @@ func TestAPluginStopsAnsweringTheOldKeysWhenTheThirtyDaysEndWhileItRuns(t *testi
 	for _, n := range []*node{a, b, s} {
 		waitFor(t, n.name+" to see everybody", func() bool { return len(n.f.Members()) == 2 })
 	}
+	// Only a member alpha approved before the change can follow it, and the
+	// plugin answers on the old keys only the members it approved.
+	meet(t, a, s)
 	movedAway(t, url, a, b, s, dir)
 	c := asker(t, url, a)
 	waitFor(t, "the plugin to answer on its old keys", func() bool {
