@@ -2,6 +2,23 @@
 
 Every version of the kit, written by hand. The kit is versioned apart from the server, with tags of the form `kit/vX.Y.Z`. What changed in the relay itself is in the [server's release notes](https://github.com/junkerderprovinz/parleyport/releases).
 
+## 1.0.2 - 2026-11-18
+
+Local network discovery on hosts with one network interface.
+
+**Adopting apps:**
+
+- **Moving up:** `go get github.com/junkerderprovinz/parleyport/kit@v1.0.2`. Nothing in the API changes.
+- **Plugins:** take `cmd/fortress` and `cmd/notify` from ParleyPort 1.2.3.
+
+## ⚡ Improved
+
+- **golang.org/x/net 0.63.0.**
+
+## 🐛 Fixed
+
+- **`lan` keeps listening on a host with one network interface.** `ListenMulticastUDP` already joins the group on the interface the system picks, so the second join there fails, and `Start` took that for no join at all and closed the socket. A container on a bridge network, or any host with a single network, neither heard the other members nor announced itself, and members met through the relay only.
+
 ## 1.0.1 - 2026-11-14
 
 Security fixes for direct calls and fortress frames.
