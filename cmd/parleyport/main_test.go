@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"slices"
 	"strings"
@@ -144,5 +146,34 @@ func TestTheRelayGoesByItsPublicAddressAndItsDomains(t *testing.T) {
 	}
 	if _, err := relayNames("https://", nil); err == nil {
 		t.Error("an address without a host was taken")
+	}
+}
+
+// Somebody who opens the relay's address in a browser should learn what it is,
+// not meet a bare "404 page not found".
+func TestTheRootSaysWhatTheRelayIs(t *testing.T) {
+	mux := newMux(http.NotFoundHandler())
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET / answered %d, want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Errorf("GET / is %q, want an HTML page", ct)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"ParleyPort", "https://github.com/junkerderprovinz/parleyport"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the page does not mention %q", want)
+		}
+	}
+}
+
+func TestAnUnknownPathStaysNotFound(t *testing.T) {
+	mux := newMux(http.NotFoundHandler())
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/wp-login.php", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("GET /wp-login.php answered %d, want 404", rec.Code)
 	}
 }

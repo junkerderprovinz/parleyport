@@ -127,7 +127,12 @@ func (g *Group) uploadTo(ctx context.Context, base, target, path string, body io
 		return nil
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(base, "/")+DirectPath, pr)
+	endpoint, err := directEndpoint(base)
+	if err != nil {
+		_ = settle()
+		return 0, nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, pr)
 	if err != nil {
 		_ = settle()
 		return 0, nil, err

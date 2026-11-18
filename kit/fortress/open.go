@@ -371,7 +371,12 @@ func (f *Fortress) tunnel(w http.ResponseWriter, r *http.Request, t *ticket, pat
 	}
 	prefix := tabPath(r, t)
 	ask := uiAsk{Method: r.Method, Target: target, Header: header, Jar: t.jar, Prefix: prefix + "/"}
-	status, out, err := f.group.Call(r.Context(), t.member, http.MethodPost, uiPath, ask.encode(body))
+	framed, err := ask.encode(body)
+	if err != nil {
+		f.refuse(w, r, http.StatusRequestEntityTooLarge, "too_large", words)
+		return
+	}
+	status, out, err := f.group.Call(r.Context(), t.member, http.MethodPost, uiPath, framed)
 	switch {
 	case errors.Is(err, group.ErrRemoved) || errors.Is(err, group.ErrNoSuchMember):
 		f.tickets.dropMember(t.member)

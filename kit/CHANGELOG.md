@@ -6,9 +6,41 @@ Every version of the kit, written by hand. The kit is versioned apart from the s
 
 ## 🐛 Fixed
 
-- **golang.org/x/net 0.62.0.** The kit asked for 0.44.0, which Dependabot flags for a denial of service in its HTML parser (CVE-2026-25680). The kit never calls that parser, but an app gets the fixed version without pinning it itself.
 - **Home Assistant shows the device again after a quick reconnect.** When the broker sent the will of a dropped connection only after `mqttha` had reconnected, the device stayed unavailable until the next reconnect. The bridge answers that late `offline` with `online`.
 - **`mqttha` reports the connection right after a reconnect.** A lost connection that paho reported only once the reconnect stood left `Bridge.Status` at `lost` while the bridge was connected.
+
+## 1.0.2 - 2026-11-18
+
+Local network discovery on hosts with one network interface.
+
+**Adopting apps:**
+
+- **Moving up:** `go get github.com/junkerderprovinz/parleyport/kit@v1.0.2`. Nothing in the API changes.
+- **Plugins:** take `cmd/fortress` and `cmd/notify` from ParleyPort 1.2.3.
+
+## ⚡ Improved
+
+- **golang.org/x/net 0.63.0.**
+
+## 🐛 Fixed
+
+- **`lan` keeps listening on a host with one network interface.** `ListenMulticastUDP` already joins the group on the interface the system picks, so the second join there fails, and `Start` took that for no join at all and closed the socket. A container on a bridge network, or any host with a single network, neither heard the other members nor announced itself, and members met through the relay only.
+
+## 1.0.1 - 2026-11-14
+
+Security fixes for direct calls and fortress frames.
+
+**Adopting apps:**
+
+- **Moving up:** `go get github.com/junkerderprovinz/parleyport/kit@v1.0.1`. Nothing in the API changes.
+- **Plugins:** take `cmd/fortress` and `cmd/notify` from ParleyPort 1.2.1.
+
+## 🐛 Fixed
+
+- **A direct call stays on `DirectPath`.** A query or fragment in an announced address used to swallow the path, so anyone holding the phrase could make a member post its call to any page of a host it reaches. `group` now puts only the address's own path in front of `DirectPath`.
+- **`fortress` checks a frame's head and body against the limit before it allocates them.** A part past the limit is refused instead of overflowing the size or the four-byte length on a 32-bit platform.
+- **The websocket of an opened page is dialed under a fixed host.** The target was already checked to be a path and the dial only reaches the app's own pipe. The host is now part of the constant prefix as well.
+- **golang.org/x/net 0.62.0**, with the fix for GHSA-5cv4-jp36-h3mw in the HTML parser.
 
 ## 1.0.0 - 2026-11-14
 

@@ -525,7 +525,9 @@ func (f *Fortress) startSocket(ctx context.Context, s *stream, target string, he
 	}
 	dial, cancel := context.WithTimeout(ctx, startFor)
 	defer cancel()
-	c, res, err := websocket.Dial(dial, "ws://fortress"+target, &websocket.DialOptions{
+	// target starts with a slash, which the fixed prefix already ends with,
+	// so nothing a member asks for can change the host.
+	c, res, err := websocket.Dial(dial, "ws://fortress/"+strings.TrimPrefix(target, "/"), &websocket.DialOptions{
 		HTTPClient: &http.Client{Transport: &http.Transport{
 			DialContext: func(context.Context, string, string) (net.Conn, error) { return client, nil },
 		}},
@@ -591,7 +593,11 @@ func (l *oneConn) Addr() net.Addr { return l.conn.LocalAddr() }
 
 // streamCall is one step of a live stream at member.
 func (f *Fortress) streamCall(ctx context.Context, member string, op streamOp, data []byte) (streamAnswer, error) {
-	status, out, err := f.group.Call(ctx, member, http.MethodPost, uiStreamPath, frame(op, data))
+	framed, err := frame(op, data)
+	if err != nil {
+		return streamAnswer{}, err
+	}
+	status, out, err := f.group.Call(ctx, member, http.MethodPost, uiStreamPath, framed)
 	if err != nil {
 		return streamAnswer{}, err
 	}

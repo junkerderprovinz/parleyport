@@ -58,6 +58,11 @@ import (
 	"github.com/junkerderprovinz/parleyport/internal/relay"
 )
 
+// landingPage answers a browser that opens the relay's address.
+//
+//go:embed landing.html
+var landingPage []byte
+
 // shutdownGrace bounds how long a graceful stop waits for connections. Nothing
 // here is mid-transfer, and a cut client reconnects and announces again.
 const shutdownGrace = 5 * time.Second
@@ -119,13 +124,7 @@ func main() {
 			r.SweepLimiter()
 		}
 	}()
-	mux := http.NewServeMux()
-	// Same shape as the app's GET /api/health, so one health check fits both.
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "version": buildinfo.Version})
-	})
-	mux.Handle("GET /relay/connect", r)
+	mux := newMux(r)
 
 	domain := ""
 	if len(domains) > 0 {
@@ -198,6 +197,23 @@ func main() {
 // version, which it has then printed. The relay is configured through the
 // environment, so any other flag or argument is refused rather than ignored
 // on the way to opening a public listener.
+// newMux routes the health check, the relay and the page at the root. Any
+// other path stays a 404.
+func newMux(relay http.Handler) *http.ServeMux {
+	mux := http.NewServeMux()
+	// Same shape as the app's GET /api/health, so one health check fits both.
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "version": buildinfo.Version})
+	})
+	mux.Handle("GET /relay/connect", relay)
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(landingPage)
+	})
+	return mux
+}
+
 func parseArgs(args []string, stdout, stderr io.Writer) (versionOnly bool, err error) {
 	fs := flag.NewFlagSet("parleyport", flag.ContinueOnError)
 	fs.SetOutput(stderr)
