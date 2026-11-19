@@ -87,16 +87,8 @@ paths:
     post:
       operationId: logout
       summary: End this session
-      description: Through the proxy, the answer names where the proxy signs out.
       responses:
-        "200":
-          description: Signed out.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  logout: { type: string }
+        "200": { $ref: "#/components/responses/Done" }
   /reset-code:
     post:
       operationId: resetCode
@@ -111,8 +103,8 @@ paths:
       summary: Set a new password with the code from the log
       description: |
         Ends every session and token, removes the owner's passkeys, second
-        factor and bindings to sign-in services and the proxy, and pauses
-        every service and the proxy. Each service needs a new test sign-in.
+        factor and bindings to sign-in services, and pauses every service.
+        Each service needs a new test sign-in.
       requestBody:
         required: true
         content:
@@ -136,13 +128,12 @@ paths:
                   visitor: { $ref: "#/components/schemas/Visitor" }
                   removed:
                     type: object
-                    required: [tokens, passkeys, twoFactor, services, proxy]
+                    required: [tokens, passkeys, twoFactor, services]
                     properties:
                       tokens: { type: integer }
                       passkeys: { type: integer }
                       twoFactor: { type: boolean }
                       services: { type: integer }
-                      proxy: { type: boolean }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
         "429": { $ref: "#/components/responses/Throttled" }
@@ -378,7 +369,7 @@ paths:
   /me/identities:
     get:
       operationId: getIdentities
-      summary: The sign-in services and proxy names that sign in as this account
+      summary: The sign-in services that sign in as this account
       responses:
         "200":
           description: The identities.
@@ -414,20 +405,6 @@ paths:
       responses:
         "200": { $ref: "#/components/responses/StartURL" }
         "403": { $ref: "#/components/responses/Error" }
-        "409": { $ref: "#/components/responses/Error" }
-  /me/identities/proxy:
-    post:
-      operationId: linkProxy
-      summary: Bind the name the proxy gives this request to this account
-      responses:
-        "200":
-          description: The name.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  name: { type: string }
         "409": { $ref: "#/components/responses/Error" }
   /me/tokens:
     get:
@@ -654,99 +631,6 @@ paths:
         "200": { $ref: "#/components/responses/StartURL" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
-  /methods/proxy:
-    get:
-      operationId: getProxy
-      summary: The trusted proxy
-      responses:
-        "200": { $ref: "#/components/responses/OneProxy" }
-    put:
-      operationId: setProxy
-      summary: Point the app at a proxy, which turns it off until it is turned on through itself
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [address, userHeader]
-              properties:
-                preset: { type: string }
-                address: { type: string, description: One address, never a range. }
-                userHeader: { type: string }
-                groupsHeader: { type: string }
-                secretHeader: { type: string }
-                logout: { type: string }
-      responses:
-        "200": { $ref: "#/components/responses/OneProxy" }
-        "400": { $ref: "#/components/responses/Error" }
-        "403": { $ref: "#/components/responses/Error" }
-        "409": { $ref: "#/components/responses/Error" }
-    patch:
-      operationId: switchProxy
-      summary: Turn the proxy on or off
-      description: |
-        On needs this very request to come through the proxy with its secret,
-        and the page sends probe as the user header itself: a proxy that
-        passes it on is refused.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [on]
-              properties:
-                on: { type: boolean }
-                probe: { type: string, minLength: 16 }
-      responses:
-        "200": { $ref: "#/components/responses/OneProxy" }
-        "400": { $ref: "#/components/responses/Error" }
-        "403": { $ref: "#/components/responses/Error" }
-        "409": { $ref: "#/components/responses/Error" }
-  /methods/proxy/secret:
-    post:
-      operationId: newProxySecret
-      summary: A new secret for the proxy to send, shown once
-      responses:
-        "200":
-          description: The settings and the secret.
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [proxy, secret]
-                properties:
-                  proxy: { $ref: "#/components/schemas/Proxy" }
-                  secret: { type: string }
-        "403": { $ref: "#/components/responses/Error" }
-  /methods/proxy/check:
-    post:
-      operationId: checkProxy
-      summary: What this request carried, for the live check on the card
-      requestBody:
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                probe: { type: string }
-      responses:
-        "200":
-          description: What the app saw.
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [from, viaProxy, secret, users, groups, passesClientHeader]
-                properties:
-                  from: { type: string }
-                  viaProxy: { type: boolean }
-                  secret: { type: boolean }
-                  users: { type: integer }
-                  user: { type: string }
-                  groups: { type: array, items: { type: string } }
-                  passesClientHeader: { type: boolean }
   /settings:
     get:
       operationId: getSettings
@@ -885,15 +769,6 @@ components:
               askPassword:
                 type: boolean
                 description: Before a change that wants a sign-in from moments ago, the app asks for the password instead of a new sign-in. On unless an admin turned it off.
-    OneProxy:
-      description: The proxy settings.
-      content:
-        application/json:
-          schema:
-            type: object
-            required: [proxy]
-            properties:
-              proxy: { $ref: "#/components/schemas/Proxy" }
   schemas:
     Error:
       type: object
@@ -909,8 +784,6 @@ components:
             - confirmOff
             - crossSite
             - forbidden
-            - headerInvalid
-            - identityTaken
             - internal
             - issuerInvalid
             - lastWayIn
@@ -930,11 +803,6 @@ components:
             - passwordLong
             - passwordSet
             - passwordShort
-            - probeMissing
-            - proxyAddressInvalid
-            - proxyNotThrough
-            - proxyPassesClientHeader
-            - proxySecretMissing
 
             - resetRefused
             - roleUnknown
@@ -983,7 +851,7 @@ components:
         - throttled
     Via:
       type: string
-      enum: [open, password, passkey, service, proxy, token, door]
+      enum: [open, password, passkey, service, token, door]
     Visitor:
       type: object
       required: [role, via]
@@ -1072,7 +940,7 @@ components:
       required: [id, kind, linked]
       properties:
         id: { type: string }
-        kind: { type: string, enum: [service, proxy] }
+        kind: { type: string, enum: [service] }
         service: { type: string }
         name: { type: string }
         linked: { type: string, format: date-time }
@@ -1100,8 +968,6 @@ components:
         scopes: { type: string }
         nameClaim: { type: string }
         groupsClaim: { type: string }
-        proxyUser: { type: string }
-        proxyGroups: { type: string }
     ServiceInput:
       type: object
       properties:
@@ -1134,19 +1000,6 @@ components:
         tested: { type: boolean }
         testedAt: { type: string, format: date-time }
         redirect: { type: string, description: The address to register at the service. }
-    Proxy:
-      type: object
-      required: [on, paused, preset, address, userHeader, groupsHeader, secretHeader, secretSet, logout]
-      properties:
-        on: { type: boolean }
-        paused: { type: boolean }
-        preset: { type: string }
-        address: { type: string }
-        userHeader: { type: string }
-        groupsHeader: { type: string }
-        secretHeader: { type: string }
-        secretSet: { type: boolean }
-        logout: { type: string }
     Entry:
       type: object
       required: [at, result]

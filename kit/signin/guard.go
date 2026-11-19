@@ -18,8 +18,8 @@ const (
 	freshPassword = 10 * time.Minute
 	freshService  = 5 * time.Minute
 	seenEvery     = time.Hour
-	// Tokens of an account from outside rest once its sign-in service or
-	// proxy has not let it in for this long, a day and an hour of slack.
+	// Tokens of an account from outside rest once its sign-in service has
+	// not let it in for this long, a day and an hour of slack.
 	outsideRest = 25 * time.Hour
 )
 
@@ -34,8 +34,6 @@ type found struct {
 	// renew names the sign-in service whose session ran out and can be
 	// renewed without asking.
 	renew string
-	// proxy is what the request said through the proxy headers.
-	proxy proxyLook
 }
 
 // Guard finds the visitor of every request and puts it where From finds it.
@@ -58,14 +56,6 @@ func (a *Auth) foundIn(r *http.Request) *found {
 func (a *Auth) find(w http.ResponseWriter, r *http.Request) *found {
 	ctx := r.Context()
 	f := &found{}
-	p, look := a.lookAtProxy(ctx, r)
-	f.proxy = look
-	switch {
-	case len(look.users) > 0 && (!look.through || !look.secret):
-		a.note(ctx, r, Entry{Via: ViaProxy, Result: "headerDropped"})
-	case look.through && look.secret && len(look.users) == 0 && p.On:
-		a.note(ctx, r, Entry{Via: ViaProxy, Result: "proxyNoUser"})
-	}
 	if a.open.Load() {
 		f.ok, f.v = true, Visitor{Role: a.roles[0], Via: ViaAnyone, roles: a.roles}
 		return f
@@ -85,10 +75,6 @@ func (a *Auth) find(w http.ResponseWriter, r *http.Request) *found {
 		f.renew = renew
 	}
 	if v, good := a.byOldSession(w, r); good {
-		f.ok, f.v = true, v
-		return f
-	}
-	if v, good := a.byProxy(r, p, look); good {
 		f.ok, f.v = true, v
 		return f
 	}

@@ -35,7 +35,7 @@ type access int
 const (
 	public       access = iota // anybody
 	visitor                    // any visitor, also everyone while the app is open
-	member                     // an account signed in through a session or the proxy
+	member                     // an account signed in through a session
 	admin                      // a visitor with the admin role
 	adminAccount               // an admin signed in as an account, so not while the app is open
 )
@@ -237,7 +237,6 @@ func (a *Auth) api() []apiRoute {
 		{"GET me/identities", member, a.getIdentities},
 		{"DELETE me/identities/{id}", member, a.deleteIdentity},
 		{"POST me/identities/{service}/link", member, a.postIdentityLink},
-		{"POST me/identities/proxy", member, a.postProxyIdentity},
 		{"GET me/tokens", member, a.getTokens},
 		{"POST me/tokens", member, a.postToken},
 		{"DELETE me/tokens/{id}", member, a.deleteToken},
@@ -253,11 +252,6 @@ func (a *Auth) api() []apiRoute {
 		{"DELETE methods/oidc/{id}", adminAccount, a.deleteService},
 		{"POST methods/oidc/{id}/check", adminAccount, a.postServiceCheck},
 		{"POST methods/oidc/{id}/test", adminAccount, a.postServiceTest},
-		{"GET methods/proxy", admin, a.getProxy},
-		{"PUT methods/proxy", adminAccount, a.putProxy},
-		{"PATCH methods/proxy", adminAccount, a.patchProxy},
-		{"POST methods/proxy/secret", adminAccount, a.postProxySecret},
-		{"POST methods/proxy/check", adminAccount, a.postProxyCheck},
 		{"GET settings", admin, a.getSettings},
 		{"PATCH settings", adminAccount, a.patchSettings},
 		{"GET log", admin, a.getLog},

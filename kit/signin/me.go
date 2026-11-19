@@ -221,8 +221,8 @@ func (a *Auth) deletePassword(w http.ResponseWriter, r *http.Request, f *found) 
 }
 
 // openUp is every change that takes the app back to open: no password, no
-// second factor, no passkeys, tokens or sessions, every sign-in service and
-// the proxy off. The caller holds mu.
+// second factor, no passkeys, tokens or sessions, every sign-in service
+// off. The caller holds mu.
 func (a *Auth) openUp(ctx context.Context) ([]Doc, error) {
 	all, err := a.accounts(ctx)
 	if err != nil {
@@ -242,7 +242,7 @@ func (a *Auth) openUp(ctx context.Context) ([]Doc, error) {
 		}
 		docs = append(docs, more...)
 	}
-	more, _, _, err := a.pauseOutside(ctx)
+	more, _, err := a.pauseOutside(ctx)
 	if err != nil {
 		return nil, err
 	}

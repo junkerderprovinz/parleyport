@@ -59,7 +59,7 @@ func (a *Auth) getRoles(w http.ResponseWriter, _ *http.Request, _ *found) {
 
 // validName reports whether name can name an account: 1 to 64 characters,
 // none of them a control character or a comma, which would split a list of
-// names in a proxy header.
+// names.
 func validName(name string) bool {
 	if name == "" || len([]rune(name)) > maxNameLen {
 		return false

@@ -225,11 +225,7 @@ func (a *Auth) postLogout(w http.ResponseWriter, r *http.Request, f *found) {
 		}
 		a.clearCookie(w, r, "session", "/")
 	}
-	out := map[string]string{}
-	if f.ok && f.v.Via == ViaProxy {
-		out["logout"] = a.proxyLogout(ctx)
-	}
-	ok(w, out)
+	ok(w, nil)
 }
 
 // signedIn makes the session for an account whose sign-in just succeeded,

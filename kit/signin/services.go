@@ -262,16 +262,15 @@ func validIssuer(issuer string) bool {
 	return u.Scheme == "http" && (host == "localhost" || (ip != nil && ip.IsLoopback()))
 }
 
-// pauseOutside takes every sign-in service and the proxy off and forgets
-// the test sign-ins, for a reset or for
-// an app that opens up again. Each service needs a new test sign-in before
+// pauseOutside takes every sign-in service off and forgets the test
+// sign-ins, for a reset or for an app that opens up again. Each service needs a new test sign-in before
 // it lets anyone in, so whoever knew the old password cannot have left a
-// working one behind. It returns how many services and whether the proxy
-// were on. The caller holds mu.
-func (a *Auth) pauseOutside(ctx context.Context) (docs []Doc, services int, proxy bool, err error) {
+// working one behind. It returns how many services were on. The caller
+// holds mu.
+func (a *Auth) pauseOutside(ctx context.Context) (docs []Doc, services int, err error) {
 	all, err := a.services(ctx)
 	if err != nil {
-		return nil, 0, false, err
+		return nil, 0, err
 	}
 	for _, s := range all {
 		if s.On {
@@ -283,15 +282,7 @@ func (a *Auth) pauseOutside(ctx context.Context) (docs []Doc, services int, prox
 			docs = append(docs, a.doc(kindService, s.ID, s))
 		}
 	}
-	p, err := a.proxySettings(ctx)
-	if err != nil {
-		return nil, 0, false, err
-	}
-	if proxy = p.On; p.On {
-		p.On, p.Paused = false, true
-		docs = append(docs, a.doc(kindProxy, proxyID, p))
-	}
-	return docs, services, proxy, nil
+	return docs, services, nil
 }
 
 // serviceSessions returns deletes for every session that came in through

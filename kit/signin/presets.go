@@ -10,18 +10,14 @@ type Preset struct {
 	Scopes      string `json:"scopes"`
 	NameClaim   string `json:"nameClaim"`
 	GroupsClaim string `json:"groupsClaim"`
-	// ProxyUser and ProxyGroups are the headers the service sets when it
-	// guards the app as a proxy, where it can.
-	ProxyUser   string `json:"proxyUser,omitempty"`
-	ProxyGroups string `json:"proxyGroups,omitempty"`
 }
 
 // Presets are the sign-in services the package knows, the app owner's own
 // last.
 var Presets = []Preset{
 	{ID: "pocket-id", Scopes: "openid profile email groups", NameClaim: "preferred_username", GroupsClaim: "groups"},
-	{ID: "authentik", Scopes: "openid profile email", NameClaim: "preferred_username", GroupsClaim: "groups", ProxyUser: "X-authentik-username", ProxyGroups: "X-authentik-groups"},
-	{ID: "authelia", Scopes: "openid profile email groups", NameClaim: "preferred_username", GroupsClaim: "groups", ProxyUser: "Remote-User", ProxyGroups: "Remote-Groups"},
+	{ID: "authentik", Scopes: "openid profile email", NameClaim: "preferred_username", GroupsClaim: "groups"},
+	{ID: "authelia", Scopes: "openid profile email groups", NameClaim: "preferred_username", GroupsClaim: "groups"},
 	// Keycloak reports groups only with a mapper on the client. Without one,
 	// realm_access.roles carries the realm roles.
 	{ID: "keycloak", Scopes: "openid profile email", NameClaim: "preferred_username", GroupsClaim: "groups"},

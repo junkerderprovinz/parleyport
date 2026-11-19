@@ -23,13 +23,11 @@ const (
 	kindPasskey  = "passkey"
 	kindIdentity = "identity"
 	kindService  = "service"
-	kindProxy    = "proxy"
 	kindLog      = "log"
 	kindEnding   = "ending"
 	kindSwapped  = "swapped"
 
-	metaID  = "signin"
-	proxyID = "proxy"
+	metaID = "signin"
 )
 
 type meta struct {
@@ -66,8 +64,8 @@ type account struct {
 	Handle []byte `json:"handle,omitempty"`
 
 	Groups []string `json:"groups,omitempty"`
-	// Checked is when a sign-in service or the proxy last let the account
-	// in. Tokens of an account from outside rest when it is too long ago.
+	// Checked is when a sign-in service last let the account in. Tokens of
+	// an account from outside rest when it is too long ago.
 	Checked time.Time `json:"checked,omitzero"`
 	// Imported marks an account whose old fields the app still keeps, for
 	// Legacy.Drop after its first epoch.
@@ -218,12 +216,10 @@ func shortID(parts ...string) string {
 
 const (
 	identityService = "service"
-	identityProxy   = "proxy"
 )
 
-// identity binds a person at a sign-in service, by issuer and subject, or a
-// name from the proxy, to one account. It never goes by a name the account
-// happens to share.
+// identity binds a person at a sign-in service, by issuer and subject, to
+// one account. It never goes by a name the account happens to share.
 type identity struct {
 	Kind    string    `json:"kind"`
 	Service string    `json:"service,omitempty"`

@@ -28,7 +28,6 @@ const (
 	ViaPassword Via = "password"
 	ViaPasskey  Via = "passkey"
 	ViaService  Via = "service" // a sign-in service over OIDC
-	ViaProxy    Via = "proxy"
 	ViaToken    Via = "token"
 	ViaDoor     Via = "door" // a way in the app keeps for itself
 )
@@ -67,8 +66,7 @@ type Config struct {
 	// Empty is just "admin".
 	Roles []string
 	// Owner is for apps with one local account. Its sign-in asks for no
-	// name, and every other account comes from a sign-in service or the
-	// proxy.
+	// name, and every other account comes from a sign-in service.
 	Owner bool
 	// Scopes are what an API token can be narrowed to. Empty is "read" and
 	// "all".
@@ -80,8 +78,8 @@ type Config struct {
 	// need it, and it never comes from the request's Host.
 	Public func() *url.URL
 	// Proxies are the proxies whose X-Forwarded-For and X-Forwarded-Proto
-	// count for the client address and for https. A trusted proxy for
-	// sign-in is set apart, in the contract.
+	// count for the client address and for https. No header from a proxy
+	// ever signs anyone in.
 	Proxies []netip.Prefix
 	// MinPassword is the shortest password in characters. Zero is 12.
 	MinPassword int
@@ -106,7 +104,7 @@ type Hooks struct {
 	// also after a restart, until it returns nil.
 	Ended func(ctx context.Context, account string, what Ending) error
 	// SignedIn runs after every sign-in with the service groups the sign-in
-	// service or proxy reported.
+	// service reported.
 	SignedIn func(ctx context.Context, v Visitor, groups []string)
 	// Doors are the ways in the app keeps for itself, such as a paired
 	// phone, asked in order after the package found nobody.
@@ -125,7 +123,7 @@ type Visitor struct {
 	Name    string   `json:"name,omitempty"`
 	Role    string   `json:"role"`
 	Via     Via      `json:"via"`
-	Service string   `json:"service,omitempty"` // the sign-in service or proxy, for ViaService and ViaProxy
+	Service string   `json:"service,omitempty"` // the sign-in service, for ViaService
 	Scopes  []string `json:"scopes,omitempty"`  // ViaToken only
 
 	roles    []string
