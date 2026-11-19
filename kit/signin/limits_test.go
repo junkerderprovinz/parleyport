@@ -55,7 +55,7 @@ func (b *browser) visitorFrom(peer string, header ...string) signin.Visitor {
 }
 
 func TestProxyHeadersSignNobodyIn(t *testing.T) {
-	a := newApp(t)
+	a := newApp(t, func(c *signin.Config) { c.Proxies = []netip.Prefix{netip.MustParsePrefix("10.0.0.5/32")} })
 	owner := a.owner()
 	for _, peer := range []string{"10.0.0.5", "127.0.0.1"} {
 		if v := a.browser().visitorFrom(peer, "Remote-User", "junker", "Remote-Groups", "admins", "X-Forwarded-User", "junker"); v.Via != "" {
