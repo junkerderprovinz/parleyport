@@ -33,59 +33,30 @@ func (a *Auth) Handler() http.Handler { return a.handler }
 type access int
 
 const (
-	public  access = iota // anybody
-	visitor               // any visitor, also everyone while the app is open
-	member                // an account signed in through a session or the proxy
-	admin                 // a visitor with the admin role
+	public       access = iota // anybody
+	visitor                    // any visitor, also everyone while the app is open
+	member                     // an account signed in through a session or the proxy
+	admin                      // a visitor with the admin role
+	adminAccount               // an admin signed in as an account, so not while the app is open
 )
 
 type route func(w http.ResponseWriter, r *http.Request, f *found)
 
 func (a *Auth) routes() http.Handler {
 	mux := http.NewServeMux()
-	api := func(pattern string, need access, fn route) {
-		method, path, _ := strings.Cut(pattern, " ")
+	for _, rt := range a.api() {
+		method, path, _ := strings.Cut(rt.pattern, " ")
 		mux.HandleFunc(method+" "+APIPrefix+path, func(w http.ResponseWriter, r *http.Request) {
-			a.serveAPI(w, r, pattern, need, fn)
+			a.serveAPI(w, r, rt.pattern, rt.need, rt.fn)
 		})
 	}
-	api("GET options", public, a.getOptions)
-	api("POST login", public, a.postLogin)
-	api("POST login/totp", public, a.postLoginTOTP)
-	api("POST login/passkey/options", public, a.postPasskeyLoginOptions)
-	api("POST login/passkey", public, a.postPasskeyLogin)
-	api("POST logout", public, a.postLogout)
-	api("POST reset-code", public, a.postResetCode)
-	api("POST reset", public, a.postReset)
 
-	api("GET me", visitor, a.getMe)
-	api("PUT me/password", visitor, a.putPassword)
-	api("DELETE me/password", member, a.deletePassword)
-	api("POST me/confirm", member, a.postConfirm)
-	api("GET me/sessions", member, a.getSessions)
-	api("DELETE me/sessions", member, a.deleteSessions)
-	api("DELETE me/sessions/{id}", member, a.deleteSession)
-	api("POST me/totp", member, a.postTOTP)
-	api("POST me/totp/confirm", member, a.postTOTPConfirm)
-	api("DELETE me/totp", member, a.deleteTOTP)
-	api("POST me/totp/codes", member, a.postTOTPCodes)
-	api("GET me/passkeys", member, a.getPasskeys)
-	api("POST me/passkeys/options", member, a.postPasskeyOptions)
-	api("POST me/passkeys", member, a.postPasskey)
-	api("PATCH me/passkeys/{id}", member, a.patchPasskey)
-	api("DELETE me/passkeys/{id}", member, a.deletePasskey)
-	api("GET me/tokens", member, a.getTokens)
-	api("POST me/tokens", member, a.postToken)
-	api("DELETE me/tokens/{id}", member, a.deleteToken)
-
-	api("GET accounts", admin, a.getAccounts)
-	api("POST accounts", admin, a.postAccount)
-	api("PATCH accounts/{id}", admin, a.patchAccount)
-	api("DELETE accounts/{id}", admin, a.deleteAccount)
-	api("GET roles", admin, a.getRoles)
-	api("GET log", admin, a.getLog)
-
-	mux.HandleFunc(APIPrefix, func(w http.ResponseWriter, _ *http.Request) { fail(w, http.StatusNotFound, "notFound") })
+	mux.HandleFunc(APIPrefix, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		fail(w, http.StatusNotFound, "notFound")
+	})
+	mux.HandleFunc("GET "+oidcPath+"callback", a.getOIDCCallback)
+	mux.HandleFunc("GET "+oidcPath+"{id}", a.getOIDCStart)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := r.Context().Value(ctxKey{}).(*found); !ok {
 			r = r.WithContext(context.WithValue(r.Context(), ctxKey{}, a.find(w, r)))
@@ -118,15 +89,17 @@ func (a *Auth) serveAPI(w http.ResponseWriter, r *http.Request, pattern string, 
 			fail(w, http.StatusForbidden, "notWithToken")
 			return
 		}
-		if need == member && (f.v.Via == ViaAnyone || f.v.Via == ViaDoor) {
-			if f.v.Via == ViaAnyone {
+		if need == member || need == adminAccount {
+			switch f.v.Via {
+			case ViaAnyone:
 				fail(w, http.StatusConflict, "setPasswordFirst")
-			} else {
+				return
+			case ViaDoor:
 				fail(w, http.StatusForbidden, "forbidden")
+				return
 			}
-			return
 		}
-		if need == admin && !f.v.AtLeast(a.roles[0]) {
+		if (need == admin || need == adminAccount) && !f.v.AtLeast(a.roles[0]) {
 			fail(w, http.StatusForbidden, "forbidden")
 			return
 		}
@@ -208,4 +181,65 @@ func readRaw(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, bool)
 		return nil, false
 	}
 	return body, true
+}
+
+// api is the contract, one route a line, as openapi.yaml lists it.
+func (a *Auth) api() []apiRoute {
+	return []apiRoute{
+		{"GET options", public, a.getOptions},
+		{"POST login", public, a.postLogin},
+		{"POST login/totp", public, a.postLoginTOTP},
+		{"POST login/passkey/options", public, a.postPasskeyLoginOptions},
+		{"POST login/passkey", public, a.postPasskeyLogin},
+		{"POST logout", public, a.postLogout},
+		{"POST reset-code", public, a.postResetCode},
+		{"POST reset", public, a.postReset},
+		{"GET me", visitor, a.getMe},
+		{"PUT me/password", visitor, a.putPassword},
+		{"DELETE me/password", member, a.deletePassword},
+		{"POST me/confirm", member, a.postConfirm},
+		{"GET me/sessions", member, a.getSessions},
+		{"DELETE me/sessions", member, a.deleteSessions},
+		{"DELETE me/sessions/{id}", member, a.deleteSession},
+		{"POST me/totp", member, a.postTOTP},
+		{"POST me/totp/confirm", member, a.postTOTPConfirm},
+		{"DELETE me/totp", member, a.deleteTOTP},
+		{"POST me/totp/codes", member, a.postTOTPCodes},
+		{"GET me/passkeys", member, a.getPasskeys},
+		{"POST me/passkeys/options", member, a.postPasskeyOptions},
+		{"POST me/passkeys", member, a.postPasskey},
+		{"PATCH me/passkeys/{id}", member, a.patchPasskey},
+		{"DELETE me/passkeys/{id}", member, a.deletePasskey},
+		{"GET me/identities", member, a.getIdentities},
+		{"DELETE me/identities/{id}", member, a.deleteIdentity},
+		{"POST me/identities/{service}/link", member, a.postIdentityLink},
+		{"POST me/identities/proxy", member, a.postProxyIdentity},
+		{"GET me/tokens", member, a.getTokens},
+		{"POST me/tokens", member, a.postToken},
+		{"DELETE me/tokens/{id}", member, a.deleteToken},
+		{"GET accounts", admin, a.getAccounts},
+		{"POST accounts", adminAccount, a.postAccount},
+		{"PATCH accounts/{id}", adminAccount, a.patchAccount},
+		{"DELETE accounts/{id}", adminAccount, a.deleteAccount},
+		{"GET roles", admin, a.getRoles},
+		{"GET methods/presets", admin, a.getPresets},
+		{"GET methods/oidc", admin, a.getServices},
+		{"POST methods/oidc", adminAccount, a.postService},
+		{"PATCH methods/oidc/{id}", adminAccount, a.patchService},
+		{"DELETE methods/oidc/{id}", adminAccount, a.deleteService},
+		{"POST methods/oidc/{id}/check", adminAccount, a.postServiceCheck},
+		{"POST methods/oidc/{id}/test", adminAccount, a.postServiceTest},
+		{"GET methods/proxy", admin, a.getProxy},
+		{"PUT methods/proxy", adminAccount, a.putProxy},
+		{"PATCH methods/proxy", adminAccount, a.patchProxy},
+		{"POST methods/proxy/secret", adminAccount, a.postProxySecret},
+		{"POST methods/proxy/check", adminAccount, a.postProxyCheck},
+		{"GET log", admin, a.getLog},
+	}
+}
+
+type apiRoute struct {
+	pattern string
+	need    access
+	fn      route
 }

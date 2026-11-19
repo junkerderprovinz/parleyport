@@ -29,8 +29,13 @@ func (a *Auth) getOptions(w http.ResponseWriter, r *http.Request, f *found) {
 		"minPassword": a.minPass,
 		"signedIn":    f.ok && f.v.Via != ViaAnyone,
 		"passkeys":    false,
-		"services":    []any{},
 	}
+	services, err := a.offeredServices(r.Context())
+	if err != nil {
+		a.internal(w, err)
+		return
+	}
+	out["services"] = services
 	if f.renew != "" {
 		out["renew"] = f.renew
 	}

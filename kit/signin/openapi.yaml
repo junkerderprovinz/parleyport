@@ -1,0 +1,1143 @@
+openapi: 3.1.0
+info:
+  title: Sign-in
+  version: "1"
+  description: |
+    The sign-in every app of the kit shares. Requests that change something
+    send JSON and come from the app's own origin (Sec-Fetch-Site same-origin
+    or none, or else a matching Origin), or carry an API token instead of a
+    cookie. Every error is a code, never a sentence:
+    {"error": "<code>"}, with more fields where a code says so.
+
+    Besides this API the package serves the browser routes of a sign-in
+    service: GET /signin/oidc/{id} with return, renew=1 or ticket, and
+    GET /signin/oidc/callback. They answer with redirects, and the outcome
+    comes back to the return path as ?signin=<code>, one of RedirectCode.
+servers:
+  - url: /api/signin/v1
+paths:
+  /options:
+    get:
+      operationId: getOptions
+      summary: What the sign-in page offers
+      responses:
+        "200":
+          description: The ways in.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Options" }
+  /login:
+    post:
+      operationId: login
+      summary: Sign in with the password
+      description: |
+        In an app with one owner the name is left out. With two-factor on,
+        the answer is {"step": "code"} and a cookie for login/totp.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                name: { type: string }
+                password: { type: string, maxLength: 1024 }
+      responses:
+        "200": { $ref: "#/components/responses/SignedInOrStep" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Throttled" }
+  /login/totp:
+    post:
+      operationId: loginTOTP
+      summary: The code from the authenticator app, or a recovery code
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Code" }
+      responses:
+        "200": { $ref: "#/components/responses/SignedIn" }
+        "401": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Throttled" }
+  /login/passkey/options:
+    post:
+      operationId: loginPasskeyOptions
+      summary: Options for navigator.credentials.get with conditional mediation
+      responses:
+        "200": { $ref: "#/components/responses/WebAuthn" }
+        "409": { $ref: "#/components/responses/Error" }
+  /login/passkey:
+    post:
+      operationId: loginPasskey
+      summary: Sign in with the passkey the browser offered in the password field
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, description: The PublicKeyCredential as JSON. }
+      responses:
+        "200": { $ref: "#/components/responses/SignedIn" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /logout:
+    post:
+      operationId: logout
+      summary: End this session
+      description: Through the proxy, the answer names where the proxy signs out.
+      responses:
+        "200":
+          description: Signed out.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  logout: { type: string }
+  /reset-code:
+    post:
+      operationId: resetCode
+      summary: Print a reset code to the container log
+      description: At most once a minute. The code is valid for 10 minutes.
+      responses:
+        "200": { $ref: "#/components/responses/Done" }
+        "409": { $ref: "#/components/responses/Error" }
+  /reset:
+    post:
+      operationId: reset
+      summary: Set a new password with the code from the log
+      description: |
+        Ends every session and token, removes the owner's passkeys and second
+        factor, and pauses every sign-in service and the proxy.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, password]
+              properties:
+                code: { type: string }
+                password: { type: string }
+                name: { type: string }
+      responses:
+        "200":
+          description: Reset and signed in.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [removed, visitor]
+                properties:
+                  visitor: { $ref: "#/components/schemas/Visitor" }
+                  removed:
+                    type: object
+                    required: [tokens, passkeys, twoFactor, services, proxy]
+                    properties:
+                      tokens: { type: integer }
+                      passkeys: { type: integer }
+                      twoFactor: { type: boolean }
+                      services: { type: integer }
+                      proxy: { type: boolean }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Throttled" }
+  /me:
+    get:
+      operationId: getMe
+      summary: Who is asking
+      description: The one route an API token may call.
+      responses:
+        "200":
+          description: The visitor.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Me" }
+        "401": { $ref: "#/components/responses/Error" }
+  /me/password:
+    put:
+      operationId: setPassword
+      summary: Set the first password, or change it
+      description: |
+        While the app is open, this sets the first password, and whoever sets
+        it becomes the owner and is signed in. A change needs the current
+        password and ends every other session.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [next]
+              properties:
+                name: { type: string }
+                current: { type: string }
+                next: { type: string, maxLength: 1024 }
+      responses:
+        "200": { $ref: "#/components/responses/Done" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: removePassword
+      summary: Take the owner's password away, which opens the app
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                current: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/Done" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /me/confirm:
+    post:
+      operationId: confirm
+      summary: Sign in again in this session, for a change that wants it fresh
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/Done" }
+        "401": { $ref: "#/components/responses/Error" }
+  /me/sessions:
+    get:
+      operationId: getSessions
+      summary: The account's sessions
+      responses:
+        "200":
+          description: Newest use first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sessions]
+                properties:
+                  sessions:
+                    type: array
+                    items: { $ref: "#/components/schemas/Session" }
+    delete:
+      operationId: endOtherSessions
+      summary: End every other session
+      responses:
+        "200":
+          description: How many ended.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ended: { type: integer }
+  /me/sessions/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    delete:
+      operationId: endSession
+      summary: End one session
+      responses:
+        "200": { $ref: "#/components/responses/Done" }
+        "404": { $ref: "#/components/responses/Error" }
+  /me/totp:
+    post:
+      operationId: startTOTP
+      summary: A new secret for an authenticator app
+      responses:
+        "200":
+          description: The secret and the URI for the QR code.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [secret, uri]
+                properties:
+                  secret: { type: string }
+                  uri: { type: string }
+        "403": { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: stopTOTP
+      summary: Turn two-factor off with a code
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Code" }
+      responses:
+        "200": { $ref: "#/components/responses/Done" }
+        "401": { $ref: "#/components/responses/Error" }
+  /me/totp/confirm:
+    post:
+      operationId: confirmTOTP
+      summary: Turn two-factor on with the first code
+      description: Ends every other session, and shows the recovery codes once.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Code" }
+      responses:
+        "200": { $ref: "#/components/responses/Codes" }
+        "401": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /me/totp/codes:
+    post:
+      operationId: newRecoveryCodes
+      summary: New recovery codes in place of the old
+      responses:
+        "200": { $ref: "#/components/responses/Codes" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /me/passkeys:
+    get:
+      operationId: getPasskeys
+      summary: The account's passkeys
+      responses:
+        "200":
+          description: The passkeys.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [passkeys]
+                properties:
+                  passkeys:
+                    type: array
+                    items: { $ref: "#/components/schemas/Passkey" }
+    post:
+      operationId: addPasskey
+      summary: Keep the passkey the browser made
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [credential]
+              properties:
+                name: { type: string }
+                credential: { type: object }
+      responses:
+        "200":
+          description: The new passkey's id.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /me/passkeys/options:
+    post:
+      operationId: passkeyOptions
+      summary: Options for navigator.credentials.create
+      responses:
+        "200": { $ref: "#/components/responses/WebAuthn" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /me/passkeys/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    patch:
+      operationId: renamePasskey
+      summary: Rename a passkey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/Done" }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: removePasskey
+      summary: Remove a passkey
+      responses:
+        "200": { $ref: "#/components/responses/Done" }
+        "404": { $ref: "#/components/responses/Error" }
+  /me/identities:
+    get:
+      operationId: getIdentities
+      summary: The sign-in services and proxy names that sign in as this account
+      responses:
+        "200":
+          description: The identities.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [identities]
+                properties:
+                  identities:
+                    type: array
+                    items: { $ref: "#/components/schemas/Identity" }
+  /me/identities/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    delete:
+      operationId: unlinkIdentity
+      summary: Unlink one, unless it is the last way in of an account without a password
+      responses:
+        "200": { $ref: "#/components/responses/Done" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /me/identities/{service}/link:
+    parameters:
+      - { name: service, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: linkService
+      summary: The address that links this account to a person at the sign-in service
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Return" }
+      responses:
+        "200": { $ref: "#/components/responses/StartURL" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /me/identities/proxy:
+    post:
+      operationId: linkProxy
+      summary: Bind the name the proxy gives this request to this account
+      responses:
+        "200":
+          description: The name.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name: { type: string }
+        "409": { $ref: "#/components/responses/Error" }
+  /me/tokens:
+    get:
+      operationId: getTokens
+      summary: The account's API tokens
+      responses:
+        "200":
+          description: The tokens, without their values.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [tokens]
+                properties:
+                  tokens:
+                    type: array
+                    items: { $ref: "#/components/schemas/Token" }
+    post:
+      operationId: makeToken
+      summary: A new API token, shown once
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, scopes]
+              properties:
+                name: { type: string, maxLength: 64 }
+                scopes: { type: array, items: { type: string } }
+                days: { type: integer, minimum: 1, maximum: 3650, description: Empty is 90. }
+                never: { type: boolean }
+      responses:
+        "200":
+          description: The token and its value.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token, value]
+                properties:
+                  token: { $ref: "#/components/schemas/Token" }
+                  value: { type: string }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /me/tokens/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    delete:
+      operationId: revokeToken
+      summary: Revoke a token
+      responses:
+        "200": { $ref: "#/components/responses/Done" }
+        "404": { $ref: "#/components/responses/Error" }
+  /accounts:
+    get:
+      operationId: getAccounts
+      summary: Every account, the owner first
+      responses:
+        "200":
+          description: The accounts.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [accounts]
+                properties:
+                  accounts:
+                    type: array
+                    items: { $ref: "#/components/schemas/Account" }
+    post:
+      operationId: addAccount
+      summary: A local account with a password, in an app with many accounts
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, password, role]
+              properties:
+                name: { type: string }
+                password: { type: string }
+                role: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/OneAccount" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /accounts/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    patch:
+      operationId: changeAccount
+      summary: Block, unblock or give another role
+      description: Blocking or a lower role ends the account's sessions and tokens.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                blocked: { type: boolean }
+                role: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/OneAccount" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: removeAccount
+      summary: Remove an account and every way in it had
+      responses:
+        "200": { $ref: "#/components/responses/Done" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /roles:
+    get:
+      operationId: getRoles
+      summary: The app's roles, the admin first
+      responses:
+        "200":
+          description: The roles.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [roles]
+                properties:
+                  roles: { type: array, items: { type: string } }
+  /methods/presets:
+    get:
+      operationId: getPresets
+      summary: What the server knows per kind of sign-in service, by the catalog's ids
+      responses:
+        "200":
+          description: The presets.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [presets]
+                properties:
+                  presets:
+                    type: array
+                    items: { $ref: "#/components/schemas/Preset" }
+  /methods/oidc:
+    get:
+      operationId: getServices
+      summary: The sign-in services
+      responses:
+        "200":
+          description: The services, never their secrets.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [services]
+                properties:
+                  services:
+                    type: array
+                    items: { $ref: "#/components/schemas/Service" }
+    post:
+      operationId: addService
+      summary: Add a sign-in service, off until its test sign-in
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ServiceInput" }
+      responses:
+        "200": { $ref: "#/components/responses/OneService" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /methods/oidc/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    patch:
+      operationId: changeService
+      summary: Change a sign-in service
+      description: |
+        A new issuer or client needs the secret again. Any change to them takes
+        the service off until a new test sign-in.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ServiceInput" }
+      responses:
+        "200": { $ref: "#/components/responses/OneService" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: removeService
+      summary: Remove a sign-in service
+      responses:
+        "200": { $ref: "#/components/responses/Done" }
+        "404": { $ref: "#/components/responses/Error" }
+  /methods/oidc/{id}/check:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: checkService
+      summary: Whether the app reaches the service's discovery document
+      responses:
+        "200": { $ref: "#/components/responses/Done" }
+        "404": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+  /methods/oidc/{id}/test:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: testService
+      summary: The address of the test sign-in, which binds the admin and turns the service on
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Return" }
+      responses:
+        "200": { $ref: "#/components/responses/StartURL" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /methods/proxy:
+    get:
+      operationId: getProxy
+      summary: The trusted proxy
+      responses:
+        "200": { $ref: "#/components/responses/OneProxy" }
+    put:
+      operationId: setProxy
+      summary: Point the app at a proxy, which turns it off until it is turned on through itself
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [address, userHeader]
+              properties:
+                preset: { type: string }
+                address: { type: string, description: One address, never a range. }
+                userHeader: { type: string }
+                groupsHeader: { type: string }
+                secretHeader: { type: string }
+                logout: { type: string }
+                createOnFirst: { type: boolean }
+                everyone: { type: boolean }
+                groups: { type: array, items: { $ref: "#/components/schemas/GroupRole" } }
+      responses:
+        "200": { $ref: "#/components/responses/OneProxy" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: switchProxy
+      summary: Turn the proxy on or off
+      description: |
+        On needs this very request to come through the proxy with its secret,
+        and the page sends probe as the user header itself: a proxy that
+        passes it on is refused.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [on]
+              properties:
+                on: { type: boolean }
+                probe: { type: string, minLength: 16 }
+      responses:
+        "200": { $ref: "#/components/responses/OneProxy" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /methods/proxy/secret:
+    post:
+      operationId: newProxySecret
+      summary: A new secret for the proxy to send, shown once
+      responses:
+        "200":
+          description: The settings and the secret.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [proxy, secret]
+                properties:
+                  proxy: { $ref: "#/components/schemas/Proxy" }
+                  secret: { type: string }
+        "403": { $ref: "#/components/responses/Error" }
+  /methods/proxy/check:
+    post:
+      operationId: checkProxy
+      summary: What this request carried, for the live check on the card
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                probe: { type: string }
+      responses:
+        "200":
+          description: What the app saw.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [from, viaProxy, secret, users, groups, passesClientHeader]
+                properties:
+                  from: { type: string }
+                  viaProxy: { type: boolean }
+                  secret: { type: boolean }
+                  users: { type: integer }
+                  user: { type: string }
+                  groups: { type: array, items: { type: string } }
+                  passesClientHeader: { type: boolean }
+  /log:
+    get:
+      operationId: getLog
+      summary: The sign-in log, newest first
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 1000 } }
+      responses:
+        "200":
+          description: The entries.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [entries]
+                properties:
+                  entries:
+                    type: array
+                    items: { $ref: "#/components/schemas/Entry" }
+components:
+  responses:
+    Done:
+      description: Done.
+      content:
+        application/json:
+          schema: { type: object }
+    Error:
+      description: Refused, with a code.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Throttled:
+      description: Too many attempts. Retry-After and retryAfter say when to try again.
+      headers:
+        Retry-After: { schema: { type: integer } }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    SignedIn:
+      description: Signed in, with a session cookie.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [visitor]
+            properties:
+              visitor: { $ref: "#/components/schemas/Visitor" }
+    SignedInOrStep:
+      description: Signed in, or waiting for the second factor.
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - type: object
+                required: [visitor]
+                properties:
+                  visitor: { $ref: "#/components/schemas/Visitor" }
+              - type: object
+                required: [step]
+                properties:
+                  step: { const: code }
+    Codes:
+      description: Recovery codes, shown once.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [codes]
+            properties:
+              codes: { type: array, items: { type: string }, minItems: 10, maxItems: 10 }
+    WebAuthn:
+      description: Options as navigator.credentials takes them, under publicKey.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [publicKey]
+            properties:
+              publicKey: { type: object }
+              mediation: { type: string }
+    StartURL:
+      description: Where to send the browser.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [url]
+            properties:
+              url: { type: string }
+    OneAccount:
+      description: The account.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [account]
+            properties:
+              account: { $ref: "#/components/schemas/Account" }
+    OneService:
+      description: The sign-in service.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [service]
+            properties:
+              service: { $ref: "#/components/schemas/Service" }
+    OneProxy:
+      description: The proxy settings.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [proxy]
+            properties:
+              proxy: { $ref: "#/components/schemas/Proxy" }
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          enum:
+            - accountOwner
+            - badRequest
+            - blocked
+            - caInvalid
+            - crossSite
+            - everyoneWouldBeAdmin
+            - forbidden
+            - groupsMissing
+            - headerInvalid
+            - identityTaken
+            - internal
+            - issuerInvalid
+            - lastWayIn
+
+            - nameInvalid
+            - nameTaken
+            - noAccount
+            - notFound
+            - notJSON
+            - notLocal
+            - notOwner
+            - notWithToken
+            - oneOwner
+            - passkeyRefused
+            - passkeysUnavailable
+            - passkeyUnknown
+            - passwordLong
+            - passwordSet
+            - passwordShort
+            - probeMissing
+            - proxyAddressInvalid
+            - proxyNotThrough
+            - proxyPassesClientHeader
+            - proxySecretMissing
+
+            - resetRefused
+            - roleUnknown
+            - scopeUnknown
+            - secretAgain
+            - secretMissing
+            - serviceOff
+            - serviceUnknown
+            - serviceUnreachable
+            - serviceUntested
+            - setPasswordFirst
+            - setupExpired
+            - signInAgain
+            - signInFirst
+            - stepExpired
+
+            - throttled
+            - tokenNameMissing
+            - tooLarge
+            - twoFactorOff
+            - wrongCode
+            - wrongPassword
+        retryAfter: { type: integer, description: Seconds, with throttled. }
+        min: { type: integer, description: The shortest password, with passwordShort. }
+        scope: { type: string, description: The scope it does not know, with scopeUnknown. }
+    RedirectCode:
+      description: What comes back to the return path of a browser route as ?signin=<code>.
+      type: string
+      enum:
+        - addressMissing
+        - blocked
+        - flowExpired
+        - identityTaken
+        - linked
+        - nameMissing
+        - nameTaken
+        - noAccount
+        - noGroup
+        - renewNeeded
+        - serviceOff
+        - serviceRefused
+        - serviceUnknown
+        - serviceUnreachable
+        - signInFirst
+        - testOk
+        - throttled
+    Via:
+      type: string
+      enum: [open, password, passkey, service, proxy, token, door]
+    Visitor:
+      type: object
+      required: [role, via]
+      properties:
+        account: { type: string }
+        name: { type: string }
+        role: { type: string }
+        via: { $ref: "#/components/schemas/Via" }
+        service: { type: string }
+        scopes: { type: array, items: { type: string } }
+    Me:
+      allOf:
+        - $ref: "#/components/schemas/Visitor"
+        - type: object
+          required: [owner, password, twoFactor, recoveryLeft, fresh]
+          properties:
+            owner: { type: boolean }
+            password: { type: boolean }
+            twoFactor: { type: boolean }
+            recoveryLeft: { type: integer }
+            fresh: { type: boolean, description: Signed in moments ago, as new lasting ways in want. }
+    Options:
+      type: object
+      required: [open, owner, minPassword, signedIn, passkeys, services]
+      properties:
+        open: { type: boolean, description: Nobody can sign in, so everyone is admin. }
+        owner: { type: boolean, description: One local account, so the page asks for no name. }
+        minPassword: { type: integer }
+        signedIn: { type: boolean }
+        passkeys: { type: boolean, description: Ask for passkeys with conditional mediation. }
+        renew: { type: string, description: The sign-in service whose session can be renewed without asking. }
+        services:
+          type: array
+          items:
+            type: object
+            required: [id, provider, name]
+            properties:
+              id: { type: string }
+              provider: { type: string }
+              name: { type: string }
+    Code:
+      type: object
+      required: [code]
+      properties:
+        code: { type: string }
+    Return:
+      type: object
+      properties:
+        return: { type: string, description: A path on the app to come back to. }
+    Session:
+      type: object
+      required: [id, via, created, seen, current]
+      properties:
+        id: { type: string }
+        via: { $ref: "#/components/schemas/Via" }
+        service: { type: string }
+        created: { type: string, format: date-time }
+        seen: { type: string, format: date-time }
+        from: { type: string }
+        agent: { type: string }
+        current: { type: boolean }
+    Token:
+      type: object
+      required: [id, name, scopes, created]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        scopes: { type: array, items: { type: string } }
+        created: { type: string, format: date-time }
+        used: { type: string, format: date-time }
+        expires: { type: string, format: date-time }
+    Passkey:
+      type: object
+      required: [id, name, created, rpID, synced, here]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        created: { type: string, format: date-time }
+        used: { type: string, format: date-time }
+        rpID: { type: string }
+        synced: { type: boolean }
+        here: { type: boolean, description: Made for the app's address of today. }
+    Identity:
+      type: object
+      required: [id, kind, linked]
+      properties:
+        id: { type: string }
+        kind: { type: string, enum: [service, proxy] }
+        service: { type: string }
+        name: { type: string }
+        linked: { type: string, format: date-time }
+        seen: { type: string, format: date-time }
+    Account:
+      type: object
+      required: [id, name, role, owner, via, created, blocked, password]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        role: { type: string }
+        owner: { type: boolean }
+        via: { $ref: "#/components/schemas/Via" }
+        service: { type: string }
+        created: { type: string, format: date-time }
+        seen: { type: string, format: date-time }
+        blocked: { type: boolean }
+        password: { type: boolean }
+        groups: { type: array, items: { type: string } }
+    GroupRole:
+      type: object
+      required: [group, role]
+      properties:
+        group: { type: string, description: The group at the sign-in service, as it reports it. }
+        role: { type: string }
+    Preset:
+      type: object
+      required: [id, scopes, nameClaim, groupsClaim]
+      properties:
+        id: { type: string }
+        scopes: { type: string }
+        nameClaim: { type: string }
+        groupsClaim: { type: string }
+        proxyUser: { type: string }
+        proxyGroups: { type: string }
+    ServiceInput:
+      type: object
+      properties:
+        provider: { type: string }
+        name: { type: string }
+        issuer: { type: string }
+        clientId: { type: string }
+        secret: { type: string }
+        scopes: { type: string }
+        nameClaim: { type: string }
+        groupsClaim: { type: string }
+        ca: { type: string, description: A PEM certificate to trust next to the system's. }
+        on: { type: boolean }
+        createOnFirst: { type: boolean }
+        everyone: { type: boolean }
+        groups: { type: array, items: { $ref: "#/components/schemas/GroupRole" } }
+    Service:
+      type: object
+      required: [id, provider, name, issuer, clientId, secretSet, scopes, nameClaim, groupsClaim, ca, on, paused, tested, redirect, groups, createOnFirst, everyone]
+      properties:
+        id: { type: string }
+        provider: { type: string }
+        name: { type: string }
+        issuer: { type: string }
+        clientId: { type: string }
+        secretSet: { type: boolean }
+        scopes: { type: string }
+        nameClaim: { type: string }
+        groupsClaim: { type: string }
+        ca: { type: boolean }
+        on: { type: boolean }
+        paused: { type: boolean, description: A reset took it off. }
+        tested: { type: boolean }
+        testedAt: { type: string, format: date-time }
+        redirect: { type: string, description: The address to register at the service. }
+        groups: { type: array, items: { $ref: "#/components/schemas/GroupRole" } }
+        createOnFirst: { type: boolean }
+        everyone: { type: boolean }
+    Proxy:
+      type: object
+      required: [on, paused, preset, address, userHeader, groupsHeader, secretHeader, secretSet, logout, createOnFirst, everyone, groups]
+      properties:
+        on: { type: boolean }
+        paused: { type: boolean }
+        preset: { type: string }
+        address: { type: string }
+        userHeader: { type: string }
+        groupsHeader: { type: string }
+        secretHeader: { type: string }
+        secretSet: { type: boolean }
+        logout: { type: string }
+        createOnFirst: { type: boolean }
+        everyone: { type: boolean }
+        groups: { type: array, items: { $ref: "#/components/schemas/GroupRole" } }
+    Entry:
+      type: object
+      required: [at, result]
+      properties:
+        at: { type: string, format: date-time }
+        account: { type: string }
+        name: { type: string, description: An account's name, or a tag for a name no account has. }
+        via: { $ref: "#/components/schemas/Via" }
+        service: { type: string }
+        from: { type: string }
+        result: { type: string }
+        agent: { type: string }
+        count: { type: integer }

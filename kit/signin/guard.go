@@ -34,6 +34,8 @@ type found struct {
 	// renew names the sign-in service whose session ran out and can be
 	// renewed without asking.
 	renew string
+	// proxy is what the request said through the proxy headers.
+	proxy proxyLook
 }
 
 // Guard finds the visitor of every request and puts it where From finds it.
@@ -56,6 +58,14 @@ func (a *Auth) foundIn(r *http.Request) *found {
 func (a *Auth) find(w http.ResponseWriter, r *http.Request) *found {
 	ctx := r.Context()
 	f := &found{}
+	p, look := a.lookAtProxy(ctx, r)
+	f.proxy = look
+	switch {
+	case len(look.users) > 0 && (!look.through || !look.secret):
+		a.note(ctx, r, Entry{Via: ViaProxy, Result: "headerDropped"})
+	case look.through && look.secret && len(look.users) == 0 && p.On:
+		a.note(ctx, r, Entry{Via: ViaProxy, Result: "proxyNoUser"})
+	}
 	if a.open.Load() {
 		f.ok, f.v = true, Visitor{Role: a.roles[0], Via: ViaAnyone, roles: a.roles}
 		return f
@@ -78,7 +88,32 @@ func (a *Auth) find(w http.ResponseWriter, r *http.Request) *found {
 		f.ok, f.v = true, v
 		return f
 	}
+	if v, good := a.byProxy(r, p, look); good {
+		f.ok, f.v = true, v
+		return f
+	}
+	f.v, f.ok = a.byDoor(r)
 	return f
+}
+
+// byDoor asks the app's own ways in. What a door returns counts only for an
+// account the package knows and has not blocked, with the role the package
+// keeps for it.
+func (a *Auth) byDoor(r *http.Request) (Visitor, bool) {
+	for _, door := range a.cfg.Hooks.Doors {
+		v, good := door(r)
+		if !good {
+			continue
+		}
+		acc, err := a.account(r.Context(), v.Account)
+		if err != nil || acc.Blocked {
+			return Visitor{}, false
+		}
+		out := a.visitorOf(acc, ViaDoor, v.Service)
+		out.Scopes = v.Scopes
+		return out, true
+	}
+	return Visitor{}, false
 }
 
 func (a *Auth) sessionID(raw string) string { return a.macHex("session", raw)[:32] }

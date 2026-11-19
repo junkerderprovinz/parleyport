@@ -52,7 +52,6 @@ func (a *Auth) runEndings(ctx context.Context) {
 
 func (a *Auth) endLoop() {
 	ctx := context.Background()
-	a.runEndings(ctx)
 	t := time.NewTicker(time.Minute)
 	defer t.Stop()
 	for {

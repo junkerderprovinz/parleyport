@@ -44,7 +44,7 @@ const (
 	EndBlocked       Ending = "blocked"
 	EndRemoved       Ending = "removed"
 	EndOpened        Ending = "opened"  // the last password was removed
-	EndService       Ending = "service" // the sign-in service no longer lets the account in
+	EndService       Ending = "service" // the sign-in service turned the account away
 )
 
 // ErrNotFresh is what Mint returns when the visitor has to sign in again
@@ -108,9 +108,16 @@ type Hooks struct {
 	// SignedIn runs after every sign-in with the service groups the sign-in
 	// service or proxy reported.
 	SignedIn func(ctx context.Context, v Visitor, groups []string)
+	// Doors are the ways in the app keeps for itself, such as a paired
+	// phone, asked in order after the package found nobody.
+	Doors []Door
 	// Logged gets every entry of the sign-in log, for notifications.
 	Logged func(ctx context.Context, e Entry)
 }
+
+// Door is a way in the app keeps for itself. It returns the account a
+// request comes from, and Service and Scopes as the app sees them.
+type Door func(r *http.Request) (Visitor, bool)
 
 // Visitor is who a request comes from.
 type Visitor struct {
@@ -149,14 +156,15 @@ type Auth struct {
 	open     atomic.Bool
 	imported time.Time
 
-	argon  chan struct{}
-	dummy  string
-	limits *limits
-	steps  *steps
-	reset  resetState
-	logs   logState
-	endMu  sync.Mutex
-	used   usedChallenges
+	argon   chan struct{}
+	dummy   string
+	limits  *limits
+	steps   *steps
+	reset   resetState
+	logs    logState
+	endMu   sync.Mutex
+	used    usedChallenges
+	tickets tickets
 
 	handler http.Handler
 	stop    chan struct{}
@@ -220,6 +228,7 @@ func Open(cfg Config) (*Auth, error) {
 	if err := a.start(ctx); err != nil {
 		return nil, err
 	}
+	a.runEndings(ctx)
 	a.handler = a.routes()
 	a.stop = make(chan struct{})
 	a.done.Go(a.endLoop)
