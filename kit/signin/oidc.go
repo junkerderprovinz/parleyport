@@ -148,7 +148,9 @@ type remote struct {
 // dial reads the service's discovery document and sets up the client for
 // one trip.
 func (a *Auth) dial(ctx context.Context, s *service) (*remote, error) {
-	ctx = oidc.ClientContext(ctx, a.httpClient(s))
+	// The calls end with the client's timeout, not with the browser's request,
+	// so a browser that goes away cannot cut a code exchange in half.
+	ctx = oidc.ClientContext(context.WithoutCancel(ctx), a.httpClient(s))
 	p, err := oidc.NewProvider(ctx, s.Issuer)
 	if err != nil {
 		return nil, err
