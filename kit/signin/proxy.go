@@ -142,22 +142,29 @@ func (a *Auth) byProxy(r *http.Request, p *proxySettings, look proxyLook) (Visit
 	id := identityID(identityProxy, "", name)
 	idn := new(identity)
 	err := a.load(ctx, kindIdentity, id, idn)
-	role, mapped := a.roleFor(p.rules, look.groups)
+	role, _ := a.roleFor(p.rules, look.groups)
 	var acc *account
+	var ended []Doc
 	switch {
 	case err == nil:
 		if acc, err = a.account(ctx, idn.Account); err != nil || acc.Blocked {
 			return Visitor{}, false
 		}
-		if !acc.Owner && mapped {
-			if role == "" {
-				return Visitor{}, false
-			}
-			acc.Role = role
+		was := acc.Role
+		verdict, docs, err := a.judge(r, acc, p.rules, look.groups)
+		if err != nil {
+			return Visitor{}, false
 		}
-		if now.Sub(acc.Checked) < seenEvery && acc.Role == role {
+		if verdict == shuts {
+			if err := a.cfg.Store.Apply(ctx, docs...); err != nil {
+				a.log.Warn("signin: ending the ways in of an account that left its group", "err", err)
+			}
+			return Visitor{}, false
+		}
+		if verdict == keeps && acc.Role == was && now.Sub(acc.Checked) < seenEvery {
 			return a.visitorOf(acc, ViaProxy, p.Preset), true
 		}
+		ended = docs
 	case errors.Is(err, ErrNotFound):
 		if !p.CreateOnFirst || role == "" {
 			return Visitor{}, false
@@ -174,7 +181,7 @@ func (a *Auth) byProxy(r *http.Request, p *proxySettings, look proxyLook) (Visit
 	}
 	acc.Checked, acc.Seen, acc.Groups = now, now, look.groups
 	idn.Seen = now
-	if err := a.cfg.Store.Apply(ctx, a.doc(kindAccount, acc.ID, acc), a.doc(kindIdentity, id, idn)); err != nil {
+	if err := a.cfg.Store.Apply(ctx, append(ended, a.doc(kindAccount, acc.ID, acc), a.doc(kindIdentity, id, idn))...); err != nil {
 		a.log.Warn("signin: noting a visit through the proxy", "err", err)
 		return Visitor{}, false
 	}

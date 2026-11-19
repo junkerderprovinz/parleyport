@@ -71,18 +71,24 @@ func (a *Auth) deleteSession(w http.ResponseWriter, r *http.Request, f *found) {
 	ok(w, nil)
 }
 
-// deleteSessions ends every other session of the account, and with them
-// the ways in the app keeps for it.
+// deleteSessions ends every other session of the account, old ones it was
+// imported with included, and the ways in the app keeps for it. This
+// browser gets a new session in the next epoch.
 func (a *Auth) deleteSessions(w http.ResponseWriter, r *http.Request, f *found) {
 	ctx := r.Context()
 	a.mu.Lock()
-	docs, err := a.wipe(ctx, kindSession, func(b []byte) bool {
-		var s session
-		return json.Unmarshal(b, &s) == nil && s.Account == f.v.Account
-	})
+	acc, err := a.stillValid(ctx, f)
+	if err != nil {
+		a.mu.Unlock()
+		fail(w, http.StatusUnauthorized, "signInFirst")
+		return
+	}
+	docs, err := a.wipe(ctx, kindSession, owned(acc.ID))
+	ended := max(0, len(docs)-1)
 	if err == nil {
-		docs = slices.DeleteFunc(docs, func(d Doc) bool { return d.ID == f.v.session })
-		docs = append(docs, a.ending(f.v.Account, EndEverywhere))
+		acc.Epoch++
+		docs = append(docs, a.doc(kindAccount, acc.ID, acc), a.ending(acc.ID, EndEverywhere))
+		docs = append(docs, a.newSession(w, r, f, a.reissue(r, f, acc))...)
 		err = a.cfg.Store.Apply(ctx, docs...)
 	}
 	a.mu.Unlock()
@@ -90,8 +96,8 @@ func (a *Auth) deleteSessions(w http.ResponseWriter, r *http.Request, f *found) 
 		a.internal(w, err)
 		return
 	}
-	a.runEndings(ctx)
-	ok(w, map[string]int{"ended": len(docs) - 1})
+	a.afterEpoch(ctx, acc)
+	ok(w, map[string]int{"ended": ended})
 }
 
 // endAll returns deletes for every session and token of account. The caller

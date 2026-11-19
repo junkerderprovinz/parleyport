@@ -35,8 +35,9 @@ type Entry struct {
 }
 
 type logMark struct {
-	id string
-	e  Entry
+	id      string
+	e       Entry
+	written time.Time
 }
 
 type logState struct {
@@ -58,12 +59,16 @@ func (a *Auth) note(ctx context.Context, r *http.Request, e Entry) {
 	l := &a.logs
 	l.mu.Lock()
 	key := e.From + "\x00" + e.Account + "\x00" + e.Name + "\x00" + e.Result
-	id := ""
-	if m, ok := l.last[key]; ok && e.Result != "ok" && e.At.Sub(m.e.At) < logMerge {
+	id, write := "", true
+	m, seen := l.last[key]
+	if seen && e.Result != "ok" && e.At.Sub(m.e.At) < logMerge {
 		id = m.id
 		m.e.Count++
 		m.e.At = e.At
 		e = m.e
+		// A flood of the same failure counts up in memory and reaches the
+		// store about once a minute, not once a request.
+		write = e.Count < 10 || e.At.Sub(m.written) >= logMerge
 	} else {
 		l.seq++
 		id = fmt.Sprintf("%019d-%06d", e.At.UnixNano(), l.seq%1_000_000)
@@ -71,13 +76,19 @@ func (a *Auth) note(ctx context.Context, r *http.Request, e Entry) {
 	if len(l.last) > 1000 {
 		clear(l.last)
 	}
-	l.last[key] = logMark{id: id, e: e}
-	l.writes++
-	prune := l.writes%pruneEach == 0
+	mark := logMark{id: id, e: e, written: m.written}
+	if write {
+		mark.written = e.At
+		l.writes++
+	}
+	l.last[key] = mark
+	prune := write && l.writes%pruneEach == 0
 	l.mu.Unlock()
 
-	if err := a.cfg.Store.Apply(ctx, a.doc(kindLog, id, e)); err != nil {
-		a.log.Warn("signin: writing the sign-in log", "err", err)
+	if write {
+		if err := a.cfg.Store.Apply(ctx, a.doc(kindLog, id, e)); err != nil {
+			a.log.Warn("signin: writing the sign-in log", "err", err)
+		}
 	}
 	if prune {
 		a.pruneLog(ctx)

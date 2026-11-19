@@ -82,6 +82,7 @@ func (c *checker) do(method, path string, body any, header ...string) *httptest.
 	r := httptest.NewRequest(method, "https://app.test"+signin.APIPrefix+path, bytes.NewReader(raw))
 	if body != nil {
 		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("Sec-Fetch-Site", "same-origin")
 	}
 	for i := 0; i+1 < len(header); i += 2 {
 		r.Header.Set(header[i], header[i+1])

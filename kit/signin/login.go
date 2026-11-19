@@ -111,7 +111,7 @@ func (a *Auth) postLogin(w http.ResponseWriter, r *http.Request, f *found) {
 		return
 	}
 	if acc.Password == "" || !password.Current(acc.Password) {
-		a.rehash(ctx, acc.ID, in.Password)
+		a.rehash(ctx, acc, in.Password)
 	}
 	if acc.twoFactor() {
 		raw := token.Random(32)
@@ -299,6 +299,7 @@ func (a *Auth) checkPassword(ctx context.Context, acc *account, pw string) (bool
 	case acc.LegacyPassword != "" && a.cfg.Legacy.Password != nil:
 		return a.cfg.Legacy.Password(ctx, acc.LegacyPassword, pw)
 	}
+	_, _ = password.Check(a.dummy, []byte("x"))
 	return false, nil
 }
 
@@ -330,19 +331,21 @@ func (a *Auth) hashing(ctx context.Context) (func(), error) {
 }
 
 // rehash writes pw in the kit's current form after a sign-in with an older
-// one.
-func (a *Auth) rehash(ctx context.Context, id, pw string) {
-	h, err := password.Hash(a.passwordInput(pw))
+// one, as long as the hash it was checked against is still the one stored.
+// Otherwise a sign-in that crossed a reset could bring the old password back.
+func (a *Auth) rehash(ctx context.Context, was *account, pw string) {
+	h, err := a.hashPassword(pw)
 	if err != nil {
 		a.log.Warn("signin: hashing a password anew", "err", err)
 		return
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	acc, err := a.account(ctx, id)
-	if err != nil {
+	acc, err := a.account(ctx, was.ID)
+	if err != nil || acc.Password != was.Password || acc.LegacyPassword != was.LegacyPassword || acc.Epoch != was.Epoch {
 		return
 	}
+	id := acc.ID
 	acc.Password, acc.LegacyPassword = h, ""
 	if err := a.cfg.Store.Apply(ctx, a.doc(kindAccount, id, acc)); err != nil {
 		a.log.Warn("signin: hashing a password anew", "err", err)

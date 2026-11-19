@@ -26,6 +26,7 @@ const (
 	kindProxy    = "proxy"
 	kindLog      = "log"
 	kindEnding   = "ending"
+	kindSwapped  = "swapped"
 
 	metaID  = "signin"
 	proxyID = "proxy"

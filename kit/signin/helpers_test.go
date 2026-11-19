@@ -138,7 +138,7 @@ func (a *app) browser() *browser {
 	*c = *a.srv.Client()
 	c.Jar = jar
 	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &browser{t: a.t, a: a, c: c, header: http.Header{}}
+	return &browser{t: a.t, a: a, c: c, header: http.Header{"Sec-Fetch-Site": {"same-origin"}}}
 }
 
 type reply struct {

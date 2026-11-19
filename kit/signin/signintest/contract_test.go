@@ -41,7 +41,9 @@ func TestRunNoticesAnAppThatBreaksTheContract(t *testing.T) {
 			_, _ = w.Write([]byte(`{"via": "nowhere"}`))
 			return
 		}
-		r.Header.Del("Sec-Fetch-Site")
+		if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+			r.Header.Set("Sec-Fetch-Site", "same-origin")
+		}
 		app.ServeHTTP(w, r)
 	})
 	issues := check(broken, Options{Password: "a good long password"})

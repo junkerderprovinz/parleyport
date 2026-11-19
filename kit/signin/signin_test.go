@@ -196,7 +196,7 @@ func TestChangesFromAnotherSiteAreRefused(t *testing.T) {
 	if b.visitor().Via == "" {
 		t.Fatal("a cross-site logout went through")
 	}
-	r := b.api("POST", "logout", map[string]string{}, "Origin", "https://evil.example")
+	r := b.api("POST", "logout", map[string]string{}, "Sec-Fetch-Site", "", "Origin", "https://evil.example")
 	want(t, r, 403, "crossSite")
 	r = b.api("POST", "logout", map[string]string{}, "Content-Type", "text/plain")
 	want(t, r, 415, "notJSON")

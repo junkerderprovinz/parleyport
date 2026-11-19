@@ -120,8 +120,9 @@ func (a *Auth) postReset(w http.ResponseWriter, r *http.Request, f *found) {
 
 // resetDocs is everything a reset changes. Whoever knew the old password may
 // have left a way in behind, so the reset ends every session and token,
-// takes acc's passkeys and second factor, and pauses every sign-in service
-// and the proxy until the owner turns them on again. The caller holds mu.
+// takes acc's passkeys, second factor and bindings to sign-in services and
+// the proxy, and pauses every service and the proxy until the owner turns
+// them on again. The caller holds mu.
 func (a *Auth) resetDocs(r *http.Request, acc *account, hash string) ([]Doc, map[string]any, error) {
 	ctx := r.Context()
 	removed := map[string]any{"twoFactor": acc.twoFactor()}
@@ -152,18 +153,17 @@ func (a *Auth) resetDocs(r *http.Request, acc *account, hash string) ([]Doc, map
 	if err != nil {
 		return nil, nil, err
 	}
-	outside, err := a.pauseOutside(ctx)
+	identities, err := a.wipe(ctx, kindIdentity, owned(acc.ID))
 	if err != nil {
 		return nil, nil, err
 	}
-	services := 0
-	for _, d := range outside {
-		if d.Kind == kindService {
-			services++
-		}
+	outside, services, proxy, err := a.pauseOutside(ctx)
+	if err != nil {
+		return nil, nil, err
 	}
 	removed["tokens"], removed["passkeys"] = len(tokens), len(passkeys)
-	removed["services"], removed["proxy"] = services, len(outside) > services
+	removed["services"], removed["proxy"] = services, proxy
+	docs = append(docs, identities...)
 	docs = append(docs, sessions...)
 	docs = append(docs, tokens...)
 	docs = append(docs, passkeys...)

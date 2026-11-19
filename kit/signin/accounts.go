@@ -126,7 +126,7 @@ func (a *Auth) postAccount(w http.ResponseWriter, r *http.Request, f *found) {
 	}
 }
 
-func (a *Auth) patchAccount(w http.ResponseWriter, r *http.Request, _ *found) {
+func (a *Auth) patchAccount(w http.ResponseWriter, r *http.Request, f *found) {
 	var in struct {
 		Blocked *bool   `json:"blocked"`
 		Role    *string `json:"role"`
@@ -140,6 +140,11 @@ func (a *Auth) patchAccount(w http.ResponseWriter, r *http.Request, _ *found) {
 	}
 	ctx := r.Context()
 	a.mu.Lock()
+	if _, err := a.stillValid(ctx, f); err != nil {
+		a.mu.Unlock()
+		fail(w, http.StatusUnauthorized, "signInFirst")
+		return
+	}
 	acc, err := a.account(ctx, r.PathValue("id"))
 	if err != nil {
 		a.mu.Unlock()
@@ -160,7 +165,7 @@ func (a *Auth) patchAccount(w http.ResponseWriter, r *http.Request, _ *found) {
 	}
 	if in.Role != nil {
 		if slices.Index(a.roles, *in.Role) > slices.Index(a.roles, acc.Role) && why == "" {
-			why = EndPassword
+			why = EndRole
 		}
 		acc.Role = *in.Role
 	}
@@ -175,9 +180,7 @@ func (a *Auth) patchAccount(w http.ResponseWriter, r *http.Request, _ *found) {
 			return
 		}
 		docs = append(docs, ended...)
-		if why == EndBlocked {
-			docs = append(docs, a.ending(acc.ID, EndBlocked))
-		}
+		docs = append(docs, a.ending(acc.ID, why))
 	}
 	err = a.cfg.Store.Apply(ctx, docs...)
 	a.mu.Unlock()
@@ -189,9 +192,14 @@ func (a *Auth) patchAccount(w http.ResponseWriter, r *http.Request, _ *found) {
 	ok(w, map[string]any{"account": a.viewOf(acc)})
 }
 
-func (a *Auth) deleteAccount(w http.ResponseWriter, r *http.Request, _ *found) {
+func (a *Auth) deleteAccount(w http.ResponseWriter, r *http.Request, f *found) {
 	ctx := r.Context()
 	a.mu.Lock()
+	if _, err := a.stillValid(ctx, f); err != nil {
+		a.mu.Unlock()
+		fail(w, http.StatusUnauthorized, "signInFirst")
+		return
+	}
 	acc, err := a.account(ctx, r.PathValue("id"))
 	if err != nil {
 		a.mu.Unlock()

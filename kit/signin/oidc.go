@@ -26,6 +26,7 @@ const (
 	flowLife   = 10 * time.Minute
 	ticketLife = 5 * time.Minute
 	oidcWait   = 10 * time.Second
+	maxTickets = 1000
 )
 
 // What a trip to the sign-in service is for.
@@ -49,6 +50,7 @@ type flow struct {
 	Return   string    `json:"return"`
 	Account  string    `json:"account,omitempty"`
 	Session  string    `json:"session,omitempty"`
+	Epoch    int       `json:"epoch,omitempty"`
 	Expires  time.Time `json:"expires"`
 }
 
@@ -78,7 +80,9 @@ func (t *tickets) put(key string, tk ticket, now time.Time) {
 			delete(t.m, k)
 		}
 	}
-	t.m[key] = tk
+	if len(t.m) < maxTickets {
+		t.m[key] = tk
+	}
 }
 
 func (t *tickets) take(key string, now time.Time) (ticket, bool) {
@@ -189,7 +193,7 @@ func (a *Auth) getOIDCStart(w http.ResponseWriter, r *http.Request) {
 			a.back(w, r, ret, "flowExpired")
 			return
 		}
-		fl.Purpose, fl.Account = tk.purpose, tk.account
+		fl.Purpose, fl.Account, fl.Session, fl.Epoch = tk.purpose, tk.account, f.v.session, f.v.epoch
 		opts = append(opts, oauth2.SetAuthURLParam("prompt", "login"))
 	case q.Get("renew") != "":
 		if f.renew != s.ID || f.cookie == "" {
@@ -413,6 +417,11 @@ func (a *Auth) serviceSignIn(w http.ResponseWriter, r *http.Request, s *service,
 		a.back(w, r, fl.Return, code)
 	}
 	a.mu.Lock()
+	if !a.serviceOn(ctx, s) {
+		a.mu.Unlock()
+		note(Entry{Name: a.typedName(ctx, who.name)}, "serviceOff")
+		return
+	}
 	id := identityID(identityService, who.issuer, who.subject)
 	idn := new(identity)
 	err := a.load(ctx, kindIdentity, id, idn)
@@ -430,32 +439,25 @@ func (a *Auth) serviceSignIn(w http.ResponseWriter, r *http.Request, s *service,
 			note(Entry{Account: acc.ID, Name: acc.Name}, "blocked")
 			return
 		}
-		role, mapped := a.roleFor(s.rules, who.groups)
-		if !acc.Owner && mapped {
-			if role == "" {
-				ended, err := a.shutOut(r, acc)
-				if err == nil {
-					err = a.cfg.Store.Apply(ctx, ended...)
-				}
-				a.mu.Unlock()
-				if err != nil {
-					a.log.Warn("signin: ending the ways in of an account that left its group", "err", err)
-				}
-				a.runEndings(ctx)
-				note(Entry{Account: acc.ID, Name: acc.Name}, "noGroup")
-				return
+		verdict, ended, err := a.judge(r, acc, s.rules, who.groups)
+		if err != nil {
+			a.mu.Unlock()
+			a.internal(w, err)
+			return
+		}
+		if verdict == shuts {
+			err = a.cfg.Store.Apply(ctx, ended...)
+			a.mu.Unlock()
+			if err != nil {
+				a.log.Warn("signin: ending the ways in of an account that left its group", "err", err)
 			}
-			if slices.Index(a.roles, role) > slices.Index(a.roles, acc.Role) {
-				lower, err := a.endAll(r, acc.ID)
-				if err != nil {
-					a.mu.Unlock()
-					a.internal(w, err)
-					return
-				}
-				acc.Epoch++
-				docs = append(docs, lower...)
-			}
-			acc.Role = role
+			a.runEndings(ctx)
+			note(Entry{Account: acc.ID, Name: acc.Name}, "noGroup")
+			return
+		}
+		docs = append(docs, ended...)
+		if verdict == lowers {
+			defer a.runEndings(ctx)
 		}
 		idn.Seen, idn.Name = now, who.name
 		docs = append(docs, a.doc(kindIdentity, id, idn))
@@ -546,23 +548,29 @@ func (a *Auth) renewService(w http.ResponseWriter, r *http.Request, s *service, 
 		return
 	}
 	acc, err := a.account(ctx, sess.Account)
-	if err != nil || acc.Blocked || acc.Epoch != sess.Epoch {
+	if err != nil || acc.Blocked || acc.Epoch != sess.Epoch || !a.serviceOn(ctx, s) {
 		a.mu.Unlock()
 		a.back(w, r, fl.Return, "renewNeeded")
 		return
 	}
-	if role, mapped := a.roleFor(s.rules, who.groups); !acc.Owner && mapped && role == "" {
-		ended, err := a.shutOut(r, acc)
-		if err == nil {
-			err = a.cfg.Store.Apply(ctx, ended...)
+	verdict, ended, err := a.judge(r, acc, s.rules, who.groups)
+	if err == nil && verdict != keeps {
+		if verdict == lowers {
+			ended = append(ended, a.doc(kindAccount, acc.ID, acc))
 		}
+		err = a.cfg.Store.Apply(ctx, ended...)
+	}
+	if err != nil {
 		a.mu.Unlock()
-		if err != nil {
-			a.log.Warn("signin: ending the ways in of an account that left its group", "err", err)
-		}
+		a.internal(w, err)
+		return
+	}
+	if verdict != keeps {
+		a.mu.Unlock()
 		a.runEndings(ctx)
-		a.note(ctx, r, Entry{Account: acc.ID, Name: acc.Name, Via: ViaService, Service: s.ID, Result: "noGroup"})
-		a.back(w, r, fl.Return, "noGroup")
+		code := map[string]string{shuts: "noGroup", lowers: "renewNeeded"}[verdict]
+		a.note(ctx, r, Entry{Account: acc.ID, Name: acc.Name, Via: ViaService, Service: s.ID, Result: code})
+		a.back(w, r, fl.Return, code)
 		return
 	}
 	now := a.now()
@@ -586,9 +594,14 @@ func (a *Auth) bindService(w http.ResponseWriter, r *http.Request, s *service, f
 	now := a.now()
 	a.mu.Lock()
 	acc, err := a.account(ctx, fl.Account)
-	if err != nil || acc.Blocked {
+	if err != nil || acc.Blocked || a.open.Load() || !a.sameSession(ctx, r, fl, acc) {
 		a.mu.Unlock()
 		a.back(w, r, fl.Return, "signInFirst")
+		return
+	}
+	if err := a.load(ctx, kindService, s.ID, s); err != nil || (fl.Purpose == forLink && !s.On) {
+		a.mu.Unlock()
+		a.back(w, r, fl.Return, "serviceOff")
 		return
 	}
 	id := identityID(identityService, who.issuer, who.subject)
@@ -616,6 +629,57 @@ func (a *Auth) bindService(w http.ResponseWriter, r *http.Request, s *service, f
 	}
 	a.note(ctx, r, Entry{Account: acc.ID, Name: acc.Name, Via: ViaService, Service: s.ID, Result: code})
 	a.back(w, r, fl.Return, code)
+}
+
+// What a service's groups mean for an account it already knows.
+const (
+	keeps  = "keeps"
+	lowers = "lowers"
+	shuts  = "shuts"
+)
+
+// judge applies groups under rl to acc. The owner's role never comes from
+// outside. A lower role or no matching group ends acc's sessions and tokens,
+// and the docs for that come back to apply. The caller holds mu.
+func (a *Auth) judge(r *http.Request, acc *account, rl rules, groups []string) (string, []Doc, error) {
+	role, mapped := a.roleFor(rl, groups)
+	if acc.Owner || !mapped {
+		return keeps, nil, nil
+	}
+	if role == "" {
+		docs, err := a.shutOut(r, acc)
+		return shuts, docs, err
+	}
+	lower := slices.Index(a.roles, role) > slices.Index(a.roles, acc.Role)
+	acc.Role = role
+	if !lower {
+		return keeps, nil, nil
+	}
+	docs, err := a.endAll(r, acc.ID)
+	acc.Epoch++
+	return lowers, append(docs, a.ending(acc.ID, EndRole)), err
+}
+
+// serviceOn reads s again under mu and reports whether it still lets people
+// in, which a reset or an admin may have changed while the browser was at
+// the service.
+func (a *Auth) serviceOn(ctx context.Context, s *service) bool {
+	if a.open.Load() || a.load(ctx, kindService, s.ID, s) != nil {
+		return false
+	}
+	return s.On
+}
+
+// sameSession reports whether the browser finishing a test or a link is
+// still in the session that started it, and nothing ended that session on
+// the way. The caller holds mu.
+func (a *Auth) sameSession(ctx context.Context, r *http.Request, fl *flow, acc *account) bool {
+	now := a.foundIn(r)
+	if fl.Session == "" || now.cookie == "" || a.sessionID(now.cookie) != fl.Session {
+		return false
+	}
+	s := new(session)
+	return a.load(ctx, kindSession, fl.Session, s) == nil && s.Account == acc.ID && s.Epoch == acc.Epoch && s.Epoch == fl.Epoch
 }
 
 func (a *Auth) endSession(ctx context.Context, id string) {

@@ -3,6 +3,7 @@ package signin
 import (
 	"context"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
@@ -215,6 +216,7 @@ func (a *Auth) saveService(w http.ResponseWriter, r *http.Request, f *found, s *
 		s.Secret = sealed
 		s.Fingerprint = shortID(s.Issuer, s.ClientID, a.macHex("service-secret", *in.Secret))
 	}
+	wasOn := s.On
 	if !s.tested() {
 		s.On = false
 	}
@@ -232,7 +234,17 @@ func (a *Auth) saveService(w http.ResponseWriter, r *http.Request, f *found, s *
 			s.Paused = false
 		}
 	}
-	err := a.Mint(r, func() error { return a.cfg.Store.Apply(r.Context(), a.doc(kindService, s.ID, s)) })
+	err := a.Mint(r, func() error {
+		docs := []Doc{a.doc(kindService, s.ID, s)}
+		if wasOn && !s.On {
+			ended, err := a.serviceSessions(r.Context(), s.ID)
+			if err != nil {
+				return err
+			}
+			docs = append(docs, ended...)
+		}
+		return a.cfg.Store.Apply(r.Context(), docs...)
+	})
 	if errors.Is(err, ErrNotFresh) {
 		fail(w, http.StatusForbidden, "signInAgain")
 		return
@@ -244,12 +256,21 @@ func (a *Auth) saveService(w http.ResponseWriter, r *http.Request, f *found, s *
 	ok(w, map[string]any{"service": a.viewService(s)})
 }
 
-func (a *Auth) deleteService(w http.ResponseWriter, r *http.Request, _ *found) {
+func (a *Auth) deleteService(w http.ResponseWriter, r *http.Request, f *found) {
 	id := r.PathValue("id")
 	a.mu.Lock()
+	if _, err := a.stillValid(r.Context(), f); err != nil {
+		a.mu.Unlock()
+		fail(w, http.StatusUnauthorized, "signInFirst")
+		return
+	}
 	err := a.load(r.Context(), kindService, id, new(service))
+	var docs []Doc
 	if err == nil {
-		err = a.cfg.Store.Apply(r.Context(), gone(kindService, id))
+		docs, err = a.serviceSessions(r.Context(), id)
+	}
+	if err == nil {
+		err = a.cfg.Store.Apply(r.Context(), append(docs, gone(kindService, id))...)
 	}
 	a.mu.Unlock()
 	if err != nil {
@@ -329,30 +350,45 @@ func validIssuer(issuer string) bool {
 	return u.Scheme == "http" && (host == "localhost" || (ip != nil && ip.IsLoopback()))
 }
 
-// pauseOutside takes every sign-in service and the proxy off and stops them
-// from making accounts, for a reset or for an app that opens up again. The
-// owner turns them on again by hand. The caller holds mu.
-func (a *Auth) pauseOutside(ctx context.Context) ([]Doc, error) {
+// pauseOutside takes every sign-in service and the proxy off, stops them
+// from making accounts and forgets their test sign-ins, for a reset or for
+// an app that opens up again. Each service needs a new test sign-in before
+// it lets anyone in, so whoever knew the old password cannot have left a
+// working one behind. It returns how many services and whether the proxy
+// were on. The caller holds mu.
+func (a *Auth) pauseOutside(ctx context.Context) (docs []Doc, services int, proxy bool, err error) {
 	all, err := a.services(ctx)
 	if err != nil {
-		return nil, err
+		return nil, 0, false, err
 	}
-	var docs []Doc
 	for _, s := range all {
-		if s.On || s.CreateOnFirst {
-			s.On, s.Paused, s.CreateOnFirst = false, true, false
+		if s.On {
+			services++
+		}
+		if s.On || s.CreateOnFirst || s.TestedFor != "" {
+			s.Paused = s.Paused || s.On
+			s.On, s.CreateOnFirst, s.TestedFor = false, false, ""
 			docs = append(docs, a.doc(kindService, s.ID, s))
 		}
 	}
 	p, err := a.proxySettings(ctx)
 	if err != nil {
-		return nil, err
+		return nil, 0, false, err
 	}
-	if p.On || p.CreateOnFirst {
+	if proxy = p.On; p.On || p.CreateOnFirst {
 		p.On, p.Paused, p.CreateOnFirst = false, true, false
 		docs = append(docs, a.doc(kindProxy, proxyID, p))
 	}
-	return docs, nil
+	return docs, services, proxy, nil
+}
+
+// serviceSessions returns deletes for every session that came in through
+// the sign-in service id. The caller holds mu.
+func (a *Auth) serviceSessions(ctx context.Context, id string) ([]Doc, error) {
+	return a.wipe(ctx, kindSession, func(b []byte) bool {
+		var s session
+		return json.Unmarshal(b, &s) == nil && s.Via == ViaService && s.Service == id
+	})
 }
 
 func (a *Auth) offeredServices(ctx context.Context) ([]map[string]string, error) {

@@ -108,7 +108,7 @@ func (u *usedChallenges) take(c string, until, now time.Time) bool {
 			}
 		}
 	}
-	if _, seen := u.m[c]; seen {
+	if _, seen := u.m[c]; seen || len(u.m) >= maxUsed {
 		return false
 	}
 	u.m[c] = until
@@ -217,8 +217,12 @@ func (a *Auth) postPasskeyLogin(w http.ResponseWriter, r *http.Request, f *found
 		fail(w, http.StatusUnauthorized, "passkeyUnknown")
 		return
 	}
-	if err != nil || !acc.hasPassword() {
-		a.note(ctx, r, Entry{Account: acc.ID, Name: acc.Name, Via: ViaPasskey, Result: "passkeyRefused"})
+	if err != nil || acc == nil || !acc.hasPassword() {
+		e := Entry{Via: ViaPasskey, Result: "passkeyRefused"}
+		if acc != nil {
+			e.Account, e.Name = acc.ID, acc.Name
+		}
+		a.note(ctx, r, e)
 		fail(w, http.StatusUnauthorized, "passkeyRefused")
 		return
 	}
@@ -368,9 +372,20 @@ func (a *Auth) postPasskey(w http.ResponseWriter, r *http.Request, f *found) {
 		name = "Passkey"
 	}
 	doc := passkeyDoc{Account: acc.ID, Name: name, Created: a.now(), RPID: rp.Config.RPID, Credential: *cred}
-	err = a.Mint(r, func() error { return a.cfg.Store.Apply(r.Context(), a.doc(kindPasskey, passkeyID(cred.ID), doc)) })
+	taken := false
+	err = a.Mint(r, func() error {
+		if a.load(r.Context(), kindPasskey, passkeyID(cred.ID), new(passkeyDoc)) == nil {
+			taken = true
+			return nil
+		}
+		return a.cfg.Store.Apply(r.Context(), a.doc(kindPasskey, passkeyID(cred.ID), doc))
+	})
 	if errors.Is(err, ErrNotFresh) {
 		fail(w, http.StatusForbidden, "signInAgain")
+		return
+	}
+	if taken {
+		fail(w, http.StatusConflict, "passkeyRefused")
 		return
 	}
 	if err != nil {

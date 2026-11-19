@@ -161,6 +161,9 @@ func (a *Auth) importAll(ctx context.Context, m *meta) ([]Doc, error) {
 	if owners > 1 {
 		return nil, errors.New("signin: import: more than one owner")
 	}
+	if a.cfg.Owner && owners == 0 && len(old) > 1 {
+		return nil, errors.New("signin: import: an app with one owner needs one account marked Owner")
+	}
 	if owners == 0 && len(old) == 1 && a.cfg.Owner {
 		first.Owner = true
 		docs[0] = a.doc(kindAccount, first.ID, first)
@@ -168,8 +171,14 @@ func (a *Auth) importAll(ctx context.Context, m *meta) ([]Doc, error) {
 	return docs, nil
 }
 
+// swap marks an old session that was swapped for a new one.
+type swap struct {
+	At time.Time `json:"at"`
+}
+
 // byOldSession accepts the app's old session cookie for an imported account
-// and swaps it for a session of the package. It counts only for a session
+// and swaps it for a session of the package. It counts once, so signing out
+// of the new session cannot bring the old one back, and only for a session
 // issued before the import, within its old life, and until the account's
 // first epoch.
 func (a *Auth) byOldSession(w http.ResponseWriter, r *http.Request) (Visitor, bool) {
@@ -191,13 +200,17 @@ func (a *Auth) byOldSession(w http.ResponseWriter, r *http.Request) (Visitor, bo
 	if err != nil || acc.Blocked || acc.Epoch != 0 || !acc.Imported {
 		return Visitor{}, false
 	}
+	swapped := shortID("old-session", id, issued.UTC().Format(time.RFC3339Nano))
+	if a.load(ctx, kindSwapped, swapped, new(swap)) == nil {
+		return Visitor{}, false
+	}
 	v := a.visitorOf(acc, ViaPassword, "")
 	if w == nil {
 		return v, true
 	}
 	s := sessionOf(acc, ViaPassword, "")
 	s.Expires, s.SignedAt = ends, issued
-	docs := a.newSession(w, r, nil, s)
+	docs := append(a.newSession(w, r, nil, s), a.doc(kindSwapped, swapped, swap{At: a.now()}))
 	if err := a.cfg.Store.Apply(ctx, docs...); err != nil {
 		a.log.Warn("signin: swapping an old session", "err", err)
 		return Visitor{}, false

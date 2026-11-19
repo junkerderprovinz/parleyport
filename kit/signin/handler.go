@@ -65,12 +65,10 @@ func (a *Auth) routes() http.Handler {
 	})
 }
 
-var crossOrigin = http.NewCrossOriginProtection()
-
 func (a *Auth) serveAPI(w http.ResponseWriter, r *http.Request, pattern string, need access, fn route) {
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		if crossOrigin.Check(r) != nil {
+		if !a.sameOrigin(r) {
 			fail(w, http.StatusForbidden, "crossSite")
 			return
 		}
@@ -105,6 +103,32 @@ func (a *Auth) serveAPI(w http.ResponseWriter, r *http.Request, pattern string, 
 		}
 	}
 	fn(w, r, f)
+}
+
+// sameOrigin reports whether a change comes from the app's own pages. A
+// browser says so in Sec-Fetch-Site, or an older one in Origin, which must
+// then be the app's public address, or without one the host it asked for.
+// With neither header, only an API token counts, never a cookie.
+func (a *Auth) sameOrigin(r *http.Request) bool {
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "same-origin", "none":
+		return true
+	case "":
+	default:
+		return false
+	}
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ")
+	}
+	if u := a.public(); u != nil {
+		return origin == u.Scheme+"://"+u.Host
+	}
+	scheme := "http"
+	if a.https(r) {
+		scheme = "https"
+	}
+	return origin == scheme+"://"+r.Host
 }
 
 func hasBody(r *http.Request) bool { return r.ContentLength > 0 || len(r.TransferEncoding) > 0 }

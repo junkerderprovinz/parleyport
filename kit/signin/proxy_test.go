@@ -33,6 +33,9 @@ func (b *browser) from(peer, method, path string, body any, header ...string) re
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	for k, v := range b.header {
+		req.Header[k] = v
+	}
 	for _, c := range b.c.Jar.Cookies(mustURL(b.a)) {
 		req.AddCookie(c)
 	}

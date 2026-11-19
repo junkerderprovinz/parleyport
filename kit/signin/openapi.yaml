@@ -4,9 +4,10 @@ info:
   version: "1"
   description: |
     The sign-in every app of the kit shares. Requests that change something
-    send JSON and come from the app's own origin (Sec-Fetch-Site same-origin
-    or none, or else a matching Origin), or carry an API token instead of a
-    cookie. Every error is a code, never a sentence:
+    send JSON and come from the app's own pages: Sec-Fetch-Site same-origin
+    or none, or else an Origin that is the app's public address. With
+    neither header only an API token counts, never a cookie. Every error is
+    a code, never a sentence:
     {"error": "<code>"}, with more fields where a code says so.
 
     Besides this API the package serves the browser routes of a sign-in
@@ -109,8 +110,9 @@ paths:
       operationId: reset
       summary: Set a new password with the code from the log
       description: |
-        Ends every session and token, removes the owner's passkeys and second
-        factor, and pauses every sign-in service and the proxy.
+        Ends every session and token, removes the owner's passkeys, second
+        factor and bindings to sign-in services and the proxy, and pauses
+        every service and the proxy. Each service needs a new test sign-in.
       requestBody:
         required: true
         content:
@@ -229,7 +231,8 @@ paths:
                     items: { $ref: "#/components/schemas/Session" }
     delete:
       operationId: endOtherSessions
-      summary: End every other session
+      summary: End every other session, and old ones from before the import
+      description: This browser gets a new session.
       responses:
         "200":
           description: How many ended.

@@ -241,7 +241,7 @@ func (a *Auth) openUp(ctx context.Context) ([]Doc, error) {
 		}
 		docs = append(docs, more...)
 	}
-	more, err := a.pauseOutside(ctx)
+	more, _, _, err := a.pauseOutside(ctx)
 	if err != nil {
 		return nil, err
 	}

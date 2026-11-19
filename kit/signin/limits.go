@@ -85,7 +85,8 @@ func (l *limits) clear(key string) {
 }
 
 // prune drops buckets older than the longest window, and when that frees
-// nothing, an arbitrary tenth.
+// nothing, an arbitrary tenth of the others. The owner's bucket stays, so a
+// flood of other names cannot wipe its count.
 func (l *limits) prune(now time.Time) {
 	for k, b := range l.m {
 		if now.Sub(b.start) > time.Hour {
@@ -97,8 +98,10 @@ func (l *limits) prune(now time.Time) {
 		if len(l.m) < maxBuckets || n == 0 {
 			return
 		}
-		delete(l.m, k)
-		n--
+		if k != "name:owner" {
+			delete(l.m, k)
+			n--
+		}
 	}
 }
 
@@ -158,10 +161,16 @@ func addressKey(ip netip.Addr) string {
 	return "addr:" + ip.String()
 }
 
-// https reports whether the browser reached the app over https.
+// https reports whether the browser reached the app over https: directly,
+// through a proxy from Config.Proxies that says so, or by the public https
+// name, which only a TLS proxy in front serves.
 func (a *Auth) https(r *http.Request) bool {
 	if r.TLS != nil {
 		return true
 	}
-	return a.trusted(peer(r)) && strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+	if a.trusted(peer(r)) && strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+		return true
+	}
+	u := a.public()
+	return u != nil && u.Scheme == "https" && strings.EqualFold(r.Host, u.Host)
 }

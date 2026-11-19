@@ -45,6 +45,7 @@ const (
 	EndRemoved       Ending = "removed"
 	EndOpened        Ending = "opened"  // the last password was removed
 	EndService       Ending = "service" // the sign-in service turned the account away
+	EndRole          Ending = "role"    // a lower role from the sign-in service or an admin
 )
 
 // ErrNotFresh is what Mint returns when the visitor has to sign in again
