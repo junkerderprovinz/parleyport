@@ -57,7 +57,6 @@ func TestAnAccountWithoutAPasswordIsNotAskedForOne(t *testing.T) {
 	a := newApp(t)
 	owner := a.owner()
 	p, id := addService(t, a, owner, "pocket-id")
-	setService(t, owner, id, map[string]any{"createOnFirst": true, "groups": []map[string]string{{"group": "family", "role": "admin"}}})
 	p.Next(signintest.Person{Subject: "sub-anna", Name: "anna", Groups: []string{"family"}})
 	anna := a.browser()
 	anna.serviceSignIn(p, id)

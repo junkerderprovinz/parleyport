@@ -677,9 +677,6 @@ paths:
                 groupsHeader: { type: string }
                 secretHeader: { type: string }
                 logout: { type: string }
-                createOnFirst: { type: boolean }
-                everyone: { type: boolean }
-                groups: { type: array, items: { $ref: "#/components/schemas/GroupRole" } }
       responses:
         "200": { $ref: "#/components/responses/OneProxy" }
         "400": { $ref: "#/components/responses/Error" }
@@ -911,9 +908,7 @@ components:
             - caInvalid
             - confirmOff
             - crossSite
-            - everyoneWouldBeAdmin
             - forbidden
-            - groupsMissing
             - headerInvalid
             - identityTaken
             - internal
@@ -978,7 +973,6 @@ components:
         - nameMissing
         - nameTaken
         - noAccount
-        - noGroup
         - renewNeeded
         - serviceOff
         - serviceRefused
@@ -1098,12 +1092,6 @@ components:
         blocked: { type: boolean }
         password: { type: boolean }
         groups: { type: array, items: { type: string } }
-    GroupRole:
-      type: object
-      required: [group, role]
-      properties:
-        group: { type: string, description: The group at the sign-in service, as it reports it. }
-        role: { type: string }
     Preset:
       type: object
       required: [id, scopes, nameClaim, groupsClaim]
@@ -1127,12 +1115,9 @@ components:
         groupsClaim: { type: string }
         ca: { type: string, description: A PEM certificate to trust next to the system's. }
         on: { type: boolean }
-        createOnFirst: { type: boolean }
-        everyone: { type: boolean }
-        groups: { type: array, items: { $ref: "#/components/schemas/GroupRole" } }
     Service:
       type: object
-      required: [id, provider, name, issuer, clientId, secretSet, scopes, nameClaim, groupsClaim, ca, on, paused, tested, redirect, groups, createOnFirst, everyone]
+      required: [id, provider, name, issuer, clientId, secretSet, scopes, nameClaim, groupsClaim, ca, on, paused, tested, redirect]
       properties:
         id: { type: string }
         provider: { type: string }
@@ -1149,12 +1134,9 @@ components:
         tested: { type: boolean }
         testedAt: { type: string, format: date-time }
         redirect: { type: string, description: The address to register at the service. }
-        groups: { type: array, items: { $ref: "#/components/schemas/GroupRole" } }
-        createOnFirst: { type: boolean }
-        everyone: { type: boolean }
     Proxy:
       type: object
-      required: [on, paused, preset, address, userHeader, groupsHeader, secretHeader, secretSet, logout, createOnFirst, everyone, groups]
+      required: [on, paused, preset, address, userHeader, groupsHeader, secretHeader, secretSet, logout]
       properties:
         on: { type: boolean }
         paused: { type: boolean }
@@ -1165,9 +1147,6 @@ components:
         secretHeader: { type: string }
         secretSet: { type: boolean }
         logout: { type: string }
-        createOnFirst: { type: boolean }
-        everyone: { type: boolean }
-        groups: { type: array, items: { $ref: "#/components/schemas/GroupRole" } }
     Entry:
       type: object
       required: [at, result]

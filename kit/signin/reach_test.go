@@ -74,36 +74,10 @@ func TestAfterAResetTheServiceNeedsANewTestAndForgetsItsBindings(t *testing.T) {
 		t.Fatalf("test sign-in ended at %s", got)
 	}
 	p.Next(ownerAtService)
-	if got := a.browser().serviceSignIn(p, id); got != "/home?signin=noAccount" {
-		t.Fatalf("the binding from before the reset ended at %s", got)
-	}
-}
-
-func TestARenewalAppliesALowerRole(t *testing.T) {
-	a := newApp(t, manyAccounts)
-	owner := a.owner()
-	p, id := addService(t, a, owner, "pocket-id")
-	setService(t, owner, id, map[string]any{"createOnFirst": true, "groups": []map[string]string{{"group": "admins", "role": "admin"}, {"group": "family", "role": "viewer"}}})
-	anna := signintest.Person{Subject: "sub-anna", Name: "anna", Groups: []string{"admins"}}
-	p.Next(anna)
-	b := a.browser()
-	b.serviceSignIn(p, id)
-	if v := b.visitor(); v.Role != "admin" {
-		t.Fatalf("anna is %+v", v)
-	}
-	a.clock.Add(25 * time.Hour)
-	anna.Groups = []string{"family"}
-	p.Next(anna)
-	if got := b.via(p, "/signin/oidc/"+id+"?renew=1&return=/home"); got != "/home?signin=renewNeeded" {
-		t.Fatalf("a renewal with a lower role ended at %s", got)
-	}
-	if strings.Count(strings.Join(a.endedWith(), " "), ":role") != 1 {
-		t.Fatalf("Ended = %v", a.endedWith())
-	}
-	p.Next(anna)
-	b.serviceSignIn(p, id)
-	if v := b.visitor(); v.Role != "viewer" {
-		t.Fatalf("anna after signing in again is %+v", v)
+	c := a.browser()
+	c.serviceSignIn(p, id)
+	if v := c.visitor(); v.Account == b.visitor().Account {
+		t.Fatalf("the binding from before the reset still signs in as the owner: %+v", v)
 	}
 }
 
@@ -214,26 +188,5 @@ func TestARequestForTheHTTPSAddressGetsSecureCookies(t *testing.T) {
 	a.auth.Handler().ServeHTTP(rec, req)
 	if set := rec.Header().Get("Set-Cookie"); !strings.HasPrefix(set, "__Host-alpha-session=") || !strings.Contains(set, "Secure") {
 		t.Fatalf("cookie %q", set)
-	}
-}
-
-func TestLeavingTheGroupEndsTheTokensToo(t *testing.T) {
-	a := newApp(t)
-	owner := a.owner()
-	p, id := addService(t, a, owner, "pocket-id")
-	setService(t, owner, id, map[string]any{"createOnFirst": true, "groups": []map[string]string{{"group": "family", "role": "admin"}}})
-	anna := signintest.Person{Subject: "sub-anna", Name: "anna", Groups: []string{"family"}}
-	p.Next(anna)
-	b := a.browser()
-	b.serviceSignIn(p, id)
-	r := b.api("POST", "me/tokens", map[string]any{"name": "script", "scopes": []string{"read"}})
-	want(t, r, 200, "")
-	script := a.browser()
-	script.header.Set("Authorization", "Bearer "+r.json(t)["value"].(string))
-	anna.Groups = nil
-	p.Next(anna)
-	a.browser().serviceSignIn(p, id)
-	if v := script.visitor(); v.Via != "" {
-		t.Fatalf("a token outlived leaving the group: %+v", v)
 	}
 }

@@ -194,21 +194,17 @@ func TestOnlyOneAddressCanBeTheProxy(t *testing.T) {
 	want(t, owner.api("PUT", "methods/proxy", map[string]any{"preset": "authelia", "address": proxyAddr, "userHeader": "Remote User"}), 400, "headerInvalid")
 }
 
-func TestTheProxyMakesAccountsForItsGroups(t *testing.T) {
-	a := newApp(t)
+func TestTheProxyMakesAnAdminAccountForEveryNameItSends(t *testing.T) {
+	a := newApp(t, manyAccounts)
 	owner := a.owner()
-	secret := setUpProxy(t, owner, map[string]any{"createOnFirst": true, "groups": []map[string]string{{"group": "family", "role": "admin"}}})
+	secret := setUpProxy(t, owner, nil)
 	turnOnProxy(t, owner, secret)
 	b := a.browser()
-	v := b.visitorFrom(proxyAddr, "X-Proxy-Secret", secret, "Remote-User", "ben", "Remote-Groups", "neighbours,family")
-	if v.Via != signin.ViaProxy || v.Name != "ben" {
-		t.Fatalf("ben is %+v", v)
-	}
-	if v := b.visitorFrom(proxyAddr, "X-Proxy-Secret", secret, "Remote-User", "clara", "Remote-Groups", "neighbours"); v.Via != "" {
-		t.Fatalf("clara without the group is %+v", v)
-	}
-	if v := b.visitorFrom(proxyAddr, "X-Proxy-Secret", secret, "Remote-User", "ben", "Remote-Groups", "neighbours"); v.Via != "" {
-		t.Fatalf("ben after leaving the group is %+v", v)
+	for _, name := range []string{"ben", "clara"} {
+		v := b.visitorFrom(proxyAddr, "X-Proxy-Secret", secret, "Remote-User", name, "Remote-Groups", "neighbours")
+		if v.Via != signin.ViaProxy || v.Name != name || v.Role != "admin" {
+			t.Fatalf("%s is %+v", name, v)
+		}
 	}
 }
 

@@ -110,34 +110,16 @@ func TestTheSecretNeverComesBack(t *testing.T) {
 	}
 }
 
-func TestAStrangerWithoutAnAccountStaysOut(t *testing.T) {
-	a := newApp(t)
+func TestEveryoneTheServiceLetsInGetsAnAdminAccount(t *testing.T) {
+	a := newApp(t, manyAccounts)
 	p, id := addService(t, a, a.owner(), "pocket-id")
-	p.Next(signintest.Person{Subject: "sub-x", Name: "stranger", Groups: []string{"admins"}})
-	if got := a.browser().serviceSignIn(p, id); got != "/home?signin=noAccount" {
+	p.Next(signintest.Person{Subject: "sub-x", Name: "stranger"})
+	b := a.browser()
+	if got := b.serviceSignIn(p, id); got != "/home" {
 		t.Fatalf("ended at %s", got)
 	}
-}
-
-func TestAccountsOnFirstSignInNeedAGroupForTheAdmin(t *testing.T) {
-	a := newApp(t)
-	owner := a.owner()
-	p, id := addService(t, a, owner, "authentik")
-	want(t, setService(t, owner, id, map[string]any{"createOnFirst": true}), 400, "groupsMissing")
-	want(t, setService(t, owner, id, map[string]any{"createOnFirst": true, "everyone": true}), 400, "everyoneWouldBeAdmin")
-	want(t, setService(t, owner, id, map[string]any{"createOnFirst": true, "groups": []map[string]string{{"group": "family", "role": "admin"}}}), 200, "")
-
-	p.Next(signintest.Person{Subject: "sub-anna", Name: "anna", Groups: []string{"family"}})
-	anna := a.browser()
-	if got := anna.serviceSignIn(p, id); got != "/home" {
-		t.Fatalf("anna ended at %s", got)
-	}
-	if v := anna.visitor(); v.Name != "anna" || v.Role != "admin" || v.Via != signin.ViaService {
-		t.Fatalf("anna is %+v", v)
-	}
-	p.Next(signintest.Person{Subject: "sub-ben", Name: "ben", Groups: []string{"neighbours"}})
-	if got := a.browser().serviceSignIn(p, id); got != "/home?signin=noGroup" {
-		t.Fatalf("ben ended at %s", got)
+	if v := b.visitor(); v.Name != "stranger" || v.Role != "admin" || v.Via != signin.ViaService {
+		t.Fatalf("visitor %+v", v)
 	}
 }
 
@@ -146,7 +128,6 @@ func TestATakenNameIsNeverMerged(t *testing.T) {
 	owner := a.owner()
 	addAccount(t, owner, "anna", "admin")
 	p, id := addService(t, a, owner, "pocket-id")
-	setService(t, owner, id, map[string]any{"createOnFirst": true, "groups": []map[string]string{{"group": "family", "role": "admin"}}})
 	p.Next(signintest.Person{Subject: "sub-other-anna", Name: "Anna", Groups: []string{"family"}})
 	b := a.browser()
 	if got := b.serviceSignIn(p, id); got != "/home?signin=nameTaken" {
@@ -175,7 +156,6 @@ func TestNewAccountsAreCappedPerHour(t *testing.T) {
 	a := newApp(t)
 	owner := a.owner()
 	p, id := addService(t, a, owner, "pocket-id")
-	setService(t, owner, id, map[string]any{"createOnFirst": true, "groups": []map[string]string{{"group": "family", "role": "admin"}}})
 	for i := range 10 {
 		p.Next(signintest.Person{Subject: "sub-" + string(rune('a'+i)), Name: "person " + string(rune('a'+i)), Groups: []string{"family"}})
 		if got := a.browser().serviceSignIn(p, id); got != "/home" {
@@ -192,7 +172,7 @@ func TestAnEmailCountsAsNameOnlyWhenVerified(t *testing.T) {
 	a := newApp(t)
 	owner := a.owner()
 	p, id := addService(t, a, owner, "custom")
-	setService(t, owner, id, map[string]any{"nameClaim": "email", "createOnFirst": true, "groups": []map[string]string{{"group": "family", "role": "admin"}}})
+	setService(t, owner, id, map[string]any{"nameClaim": "email"})
 	p.Next(signintest.Person{Subject: "sub-m", Name: "m", Email: "m@example.org", Groups: []string{"family"}})
 	if got := a.browser().serviceSignIn(p, id); got != "/home?signin=nameMissing" {
 		t.Fatalf("an unverified email ended at %s", got)
@@ -222,18 +202,13 @@ func TestTheCallbackRefusesWhatItDidNotAskFor(t *testing.T) {
 		}, "serviceRefused"},
 		{"an ID token with a foreign signature", func(p *signintest.Provider) { p.SignWithAnotherKey() }, "serviceRefused"},
 		{"a redirect naming another issuer", func(p *signintest.Provider) { p.SendIssuer("https://evil.example") }, "serviceRefused"},
-		{"groups for another subject", func(p *signintest.Provider) {
-			p.GroupsOnlyInUserInfo(&signintest.Person{Subject: "sub-other", Groups: []string{"admins"}})
-		}, "noGroup"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			a := newApp(t)
 			owner := a.owner()
 			p, id := addService(t, a, owner, "pocket-id")
-			setService(t, owner, id, map[string]any{"groups": []map[string]string{{"group": "admins", "role": "admin"}}})
 			adminAnna := signintest.Person{Subject: "sub-anna", Name: "anna", Groups: []string{"admins"}}
-			setService(t, owner, id, map[string]any{"createOnFirst": true})
 			tt.spoil(p)
 			p.Next(adminAnna)
 			b := a.browser()
@@ -247,15 +222,39 @@ func TestTheCallbackRefusesWhatItDidNotAskFor(t *testing.T) {
 	}
 }
 
-func TestGroupsFromUserInfoOfTheSameSubjectCount(t *testing.T) {
+func TestGroupsFromUserInfoCountOnlyForTheSameSubject(t *testing.T) {
+	groupsOf := func(a *app, owner *browser, name string) []any {
+		var got struct {
+			Accounts []struct {
+				Name   string `json:"name"`
+				Groups []any  `json:"groups"`
+			} `json:"accounts"`
+		}
+		if err := json.Unmarshal(owner.api("GET", "accounts", nil).Body, &got); err != nil {
+			t.Fatal(err)
+		}
+		for _, acc := range got.Accounts {
+			if acc.Name == name {
+				return acc.Groups
+			}
+		}
+		t.Fatalf("no account %s", name)
+		return nil
+	}
 	a := newApp(t)
 	owner := a.owner()
 	p, id := addService(t, a, owner, "pocket-id")
-	setService(t, owner, id, map[string]any{"createOnFirst": true, "groups": []map[string]string{{"group": "admins", "role": "admin"}}})
 	p.GroupsOnlyInUserInfo(nil)
 	p.Next(signintest.Person{Subject: "sub-anna", Name: "anna", Groups: []string{"admins"}})
-	if got := a.browser().serviceSignIn(p, id); got != "/home" {
-		t.Fatalf("ended at %s", got)
+	a.browser().serviceSignIn(p, id)
+	if g := groupsOf(a, owner, "anna"); len(g) != 1 || g[0] != "admins" {
+		t.Fatalf("anna's groups %v", g)
+	}
+	p.GroupsOnlyInUserInfo(&signintest.Person{Subject: "sub-other", Groups: []string{"admins"}})
+	p.Next(signintest.Person{Subject: "sub-ben", Name: "ben"})
+	a.browser().serviceSignIn(p, id)
+	if g := groupsOf(a, owner, "ben"); len(g) != 0 {
+		t.Fatalf("ben got the groups of another subject: %v", g)
 	}
 }
 
@@ -315,35 +314,10 @@ func TestAServiceSessionNeedsTheServiceAgainAfterADay(t *testing.T) {
 	}
 }
 
-func TestLeavingTheGroupEndsSessionsAndTokens(t *testing.T) {
-	a := newApp(t)
-	owner := a.owner()
-	p, id := addService(t, a, owner, "pocket-id")
-	setService(t, owner, id, map[string]any{"createOnFirst": true, "groups": []map[string]string{{"group": "family", "role": "admin"}}})
-	anna := signintest.Person{Subject: "sub-anna", Name: "anna", Groups: []string{"family"}}
-	p.Next(anna)
-	b := a.browser()
-	b.serviceSignIn(p, id)
-	want(t, b.api("POST", "me/tokens", map[string]any{"name": "script", "scopes": []string{"read"}}), 200, "")
-	other := a.browser()
-	p.Next(anna)
-	other.serviceSignIn(p, id)
-
-	anna.Groups = nil
-	p.Next(anna)
-	if got := a.browser().serviceSignIn(p, id); got != "/home?signin=noGroup" {
-		t.Fatalf("ended at %s", got)
-	}
-	if b.visitor().Via != "" || other.visitor().Via != "" {
-		t.Fatal("a session outlived leaving the group")
-	}
-}
-
 func TestTokensOfAServiceAccountRestWithoutTheService(t *testing.T) {
 	a := newApp(t)
 	owner := a.owner()
 	p, id := addService(t, a, owner, "pocket-id")
-	setService(t, owner, id, map[string]any{"createOnFirst": true, "groups": []map[string]string{{"group": "family", "role": "admin"}}})
 	p.Next(signintest.Person{Subject: "sub-anna", Name: "anna", Groups: []string{"family"}})
 	b := a.browser()
 	b.serviceSignIn(p, id)

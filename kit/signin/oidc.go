@@ -441,40 +441,9 @@ func (a *Auth) serviceSignIn(w http.ResponseWriter, r *http.Request, s *service,
 			note(Entry{Account: acc.ID, Name: acc.Name}, "blocked")
 			return
 		}
-		verdict, ended, err := a.judge(r, acc, s.rules, who.groups)
-		if err != nil {
-			a.mu.Unlock()
-			a.internal(w, err)
-			return
-		}
-		if verdict == shuts {
-			err = a.cfg.Store.Apply(ctx, ended...)
-			a.mu.Unlock()
-			if err != nil {
-				a.log.Warn("signin: ending the ways in of an account that left its group", "err", err)
-			}
-			a.runEndings(ctx)
-			note(Entry{Account: acc.ID, Name: acc.Name}, "noGroup")
-			return
-		}
-		docs = append(docs, ended...)
-		if verdict == lowers {
-			defer a.runEndings(ctx)
-		}
 		idn.Seen, idn.Name = now, who.name
 		docs = append(docs, a.doc(kindIdentity, id, idn))
 	case errors.Is(err, ErrNotFound):
-		if !s.CreateOnFirst {
-			a.mu.Unlock()
-			note(Entry{Name: a.typedName(ctx, who.name)}, "noAccount")
-			return
-		}
-		role, _ := a.roleFor(s.rules, who.groups)
-		if role == "" {
-			a.mu.Unlock()
-			note(Entry{Name: a.typedName(ctx, who.name)}, "noGroup")
-			return
-		}
 		if !validName(who.name) {
 			a.mu.Unlock()
 			note(Entry{}, "nameMissing")
@@ -491,7 +460,7 @@ func (a *Auth) serviceSignIn(w http.ResponseWriter, r *http.Request, s *service,
 			return
 		}
 		a.limits.fail(newcomers, "newcomers", now)
-		acc = &account{ID: newID(), Name: who.name, Role: role, Via: ViaService, Service: s.ID, Created: now}
+		acc = &account{ID: newID(), Name: who.name, Role: a.roles[0], Via: ViaService, Service: s.ID, Created: now}
 		docs = append(docs, a.doc(kindIdentity, id, identity{
 			Kind: identityService, Service: s.ID, Issuer: who.issuer, Subject: who.subject, Name: who.name, Account: acc.ID, Linked: now, Seen: now,
 		}))
@@ -520,17 +489,6 @@ func (a *Auth) serviceSignIn(w http.ResponseWriter, r *http.Request, s *service,
 	a.back(w, r, fl.Return, "")
 }
 
-// shutOut ends every way in of acc once its service groups stop letting
-// it in. The caller holds mu.
-func (a *Auth) shutOut(r *http.Request, acc *account) ([]Doc, error) {
-	docs, err := a.endAll(r, acc.ID)
-	if err != nil {
-		return nil, err
-	}
-	acc.Epoch++
-	return append(docs, a.doc(kindAccount, acc.ID, acc), a.ending(acc.ID, EndService)), nil
-}
-
 // renewService confirms a session that ran out of its day without asking the
 // person anything. It never makes an account, and a different subject ends
 // the session.
@@ -553,26 +511,6 @@ func (a *Auth) renewService(w http.ResponseWriter, r *http.Request, s *service, 
 	if err != nil || acc.Blocked || acc.Epoch != sess.Epoch || !a.serviceOn(ctx, s) {
 		a.mu.Unlock()
 		a.back(w, r, fl.Return, "renewNeeded")
-		return
-	}
-	verdict, ended, err := a.judge(r, acc, s.rules, who.groups)
-	if err == nil && verdict != keeps {
-		if verdict == lowers {
-			ended = append(ended, a.doc(kindAccount, acc.ID, acc))
-		}
-		err = a.cfg.Store.Apply(ctx, ended...)
-	}
-	if err != nil {
-		a.mu.Unlock()
-		a.internal(w, err)
-		return
-	}
-	if verdict != keeps {
-		a.mu.Unlock()
-		a.runEndings(ctx)
-		code := map[string]string{shuts: "noGroup", lowers: "renewNeeded"}[verdict]
-		a.note(ctx, r, Entry{Account: acc.ID, Name: acc.Name, Via: ViaService, Service: s.ID, Result: code})
-		a.back(w, r, fl.Return, code)
 		return
 	}
 	now := a.now()
@@ -631,35 +569,6 @@ func (a *Auth) bindService(w http.ResponseWriter, r *http.Request, s *service, f
 	}
 	a.note(ctx, r, Entry{Account: acc.ID, Name: acc.Name, Via: ViaService, Service: s.ID, Result: code})
 	a.back(w, r, fl.Return, code)
-}
-
-// What a service's groups mean for an account it already knows.
-const (
-	keeps  = "keeps"
-	lowers = "lowers"
-	shuts  = "shuts"
-)
-
-// judge applies groups under rl to acc. The owner's role never comes from
-// outside. A lower role or no matching group ends acc's sessions and tokens,
-// and the docs for that come back to apply. The caller holds mu.
-func (a *Auth) judge(r *http.Request, acc *account, rl rules, groups []string) (string, []Doc, error) {
-	role, mapped := a.roleFor(rl, groups)
-	if acc.Owner || !mapped {
-		return keeps, nil, nil
-	}
-	if role == "" {
-		docs, err := a.shutOut(r, acc)
-		return shuts, docs, err
-	}
-	lower := slices.Index(a.roles, role) > slices.Index(a.roles, acc.Role)
-	acc.Role = role
-	if !lower {
-		return keeps, nil, nil
-	}
-	docs, err := a.endAll(r, acc.ID)
-	acc.Epoch++
-	return lowers, append(docs, a.ending(acc.ID, EndRole)), err
 }
 
 // serviceOn reads s again under mu and reports whether it still lets people

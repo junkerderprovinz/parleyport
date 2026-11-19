@@ -8,25 +8,9 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"slices"
 	"strings"
 	"time"
 )
-
-// groupRole maps one service group to a role.
-type groupRole struct {
-	Group string `json:"group"`
-	Role  string `json:"role"`
-}
-
-// rules are who a sign-in service or the proxy lets in and as what.
-type rules struct {
-	// CreateOnFirst makes an account for someone the app does not know yet.
-	CreateOnFirst bool `json:"createOnFirst"`
-	// Everyone lets in anybody the service knows, with the lowest role.
-	Everyone bool        `json:"everyone"`
-	Groups   []groupRole `json:"groups"`
-}
 
 type service struct {
 	ID          string    `json:"id"`
@@ -46,41 +30,33 @@ type service struct {
 	Tested      time.Time `json:"tested,omitzero"`
 	TestedBy    string    `json:"testedBy,omitempty"`
 	Created     time.Time `json:"created"`
-	rules
 }
 
 func (s *service) tested() bool { return s.TestedFor != "" && s.TestedFor == s.Fingerprint }
 
 type serviceView struct {
-	ID          string      `json:"id"`
-	Provider    string      `json:"provider"`
-	Name        string      `json:"name"`
-	Issuer      string      `json:"issuer"`
-	ClientID    string      `json:"clientId"`
-	SecretSet   bool        `json:"secretSet"`
-	Scopes      string      `json:"scopes"`
-	NameClaim   string      `json:"nameClaim"`
-	GroupsClaim string      `json:"groupsClaim"`
-	CA          bool        `json:"ca"`
-	On          bool        `json:"on"`
-	Paused      bool        `json:"paused"`
-	Tested      bool        `json:"tested"`
-	TestedAt    time.Time   `json:"testedAt,omitzero"`
-	Redirect    string      `json:"redirect"`
-	Groups      []groupRole `json:"groups"`
-	Create      bool        `json:"createOnFirst"`
-	Everyone    bool        `json:"everyone"`
+	ID          string    `json:"id"`
+	Provider    string    `json:"provider"`
+	Name        string    `json:"name"`
+	Issuer      string    `json:"issuer"`
+	ClientID    string    `json:"clientId"`
+	SecretSet   bool      `json:"secretSet"`
+	Scopes      string    `json:"scopes"`
+	NameClaim   string    `json:"nameClaim"`
+	GroupsClaim string    `json:"groupsClaim"`
+	CA          bool      `json:"ca"`
+	On          bool      `json:"on"`
+	Paused      bool      `json:"paused"`
+	Tested      bool      `json:"tested"`
+	TestedAt    time.Time `json:"testedAt,omitzero"`
+	Redirect    string    `json:"redirect"`
 }
 
 func (a *Auth) viewService(s *service) serviceView {
-	groups := s.Groups
-	if groups == nil {
-		groups = []groupRole{}
-	}
 	return serviceView{
 		ID: s.ID, Provider: s.Provider, Name: s.Name, Issuer: s.Issuer, ClientID: s.ClientID, SecretSet: len(s.Secret) > 0,
 		Scopes: s.Scopes, NameClaim: s.NameClaim, GroupsClaim: s.GroupsClaim, CA: s.CA != "", On: s.On, Paused: s.Paused,
-		Tested: s.tested(), TestedAt: s.Tested, Redirect: a.redirectURI(), Groups: groups, Create: s.CreateOnFirst, Everyone: s.Everyone,
+		Tested: s.tested(), TestedAt: s.Tested, Redirect: a.redirectURI(),
 	}
 }
 
@@ -120,19 +96,16 @@ func (a *Auth) getServices(w http.ResponseWriter, r *http.Request, _ *found) {
 // serviceInput is what an admin sets on a sign-in service. Absent fields
 // stay as they are.
 type serviceInput struct {
-	Provider    *string      `json:"provider"`
-	Name        *string      `json:"name"`
-	Issuer      *string      `json:"issuer"`
-	ClientID    *string      `json:"clientId"`
-	Secret      *string      `json:"secret"`
-	Scopes      *string      `json:"scopes"`
-	NameClaim   *string      `json:"nameClaim"`
-	GroupsClaim *string      `json:"groupsClaim"`
-	CA          *string      `json:"ca"`
-	On          *bool        `json:"on"`
-	Create      *bool        `json:"createOnFirst"`
-	Everyone    *bool        `json:"everyone"`
-	Groups      *[]groupRole `json:"groups"`
+	Provider    *string `json:"provider"`
+	Name        *string `json:"name"`
+	Issuer      *string `json:"issuer"`
+	ClientID    *string `json:"clientId"`
+	Secret      *string `json:"secret"`
+	Scopes      *string `json:"scopes"`
+	NameClaim   *string `json:"nameClaim"`
+	GroupsClaim *string `json:"groupsClaim"`
+	CA          *string `json:"ca"`
+	On          *bool   `json:"on"`
 }
 
 func (a *Auth) postService(w http.ResponseWriter, r *http.Request, f *found) {
@@ -220,10 +193,6 @@ func (a *Auth) saveService(w http.ResponseWriter, r *http.Request, f *found, s *
 	if !s.tested() {
 		s.On = false
 	}
-	if code := a.setRules(&s.rules, in.Create, in.Everyone, in.Groups); code != "" {
-		fail(w, http.StatusBadRequest, code)
-		return
-	}
 	if in.On != nil {
 		if *in.On && !s.tested() {
 			fail(w, http.StatusConflict, "serviceUntested")
@@ -280,63 +249,6 @@ func (a *Auth) deleteService(w http.ResponseWriter, r *http.Request, f *found) {
 	ok(w, nil)
 }
 
-// setRules applies a change to who gets in. Making accounts on first
-// sign-in needs groups that say who, or, where the app has a role below
-// admin, the choice of everyone. With admin as the only role, everyone would
-// make every stranger who registers at the service an admin.
-func (a *Auth) setRules(r *rules, create, everyone *bool, groups *[]groupRole) string {
-	if groups != nil {
-		var clean []groupRole
-		for _, g := range *groups {
-			g.Group = strings.TrimSpace(g.Group)
-			if g.Group == "" {
-				continue
-			}
-			if !slices.Contains(a.roles, g.Role) {
-				return "roleUnknown"
-			}
-			clean = append(clean, g)
-		}
-		r.Groups = clean
-	}
-	if everyone != nil {
-		r.Everyone = *everyone
-	}
-	if create != nil {
-		r.CreateOnFirst = *create
-	}
-	if r.Everyone && len(a.roles) == 1 {
-		return "everyoneWouldBeAdmin"
-	}
-	if r.CreateOnFirst && len(r.Groups) == 0 && !r.Everyone {
-		return "groupsMissing"
-	}
-	return ""
-}
-
-// roleFor is the role groups give under r: the highest role of a matching
-// group. mapped is false when r maps no groups at all.
-func (a *Auth) roleFor(r rules, groups []string) (role string, mapped bool) {
-	if len(r.Groups) == 0 {
-		if r.Everyone {
-			return a.roles[len(a.roles)-1], false
-		}
-		return "", false
-	}
-	best := -1
-	for _, g := range r.Groups {
-		if slices.Contains(groups, g.Group) {
-			if i := slices.Index(a.roles, g.Role); best < 0 || i < best {
-				best = i
-			}
-		}
-	}
-	if best < 0 {
-		return "", true
-	}
-	return a.roles[best], true
-}
-
 func validIssuer(issuer string) bool {
 	u, err := url.Parse(issuer)
 	if err != nil || u.Host == "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
@@ -350,8 +262,8 @@ func validIssuer(issuer string) bool {
 	return u.Scheme == "http" && (host == "localhost" || (ip != nil && ip.IsLoopback()))
 }
 
-// pauseOutside takes every sign-in service and the proxy off, stops them
-// from making accounts and forgets their test sign-ins, for a reset or for
+// pauseOutside takes every sign-in service and the proxy off and forgets
+// the test sign-ins, for a reset or for
 // an app that opens up again. Each service needs a new test sign-in before
 // it lets anyone in, so whoever knew the old password cannot have left a
 // working one behind. It returns how many services and whether the proxy
@@ -365,9 +277,9 @@ func (a *Auth) pauseOutside(ctx context.Context) (docs []Doc, services int, prox
 		if s.On {
 			services++
 		}
-		if s.On || s.CreateOnFirst || s.TestedFor != "" {
+		if s.On || s.TestedFor != "" {
 			s.Paused = s.Paused || s.On
-			s.On, s.CreateOnFirst, s.TestedFor = false, false, ""
+			s.On, s.TestedFor = false, ""
 			docs = append(docs, a.doc(kindService, s.ID, s))
 		}
 	}
@@ -375,8 +287,8 @@ func (a *Auth) pauseOutside(ctx context.Context) (docs []Doc, services int, prox
 	if err != nil {
 		return nil, 0, false, err
 	}
-	if proxy = p.On; p.On || p.CreateOnFirst {
-		p.On, p.Paused, p.CreateOnFirst = false, true, false
+	if proxy = p.On; p.On {
+		p.On, p.Paused = false, true
 		docs = append(docs, a.doc(kindProxy, proxyID, p))
 	}
 	return docs, services, proxy, nil

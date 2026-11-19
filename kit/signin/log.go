@@ -19,7 +19,7 @@ const (
 
 // Entry is one line of the sign-in log. Name is an account's name, or for a
 // name that belongs to no account a tag, because people often type their
-// password there. Result is a code such as ok, wrongPassword, noGroup or
+// password there. Result is a code such as ok, wrongPassword, throttled or
 // newAccount. Count is how many of the same failure from the same address
 // within a minute the entry stands for.
 type Entry struct {
