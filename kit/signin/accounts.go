@@ -115,7 +115,7 @@ func (a *Auth) postAccount(w http.ResponseWriter, r *http.Request, f *found) {
 	})
 	switch {
 	case errors.Is(err, ErrNotFresh):
-		fail(w, http.StatusForbidden, "signInAgain")
+		a.notFresh(w, r, f)
 	case err != nil:
 		a.internal(w, err)
 	case taken:

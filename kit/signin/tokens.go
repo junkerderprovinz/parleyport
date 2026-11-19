@@ -86,7 +86,7 @@ func (a *Auth) postToken(w http.ResponseWriter, r *http.Request, f *found) {
 	t.Digest = a.macHex("token", tok.Secret)
 	err = a.Mint(r, func() error { return a.cfg.Store.Apply(r.Context(), a.doc(kindToken, tok.ID, t)) })
 	if err == ErrNotFresh {
-		fail(w, http.StatusForbidden, "signInAgain")
+		a.notFresh(w, r, f)
 		return
 	}
 	if err != nil {

@@ -201,6 +201,7 @@ paths:
     post:
       operationId: confirm
       summary: Sign in again in this session, for a change that wants it fresh
+      description: Refused with confirmOff while an admin has turned the question off.
       requestBody:
         required: true
         content:
@@ -213,6 +214,7 @@ paths:
       responses:
         "200": { $ref: "#/components/responses/Done" }
         "401": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /me/sessions:
     get:
       operationId: getSessions
@@ -748,6 +750,27 @@ paths:
                   user: { type: string }
                   groups: { type: array, items: { type: string } }
                   passesClientHeader: { type: boolean }
+  /settings:
+    get:
+      operationId: getSettings
+      summary: The app-wide choices about sign-in
+      responses:
+        "200": { $ref: "#/components/responses/Settings" }
+    patch:
+      operationId: changeSettings
+      summary: Change them, saved at once
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                askPassword: { type: boolean }
+      responses:
+        "200": { $ref: "#/components/responses/Settings" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /log:
     get:
       operationId: getLog
@@ -854,6 +877,17 @@ components:
             required: [service]
             properties:
               service: { $ref: "#/components/schemas/Service" }
+    Settings:
+      description: The app-wide choices about sign-in.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [askPassword]
+            properties:
+              askPassword:
+                type: boolean
+                description: Before a change that wants a sign-in from moments ago, the app asks for the password instead of a new sign-in. On unless an admin turned it off.
     OneProxy:
       description: The proxy settings.
       content:
@@ -875,6 +909,7 @@ components:
             - badRequest
             - blocked
             - caInvalid
+            - confirmOff
             - crossSite
             - everyoneWouldBeAdmin
             - forbidden
@@ -928,6 +963,7 @@ components:
             - wrongCode
             - wrongPassword
         retryAfter: { type: integer, description: Seconds, with throttled. }
+        askPassword: { type: boolean, description: With signInAgain, whether the app may ask for the password through me/confirm instead of a new sign-in. }
         min: { type: integer, description: The shortest password, with passwordShort. }
         scope: { type: string, description: The scope it does not know, with scopeUnknown. }
     RedirectCode:
@@ -968,13 +1004,14 @@ components:
       allOf:
         - $ref: "#/components/schemas/Visitor"
         - type: object
-          required: [owner, password, twoFactor, recoveryLeft, fresh]
+          required: [owner, password, twoFactor, recoveryLeft, fresh, askPassword]
           properties:
             owner: { type: boolean }
             password: { type: boolean }
             twoFactor: { type: boolean }
             recoveryLeft: { type: integer }
             fresh: { type: boolean, description: Signed in moments ago, as new lasting ways in want. }
+            askPassword: { type: boolean, description: The app may ask for the password through me/confirm when a change wants a fresh sign-in. }
     Options:
       type: object
       required: [open, owner, minPassword, signedIn, passkeys, services]

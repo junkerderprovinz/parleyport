@@ -246,7 +246,7 @@ func (a *Auth) saveService(w http.ResponseWriter, r *http.Request, f *found, s *
 		return a.cfg.Store.Apply(r.Context(), docs...)
 	})
 	if errors.Is(err, ErrNotFresh) {
-		fail(w, http.StatusForbidden, "signInAgain")
+		a.notFresh(w, r, f)
 		return
 	}
 	if err != nil {

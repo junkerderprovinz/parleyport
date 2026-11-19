@@ -19,7 +19,8 @@ func (a *Auth) getMe(w http.ResponseWriter, r *http.Request, f *found) {
 		TwoFactor    bool `json:"twoFactor"`
 		RecoveryLeft int  `json:"recoveryLeft"`
 		Fresh        bool `json:"fresh"`
-	}{Visitor: f.v, Fresh: a.fresh(f)}
+		AskPassword  bool `json:"askPassword"`
+	}{Visitor: f.v, Fresh: a.fresh(f), AskPassword: a.asks(r.Context(), f)}
 	if f.v.Account != "" {
 		acc, err := a.account(r.Context(), f.v.Account)
 		if err != nil {
@@ -273,6 +274,10 @@ func (a *Auth) postConfirm(w http.ResponseWriter, r *http.Request, f *found) {
 	ctx := r.Context()
 	if f.v.session == "" {
 		fail(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	if s, err := a.settings(ctx); err != nil || s.NoQuestion {
+		fail(w, http.StatusConflict, "confirmOff")
 		return
 	}
 	acc, err := a.account(ctx, f.v.Account)

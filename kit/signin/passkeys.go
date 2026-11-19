@@ -285,7 +285,7 @@ func (a *Auth) passkeyAccount(w http.ResponseWriter, r *http.Request, f *found) 
 		return nil, nil, false
 	}
 	if !a.fresh(f) {
-		fail(w, http.StatusForbidden, "signInAgain")
+		a.notFresh(w, r, f)
 		return nil, nil, false
 	}
 	acc, good := a.localAccount(w, r, f)
@@ -381,7 +381,7 @@ func (a *Auth) postPasskey(w http.ResponseWriter, r *http.Request, f *found) {
 		return a.cfg.Store.Apply(r.Context(), a.doc(kindPasskey, passkeyID(cred.ID), doc))
 	})
 	if errors.Is(err, ErrNotFresh) {
-		fail(w, http.StatusForbidden, "signInAgain")
+		a.notFresh(w, r, f)
 		return
 	}
 	if taken {

@@ -258,6 +258,8 @@ func (a *Auth) api() []apiRoute {
 		{"PATCH methods/proxy", adminAccount, a.patchProxy},
 		{"POST methods/proxy/secret", adminAccount, a.postProxySecret},
 		{"POST methods/proxy/check", adminAccount, a.postProxyCheck},
+		{"GET settings", admin, a.getSettings},
+		{"PATCH settings", adminAccount, a.patchSettings},
 		{"GET log", admin, a.getLog},
 	}
 }

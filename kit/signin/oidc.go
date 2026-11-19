@@ -702,7 +702,7 @@ func (a *Auth) postServiceTicket(w http.ResponseWriter, r *http.Request, f *foun
 		return
 	}
 	if !a.fresh(f) {
-		fail(w, http.StatusForbidden, "signInAgain")
+		a.notFresh(w, r, f)
 		return
 	}
 	s := new(service)

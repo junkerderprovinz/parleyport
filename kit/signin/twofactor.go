@@ -39,7 +39,7 @@ func (a *Auth) localAccount(w http.ResponseWriter, r *http.Request, f *found) (*
 
 func (a *Auth) postTOTP(w http.ResponseWriter, r *http.Request, f *found) {
 	if !a.fresh(f) {
-		fail(w, http.StatusForbidden, "signInAgain")
+		a.notFresh(w, r, f)
 		return
 	}
 	acc, good := a.localAccount(w, r, f)
@@ -168,7 +168,7 @@ func (a *Auth) deleteTOTP(w http.ResponseWriter, r *http.Request, f *found) {
 
 func (a *Auth) postTOTPCodes(w http.ResponseWriter, r *http.Request, f *found) {
 	if !a.fresh(f) {
-		fail(w, http.StatusForbidden, "signInAgain")
+		a.notFresh(w, r, f)
 		return
 	}
 	if _, good := a.localAccount(w, r, f); !good {

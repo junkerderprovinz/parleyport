@@ -332,7 +332,7 @@ func (a *Auth) patchProxy(w http.ResponseWriter, r *http.Request, f *found) {
 // with them, and with extra pairs of key and value.
 func (a *Auth) changeProxy(w http.ResponseWriter, r *http.Request, f *found, change func(*proxySettings) string, extra ...string) {
 	if !a.fresh(f) {
-		fail(w, http.StatusForbidden, "signInAgain")
+		a.notFresh(w, r, f)
 		return
 	}
 	ctx := r.Context()
@@ -351,7 +351,7 @@ func (a *Auth) changeProxy(w http.ResponseWriter, r *http.Request, f *found, cha
 	})
 	switch {
 	case errors.Is(err, ErrNotFresh):
-		fail(w, http.StatusForbidden, "signInAgain")
+		a.notFresh(w, r, f)
 	case err != nil:
 		a.internal(w, err)
 	case code == "proxySecretMissing":
@@ -416,7 +416,7 @@ func (a *Auth) postProxyIdentity(w http.ResponseWriter, r *http.Request, f *foun
 	})
 	switch {
 	case errors.Is(err, ErrNotFresh):
-		fail(w, http.StatusForbidden, "signInAgain")
+		a.notFresh(w, r, f)
 	case err != nil:
 		a.internal(w, err)
 	case taken:
