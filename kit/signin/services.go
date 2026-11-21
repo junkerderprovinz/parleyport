@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -48,6 +49,8 @@ type service struct {
 	Tested      time.Time `json:"tested,omitzero"`
 	TestedBy    string    `json:"testedBy,omitempty"`
 	Created     time.Time `json:"created"`
+	// Role is what a newcomer from the service gets.
+	Role string `json:"role,omitempty"`
 	// Pinned marks one of Config.Services.
 	Pinned       bool   `json:"pinned,omitempty"`
 	CallbackPath string `json:"callbackPath,omitempty"`
@@ -81,14 +84,23 @@ type serviceView struct {
 	TestedAt    time.Time `json:"testedAt,omitzero"`
 	Redirect    string    `json:"redirect"`
 	FromConfig  bool      `json:"fromConfig"`
+	Role        string    `json:"role"`
 }
 
 func (a *Auth) viewService(s *service) serviceView {
 	return serviceView{
 		ID: s.ID, Provider: s.Provider, Name: s.Name, Issuer: s.Issuer, ClientID: s.ClientID, SecretSet: len(s.Secret) > 0,
 		Scopes: s.Scopes, NameClaim: s.NameClaim, GroupsClaim: s.GroupsClaim, CA: s.CA != "", On: s.On, Paused: s.Paused,
-		Tested: s.tested(), TestedAt: s.Tested, Redirect: a.redirectURI(s), FromConfig: s.Pinned,
+		Tested: s.tested(), TestedAt: s.Tested, Redirect: a.redirectURI(s), FromConfig: s.Pinned, Role: a.roleOf(s),
 	}
+}
+
+// roleOf is the role a newcomer from s gets.
+func (a *Auth) roleOf(s *service) string {
+	if slices.Contains(a.roles, s.Role) {
+		return s.Role
+	}
+	return a.serviceRole
 }
 
 func (a *Auth) redirectURI(s *service) string {
@@ -233,6 +245,7 @@ type serviceInput struct {
 	GroupsClaim *string `json:"groupsClaim"`
 	CA          *string `json:"ca"`
 	On          *bool   `json:"on"`
+	Role        *string `json:"role"`
 }
 
 func (a *Auth) postService(w http.ResponseWriter, r *http.Request, f *found) {
@@ -253,7 +266,7 @@ func (a *Auth) postService(w http.ResponseWriter, r *http.Request, f *found) {
 		fail(w, http.StatusBadRequest, "secretMissing")
 		return
 	}
-	s := &service{ID: newID(), Provider: p.ID, Name: p.ID, Scopes: p.Scopes, NameClaim: p.NameClaim, GroupsClaim: p.GroupsClaim, Created: a.now()}
+	s := &service{ID: newID(), Provider: p.ID, Name: p.ID, Scopes: p.Scopes, NameClaim: p.NameClaim, GroupsClaim: p.GroupsClaim, Role: a.serviceRole, Created: a.now()}
 	a.saveService(w, r, f, s, in, true)
 }
 
@@ -331,6 +344,13 @@ func (a *Auth) saveService(w http.ResponseWriter, r *http.Request, f *found, s *
 	if s.CA != "" && !x509.NewCertPool().AppendCertsFromPEM([]byte(s.CA)) {
 		fail(w, http.StatusBadRequest, "caInvalid")
 		return
+	}
+	if in.Role != nil {
+		if !slices.Contains(a.roles, *in.Role) {
+			fail(w, http.StatusBadRequest, "roleUnknown")
+			return
+		}
+		s.Role = *in.Role
 	}
 	if (s.Issuer != oldIssuer || s.ClientID != oldClient) && !fresh && (in.Secret == nil || *in.Secret == "") {
 		fail(w, http.StatusBadRequest, "secretAgain")

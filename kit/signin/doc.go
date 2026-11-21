@@ -20,8 +20,9 @@
 //     Config.Services.
 //   - A service group is a group the sign-in service reports for someone.
 //     It is kept on the account. Who may sign in at all is the service's
-//     decision, so everyone it lets through is admin, unless the app
-//     decides in Hooks.Admit.
+//     decision. A newcomer it lets through gets the role an admin chose for
+//     the service, Config.ServiceRole unless one was chosen, and an app
+//     that sets up a service itself can decide in Hooks.Admit.
 //   - Passkey, two-factor, session and API token mean what they mean
 //     anywhere.
 //

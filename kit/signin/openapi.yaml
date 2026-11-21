@@ -537,17 +537,13 @@ paths:
   /roles:
     get:
       operationId: getRoles
-      summary: The app's roles, the admin first
+      summary: The app's roles, the admin first, and the one newcomers from a sign-in service get
       responses:
         "200":
           description: The roles.
           content:
             application/json:
-              schema:
-                type: object
-                required: [roles]
-                properties:
-                  roles: { type: array, items: { type: string } }
+              schema: { $ref: "#/components/schemas/Roles" }
   /methods/presets:
     get:
       operationId: getPresets
@@ -978,6 +974,12 @@ components:
         password: { type: boolean }
         twoFactor: { type: boolean }
         groups: { type: array, items: { type: string } }
+    Roles:
+      type: object
+      required: [roles, serviceRole]
+      properties:
+        roles: { type: array, items: { type: string } }
+        serviceRole: { type: string, description: The role a new service takes when none is given. }
     Preset:
       type: object
       required: [id, scopes, nameClaim, groupsClaim]
@@ -999,9 +1001,10 @@ components:
         groupsClaim: { type: string }
         ca: { type: string, description: A PEM certificate to trust next to the system's. }
         on: { type: boolean }
+        role: { type: string, description: "What a newcomer from the service gets, one of the roles, else roleUnknown. A change leaves existing accounts as they are. Absent on a new service is serviceRole of GET roles." }
     Service:
       type: object
-      required: [id, provider, name, issuer, clientId, secretSet, scopes, nameClaim, groupsClaim, ca, on, paused, tested, redirect, fromConfig]
+      required: [id, provider, name, issuer, clientId, secretSet, scopes, nameClaim, groupsClaim, ca, on, paused, tested, redirect, fromConfig, role]
       properties:
         id: { type: string }
         provider: { type: string }
@@ -1019,6 +1022,7 @@ components:
         testedAt: { type: string, format: date-time }
         redirect: { type: string, description: The address to register at the service. }
         fromConfig: { type: boolean, description: The app sets it up itself. Only on can change, to turn it on again after a reset. }
+        role: { type: string, description: What a newcomer from the service gets. }
     Entry:
       type: object
       required: [at, result]

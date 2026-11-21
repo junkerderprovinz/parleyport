@@ -70,6 +70,9 @@ func check(h http.Handler, opt Options) []string {
 	}
 	c.matches("GET me", c.do("GET", "me", nil), 200, "Me")
 	c.matches("GET me/sessions", c.do("GET", "me/sessions", nil), 200, "")
+	if roles := c.do("GET", "roles", nil); roles.Code != http.StatusForbidden {
+		c.matches("GET roles", roles, 200, "Roles")
+	}
 	c.wantError("a change with the Origin of the address it went to", c.do("DELETE", "me/sessions/none", nil, "Origin", "https://app.test"), 404, "notFound")
 	c.wantError("POST logout from another site", c.do("POST", "logout", map[string]string{}, "Sec-Fetch-Site", "cross-site"), 403, "crossSite")
 	c.wantError("POST logout as a form", c.do("POST", "logout", map[string]string{}, "Content-Type", "text/plain"), 415, "notJSON")

@@ -87,7 +87,7 @@ func (a *Auth) getAccounts(w http.ResponseWriter, r *http.Request, _ *found) {
 }
 
 func (a *Auth) getRoles(w http.ResponseWriter, _ *http.Request, _ *found) {
-	ok(w, map[string]any{"roles": a.roles})
+	ok(w, map[string]any{"roles": a.roles, "serviceRole": a.serviceRole})
 }
 
 // validName reports whether name can name an account: 1 to 64 characters,

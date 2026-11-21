@@ -1,6 +1,7 @@
 package signin
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -73,6 +74,9 @@ type Config struct {
 	// Roles are the app's roles, most rights first. Roles[0] is the admin.
 	// Empty is just "admin".
 	Roles []string
+	// ServiceRole is the role a newcomer gets from a sign-in service that
+	// names none, one of Roles. Empty is Roles[0].
+	ServiceRole string
 	// Owner is for apps with one local account. Its sign-in asks for no
 	// name, and every other account comes from a sign-in service.
 	Owner bool
@@ -190,14 +194,15 @@ func (v Visitor) AtLeast(role string) bool {
 
 // Auth is the sign-in of one app.
 type Auth struct {
-	cfg     Config
-	d       string
-	base    string
-	roles   []string
-	scopes  []string
-	minPass int
-	now     func() time.Time
-	log     *slog.Logger
+	cfg         Config
+	d           string
+	base        string
+	serviceRole string
+	roles       []string
+	scopes      []string
+	minPass     int
+	now         func() time.Time
+	log         *slog.Logger
 
 	// mu covers every read, decide and write, so a reset cannot cross a
 	// sign-in and two first passwords cannot both win.
@@ -269,6 +274,10 @@ func Open(cfg Config) (*Auth, error) {
 	}
 	if err := distinct("role", a.roles); err != nil {
 		return nil, err
+	}
+	a.serviceRole = cmp.Or(cfg.ServiceRole, a.roles[0])
+	if !slices.Contains(a.roles, a.serviceRole) {
+		return nil, fmt.Errorf("signin: the service role %q is not one of the roles", a.serviceRole)
 	}
 	if err := distinct("scope", a.scopes); err != nil {
 		return nil, err

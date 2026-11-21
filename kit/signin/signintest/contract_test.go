@@ -51,6 +51,12 @@ func TestRunChecksAnAppBelowABasePath(t *testing.T) {
 func TestRunNoticesAnAppThatBreaksTheContract(t *testing.T) {
 	app := newApp(t, true)
 	broken := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/roles") {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Cache-Control", "no-store")
+			_, _ = w.Write([]byte(`{"roles": ["admin"]}`))
+			return
+		}
 		if strings.HasSuffix(r.URL.Path, "/me") {
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Cache-Control", "no-store")
@@ -67,7 +73,7 @@ func TestRunNoticesAnAppThatBreaksTheContract(t *testing.T) {
 	})
 	issues := check(broken, Options{Password: "a good long password"})
 	joined := strings.Join(issues, "\n")
-	for _, want := range []string{"GET me does not match Me", "POST logout from another site", "the Origin of the address it went to"} {
+	for _, want := range []string{"GET me does not match Me", "POST logout from another site", "the Origin of the address it went to", "GET roles does not match Roles"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("Run did not notice %q in:\n%s", want, joined)
 		}

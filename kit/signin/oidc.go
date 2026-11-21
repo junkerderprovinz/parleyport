@@ -529,7 +529,7 @@ func (a *Auth) arrive(ctx context.Context, s *service, who *person) (arrival, er
 		if a.limits.wait(newcomers, "newcomers", now) > 0 {
 			return arrival{note: Entry{Name: a.typedName(ctx, who.name)}, code: "throttled"}, nil
 		}
-		in.acc = &account{Name: who.name, Role: a.roles[0], Via: ViaService, Service: s.ID, Created: now}
+		in.acc = &account{Name: who.name, Role: a.roleOf(s), Via: ViaService, Service: s.ID, Created: now}
 	}
 	ended, err := a.admit(ctx, s, who, in.acc)
 	if errors.Is(err, errNotAdmitted) {
