@@ -35,6 +35,10 @@ type meta struct {
 	Version  int       `json:"version"`
 	Created  time.Time `json:"created"`
 	Imported time.Time `json:"imported,omitzero"`
+	// KeyCheck is a MAC under the seal key the store was written with, so
+	// another key stops Open instead of turning every password, session and
+	// token into a stranger's.
+	KeyCheck string `json:"keyCheck,omitempty"`
 }
 
 type account struct {

@@ -291,8 +291,10 @@ func (a *Auth) start(ctx context.Context) error {
 	defer a.mu.Unlock()
 	var m meta
 	err := a.load(ctx, kindMeta, metaID, &m)
-	if errors.Is(err, ErrNotFound) {
-		m = meta{Version: 1, Created: a.now()}
+	check := a.macHex("keycheck", "")
+	switch {
+	case errors.Is(err, ErrNotFound):
+		m = meta{Version: 1, Created: a.now(), KeyCheck: check}
 		docs, err := a.importAll(ctx, &m)
 		if err != nil {
 			return err
@@ -300,8 +302,15 @@ func (a *Auth) start(ctx context.Context) error {
 		if err := a.cfg.Store.Apply(ctx, append(docs, a.doc(kindMeta, metaID, m))...); err != nil {
 			return fmt.Errorf("signin: %w", err)
 		}
-	} else if err != nil {
+	case err != nil:
 		return fmt.Errorf("signin: reading the store: %w", err)
+	case m.KeyCheck == "":
+		m.KeyCheck = check
+		if err := a.cfg.Store.Apply(ctx, a.doc(kindMeta, metaID, m)); err != nil {
+			return fmt.Errorf("signin: %w", err)
+		}
+	case !equal(m.KeyCheck, check):
+		return errors.New("signin: the store was written with another seal key")
 	}
 	a.imported = m.Imported
 	return a.refreshOpen(ctx)

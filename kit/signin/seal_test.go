@@ -65,3 +65,13 @@ func TestNewSealerRefusesAShortKey(t *testing.T) {
 		t.Fatal("a 16-byte key accepted")
 	}
 }
+
+func TestAnotherSealKeyStopsTheStart(t *testing.T) {
+	a := newApp(t)
+	a.owner()
+	other, _ := signin.NewSealer(bytes.Repeat([]byte{8}, 32))
+	a.cfg.Seal = other
+	if _, err := signin.Open(a.cfg); err == nil {
+		t.Fatal("Open went on with another seal key")
+	}
+}
