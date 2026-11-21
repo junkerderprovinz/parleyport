@@ -256,7 +256,9 @@ func (a *Auth) postPasskeyLogin(w http.ResponseWriter, r *http.Request, f *found
 	a.signedIn(w, r, f, acc.ID, acc.Epoch, ViaPasskey, "", nil)
 }
 
-type passkeyView struct {
+// Passkey is a passkey as the contract lists it. Here is whether it was
+// made for the app's public address of today.
+type Passkey struct {
 	ID      string    `json:"id"`
 	Name    string    `json:"name"`
 	Created time.Time `json:"created"`
@@ -267,21 +269,29 @@ type passkeyView struct {
 }
 
 func (a *Auth) getPasskeys(w http.ResponseWriter, r *http.Request, f *found) {
-	all, ids, err := a.passkeysOf(r, f.v.Account)
+	out, err := a.passkeyList(r, f.v.Account)
 	if err != nil {
 		a.internal(w, err)
 		return
+	}
+	ok(w, map[string]any{"passkeys": out})
+}
+
+func (a *Auth) passkeyList(r *http.Request, account string) ([]Passkey, error) {
+	all, ids, err := a.passkeysOf(r, account)
+	if err != nil {
+		return nil, err
 	}
 	here := ""
 	if u := a.public(); u != nil {
 		here = u.Hostname()
 	}
-	out := []passkeyView{}
+	out := []Passkey{}
 	for _, id := range ids {
 		p := all[id]
-		out = append(out, passkeyView{ID: id, Name: p.Name, Created: p.Created, Used: p.Used, RPID: p.RPID, Synced: p.Credential.Flags.BackupState, Here: p.RPID == here})
+		out = append(out, Passkey{ID: id, Name: p.Name, Created: p.Created, Used: p.Used, RPID: p.RPID, Synced: p.Credential.Flags.BackupState, Here: p.RPID == here})
 	}
-	ok(w, map[string]any{"passkeys": out})
+	return out, nil
 }
 
 // passkeyAccount is the account a new passkey would be for, after the checks

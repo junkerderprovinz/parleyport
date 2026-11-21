@@ -16,7 +16,8 @@ const (
 	maxNameLen   = 64
 )
 
-type tokenView struct {
+// Token is an API token as the contract lists it, never with its secret.
+type Token struct {
 	ID      string    `json:"id"`
 	Name    string    `json:"name"`
 	Scopes  []string  `json:"scopes"`
@@ -26,19 +27,28 @@ type tokenView struct {
 }
 
 func (a *Auth) getTokens(w http.ResponseWriter, r *http.Request, f *found) {
-	all, ids, err := listOf[apiToken](r.Context(), a, kindToken)
+	out, err := a.tokensOf(r.Context(), f.v.Account)
 	if err != nil {
 		a.internal(w, err)
 		return
 	}
-	out := []tokenView{}
+	ok(w, map[string]any{"tokens": out})
+}
+
+// tokensOf lists the tokens of account, the oldest first.
+func (a *Auth) tokensOf(ctx context.Context, account string) ([]Token, error) {
+	all, ids, err := listOf[apiToken](ctx, a, kindToken)
+	if err != nil {
+		return nil, err
+	}
+	out := []Token{}
 	for _, id := range ids {
-		if t := all[id]; t.Account == f.v.Account {
-			out = append(out, tokenView{ID: id, Name: t.Name, Scopes: t.Scopes, Created: t.Created, Used: t.Used, Expires: t.Expires})
+		if t := all[id]; t.Account == account {
+			out = append(out, Token{ID: id, Name: t.Name, Scopes: t.Scopes, Created: t.Created, Used: t.Used, Expires: t.Expires})
 		}
 	}
-	slices.SortFunc(out, func(x, y tokenView) int { return x.Created.Compare(y.Created) })
-	ok(w, map[string]any{"tokens": out})
+	slices.SortFunc(out, func(x, y Token) int { return x.Created.Compare(y.Created) })
+	return out, nil
 }
 
 func (a *Auth) postToken(w http.ResponseWriter, r *http.Request, f *found) {
@@ -94,7 +104,7 @@ func (a *Auth) postToken(w http.ResponseWriter, r *http.Request, f *found) {
 		return
 	}
 	a.note(r.Context(), r, Entry{Account: f.v.Account, Name: f.v.Name, Via: ViaToken, Result: "tokenMade"})
-	ok(w, map[string]any{"token": tokenView{ID: tok.ID, Name: t.Name, Scopes: t.Scopes, Created: t.Created, Expires: t.Expires}, "value": tok.Value})
+	ok(w, map[string]any{"token": Token{ID: tok.ID, Name: t.Name, Scopes: t.Scopes, Created: t.Created, Expires: t.Expires}, "value": tok.Value})
 }
 
 func (a *Auth) deleteToken(w http.ResponseWriter, r *http.Request, f *found) {

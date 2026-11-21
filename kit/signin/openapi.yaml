@@ -177,6 +177,9 @@ paths:
     delete:
       operationId: removePassword
       summary: Take the owner's password away, which opens the app
+      description: |
+        In an app with many accounts only while no other account signs in
+        with a password or a sign-in service, or othersSignIn.
       requestBody:
         content:
           application/json:
@@ -188,6 +191,7 @@ paths:
         "200": { $ref: "#/components/responses/Done" }
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /me/confirm:
     post:
       operationId: confirm
@@ -500,8 +504,11 @@ paths:
       - { name: id, in: path, required: true, schema: { type: string } }
     patch:
       operationId: changeAccount
-      summary: Block, unblock or give another role
-      description: Blocking or a lower role ends the account's sessions and tokens.
+      summary: Rename, block, unblock or give another role
+      description: |
+        Blocking or a lower role ends the account's sessions and tokens. The
+        owner's role and block stay, and only the owner renames itself. The
+        name of a removed account stays taken until the app took the removal.
       requestBody:
         required: true
         content:
@@ -509,12 +516,15 @@ paths:
             schema:
               type: object
               properties:
+                name: { type: string }
                 blocked: { type: boolean }
                 role: { type: string }
       responses:
         "200": { $ref: "#/components/responses/OneAccount" }
+        "400": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
     delete:
       operationId: removeAccount
       summary: Remove an account and every way in it had
@@ -797,6 +807,7 @@ components:
             - notOwner
             - notWithToken
             - oneOwner
+            - othersSignIn
             - passkeyRefused
             - passkeysUnavailable
             - passkeyUnknown
@@ -947,7 +958,7 @@ components:
         seen: { type: string, format: date-time }
     Account:
       type: object
-      required: [id, name, role, owner, via, created, blocked, password]
+      required: [id, name, role, owner, via, created, blocked, password, twoFactor]
       properties:
         id: { type: string }
         name: { type: string }
@@ -959,6 +970,7 @@ components:
         seen: { type: string, format: date-time }
         blocked: { type: boolean }
         password: { type: boolean }
+        twoFactor: { type: boolean }
         groups: { type: array, items: { type: string } }
     Preset:
       type: object

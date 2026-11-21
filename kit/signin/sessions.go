@@ -1,13 +1,15 @@
 package signin
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"slices"
 	"time"
 )
 
-type sessionView struct {
+// Session is a session as the contract lists it.
+type Session struct {
 	ID      string    `json:"id"`
 	Via     Via       `json:"via"`
 	Service string    `json:"service,omitempty"`
@@ -18,57 +20,55 @@ type sessionView struct {
 	Current bool      `json:"current"`
 }
 
-func (a *Auth) mySessions(r *http.Request, f *found) (map[string]*session, []string, error) {
+// sessionsOf lists the sessions of account in epoch that have not run out,
+// the last used first, marking current.
+func (a *Auth) sessionsOf(r *http.Request, account string, epoch int, current string) ([]Session, error) {
 	all, ids, err := listOf[session](r.Context(), a, kindSession)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	now := a.now()
-	mine := ids[:0]
+	out := []Session{}
 	for _, id := range ids {
-		s := all[id]
-		if s.Account == f.v.Account && s.Epoch == f.v.epoch && now.Before(s.Expires) {
-			mine = append(mine, id)
+		if s := all[id]; s.Account == account && s.Epoch == epoch && now.Before(s.Expires) {
+			out = append(out, Session{ID: id, Via: s.Via, Service: s.Service, Created: s.Created, Seen: s.Seen, From: s.From, Agent: s.Agent, Current: id == current})
 		}
 	}
-	return all, mine, nil
+	slices.SortFunc(out, func(x, y Session) int { return y.Seen.Compare(x.Seen) })
+	return out, nil
 }
 
 func (a *Auth) getSessions(w http.ResponseWriter, r *http.Request, f *found) {
-	all, ids, err := a.mySessions(r, f)
+	out, err := a.sessionsOf(r, f.v.Account, f.v.epoch, f.v.session)
 	if err != nil {
 		a.internal(w, err)
 		return
 	}
-	out := []sessionView{}
-	for _, id := range ids {
-		s := all[id]
-		out = append(out, sessionView{ID: id, Via: s.Via, Service: s.Service, Created: s.Created, Seen: s.Seen, From: s.From, Agent: s.Agent, Current: id == f.v.session})
-	}
-	slices.SortFunc(out, func(x, y sessionView) int { return y.Seen.Compare(x.Seen) })
 	ok(w, map[string]any{"sessions": out})
 }
 
 func (a *Auth) deleteSession(w http.ResponseWriter, r *http.Request, f *found) {
 	id := r.PathValue("id")
 	a.mu.Lock()
-	s := new(session)
-	err := a.load(r.Context(), kindSession, id, s)
-	if err != nil || s.Account != f.v.Account {
-		a.mu.Unlock()
-		fail(w, http.StatusNotFound, "notFound")
-		return
-	}
-	err = a.cfg.Store.Apply(r.Context(), gone(kindSession, id))
+	err := a.endOwnSession(r.Context(), f.v.Account, id)
 	a.mu.Unlock()
 	if err != nil {
-		a.internal(w, err)
+		a.answer(w, r, f, err)
 		return
 	}
 	if id == f.v.session {
 		a.clearCookie(w, r, "session", "/")
 	}
 	ok(w, nil)
+}
+
+// endOwnSession ends the session id of account. The caller holds mu.
+func (a *Auth) endOwnSession(ctx context.Context, account, id string) error {
+	s := new(session)
+	if err := a.load(ctx, kindSession, id, s); err != nil || s.Account != account {
+		return refuse(http.StatusNotFound, "notFound")
+	}
+	return a.cfg.Store.Apply(ctx, gone(kindSession, id))
 }
 
 // deleteSessions ends every other session of the account, old ones it was

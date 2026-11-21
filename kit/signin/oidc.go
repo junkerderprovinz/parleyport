@@ -466,7 +466,7 @@ func (a *Auth) serviceSignIn(w http.ResponseWriter, r *http.Request, s *service,
 			note(Entry{}, "nameMissing")
 			return
 		}
-		if _, err := a.byName(ctx, who.name); err == nil {
+		if free, err := a.nameFree(ctx, who.name, ""); err != nil || !free {
 			a.mu.Unlock()
 			note(Entry{Name: who.name}, "nameTaken")
 			return
@@ -477,7 +477,13 @@ func (a *Auth) serviceSignIn(w http.ResponseWriter, r *http.Request, s *service,
 			return
 		}
 		a.limits.fail(newcomers, "newcomers", now)
-		acc = &account{ID: newID(), Name: who.name, Role: a.roles[0], Via: ViaService, Service: s.ID, Created: now}
+		acc = &account{Name: who.name, Role: a.roles[0], Via: ViaService, Service: s.ID, Created: now}
+		if err := a.newcomer(ctx, acc, who); err != nil {
+			a.mu.Unlock()
+			a.log.Warn("signin: the app took no new account", "service", s.ID, "err", err)
+			note(Entry{Name: who.name}, "noAccount")
+			return
+		}
 		docs = append(docs, a.doc(kindIdentity, id, identity{
 			Kind: identityService, Service: s.ID, Issuer: who.issuer, Subject: who.subject, Name: who.name, Account: acc.ID, Linked: now, Seen: now,
 		}))
@@ -504,6 +510,19 @@ func (a *Auth) serviceSignIn(w http.ResponseWriter, r *http.Request, s *service,
 		a.cfg.Hooks.SignedIn(ctx, v, who.groups)
 	}
 	a.back(w, r, fl.Return, "")
+}
+
+// newcomer gives acc, which a sign-in service brings for who, an id and
+// tells the app. The caller holds mu.
+func (a *Auth) newcomer(ctx context.Context, acc *account, who *person) error {
+	id, err := a.newAccountID(ctx)
+	if err != nil {
+		return err
+	}
+	acc.ID = id
+	c := changeOf(ChangeCreate, acc)
+	c.Issuer, c.Subject = who.issuer, who.subject
+	return a.changing(ctx, c)
 }
 
 // renewService confirms a session that ran out of its day without asking the

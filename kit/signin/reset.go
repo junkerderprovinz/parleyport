@@ -128,7 +128,12 @@ func (a *Auth) resetDocs(r *http.Request, acc *account, hash string) ([]Doc, map
 	removed := map[string]any{"twoFactor": acc.twoFactor()}
 	acc.Password, acc.LegacyPassword = hash, ""
 	acc.TOTP, acc.TOTPPending, acc.TOTPLast, acc.Recovery, acc.LegacyRecovery = nil, nil, 0, nil, nil
-	acc.Blocked = false
+	if acc.Blocked {
+		acc.Blocked = false
+		if err := a.changing(ctx, changeOf(ChangeBlock, acc)); err != nil {
+			return nil, nil, err
+		}
+	}
 	all, err := a.accounts(ctx)
 	if err != nil {
 		return nil, nil, err

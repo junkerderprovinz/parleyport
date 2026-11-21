@@ -47,6 +47,7 @@ const (
 	EndOpened        Ending = "opened"    // the last password was removed
 	EndRole          Ending = "role"      // a lower role from the sign-in service or an admin
 	EndTwoFactor     Ending = "twoFactor" // two-factor was turned on or off
+	EndRevoked       Ending = "revoked"   // an admin ended every session, token and passkey
 	// EndWay is one way in that went on its own: a token, a passkey or the
 	// binding to a sign-in service. Only Legacy.Drop hears it.
 	EndWay Ending = "way"
@@ -98,6 +99,11 @@ type Config struct {
 	TrustedPeer func(*http.Request) bool
 	// MinPassword is the shortest password in characters. Zero is 12.
 	MinPassword int
+	// NewID makes the id of a new account, for an app whose own tables
+	// want ids of their form. Nil is 12 random characters. An id that an
+	// account or a removed account the app has not cleaned up yet still
+	// holds is never used.
+	NewID func() (string, error)
 	// Import returns the accounts the app had before it used the package.
 	// It runs once, on a store without the package's documents, and what
 	// it returns is written in one batch, so a failed import leaves nothing
@@ -121,6 +127,11 @@ type Hooks struct {
 	// SignedIn runs after every sign-in with the service groups the sign-in
 	// service reported.
 	SignedIn func(ctx context.Context, v Visitor, groups []string)
+	// Changing runs before the package writes a change to an account, so an
+	// app with an account table of its own keeps it in step. An error stops
+	// the change. It runs under the lock of every sign-in, so it does not
+	// call the package and does not wait for what does.
+	Changing func(ctx context.Context, c Change) error
 	// Doors are the ways in the app keeps for itself, such as a paired
 	// phone, asked in order after the package found nobody.
 	Doors []Door

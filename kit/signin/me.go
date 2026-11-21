@@ -35,15 +35,26 @@ func (a *Auth) getMe(w http.ResponseWriter, r *http.Request, f *found) {
 
 // checkNew answers when pw cannot be a password and reports whether it can.
 func (a *Auth) checkNew(w http.ResponseWriter, pw string) bool {
+	var no *Refusal
+	switch err := a.newPassword(pw); {
+	case errors.As(err, &no) && no.Code == "passwordShort":
+		fail(w, no.Status, no.Code, "min", a.minPass)
+	case err != nil:
+		a.answer(w, nil, nil, err)
+	default:
+		return true
+	}
+	return false
+}
+
+func (a *Auth) newPassword(pw string) error {
 	if len(pw) > maxPassword {
-		fail(w, http.StatusBadRequest, "passwordLong")
-		return false
+		return refuse(http.StatusBadRequest, "passwordLong")
 	}
 	if utf8.RuneCountInString(pw) < a.minPass {
-		fail(w, http.StatusBadRequest, "passwordShort", "min", a.minPass)
-		return false
+		return refuse(http.StatusBadRequest, "passwordShort")
 	}
-	return true
+	return nil
 }
 
 func (a *Auth) putPassword(w http.ResponseWriter, r *http.Request, f *found) {
@@ -155,10 +166,11 @@ func (a *Auth) firstPassword(w http.ResponseWriter, r *http.Request, f *found, n
 	}
 	acc, err := a.owner(ctx)
 	if errors.Is(err, ErrNotFound) {
-		acc = &account{ID: newID(), Name: name, Role: a.roles[0], Owner: true, Via: ViaPassword, Created: a.now()}
-	} else if err != nil {
+		acc, err = a.newOwner(ctx, name)
+	}
+	if err != nil {
 		a.mu.Unlock()
-		a.internal(w, err)
+		a.answer(w, r, f, err)
 		return
 	}
 	acc.Password, acc.LegacyPassword = hash, ""
@@ -177,6 +189,23 @@ func (a *Auth) firstPassword(w http.ResponseWriter, r *http.Request, f *found, n
 	a.runEndings(ctx)
 	a.note(ctx, r, Entry{Account: acc.ID, Name: acc.Name, Via: ViaPassword, Result: "firstPassword"})
 	ok(w, map[string]any{"visitor": a.visitorOf(acc, ViaPassword, "")})
+}
+
+// newOwner is the account the first password makes, under a name nobody
+// holds. The caller holds mu.
+func (a *Auth) newOwner(ctx context.Context, name string) (*account, error) {
+	free, err := a.nameFree(ctx, name, "")
+	if err != nil {
+		return nil, err
+	}
+	if !free {
+		return nil, refuse(http.StatusConflict, "nameTaken")
+	}
+	acc := &account{Name: name, Role: a.roles[0], Owner: true, Via: ViaPassword, Created: a.now()}
+	if acc.ID, err = a.newAccountID(ctx); err != nil {
+		return nil, err
+	}
+	return acc, a.changing(ctx, changeOf(ChangeCreate, acc))
 }
 
 // deletePassword takes the owner's password away. With no password left
@@ -202,6 +231,11 @@ func (a *Auth) deletePassword(w http.ResponseWriter, r *http.Request, f *found) 
 		return
 	}
 	a.mu.Lock()
+	if err := a.othersSignIn(ctx, acc.ID); err != nil {
+		a.mu.Unlock()
+		a.answer(w, r, f, err)
+		return
+	}
 	docs, err := a.openUp(ctx)
 	if err == nil {
 		err = a.cfg.Store.Apply(ctx, docs...)
@@ -218,6 +252,34 @@ func (a *Auth) deletePassword(w http.ResponseWriter, r *http.Request, f *found) 
 	a.runEndings(ctx)
 	a.note(ctx, r, Entry{Account: acc.ID, Name: acc.Name, Result: "passwordRemoved"})
 	ok(w, nil)
+}
+
+// othersSignIn refuses, in an app with many accounts, to open while an
+// account but the owner still signs in with a password or a sign-in
+// service, since opening would take their ways in. The caller holds mu.
+func (a *Auth) othersSignIn(ctx context.Context, owner string) error {
+	if a.cfg.Owner {
+		return nil
+	}
+	all, err := a.accounts(ctx)
+	if err != nil {
+		return err
+	}
+	bound, _, err := listOf[identity](ctx, a, kindIdentity)
+	if err != nil {
+		return err
+	}
+	for _, acc := range all {
+		if acc.ID != owner && acc.hasPassword() {
+			return refuse(http.StatusConflict, "othersSignIn")
+		}
+	}
+	for _, idn := range bound {
+		if idn.Account != owner {
+			return refuse(http.StatusConflict, "othersSignIn")
+		}
+	}
+	return nil
 }
 
 // openUp is every change that takes the app back to open: no password, no

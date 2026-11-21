@@ -258,6 +258,9 @@ func (b *browser) requestTo(path string) *http.Request {
 	req := httptest.NewRequest("GET", b.a.srv.URL+path, nil)
 	req.TLS = &tls.ConnectionState{}
 	req.RemoteAddr = "127.0.0.1:40000"
+	for k, v := range b.header {
+		req.Header[k] = v
+	}
 	for _, c := range b.c.Jar.Cookies(req.URL) {
 		req.AddCookie(c)
 	}
