@@ -27,6 +27,7 @@ const (
 	kindEnding   = "ending"
 	kindSwapped  = "swapped"
 	kindRemoved  = "removed"
+	kindClaim    = "claim"
 
 	metaID = "signin"
 )
@@ -262,5 +263,5 @@ func importedPasskey(account string, p ImportedPasskey, now time.Time) passkeyDo
 	for _, t := range p.Transports {
 		c.Transport = append(c.Transport, protocol.AuthenticatorTransport(t))
 	}
-	return passkeyDoc{Account: account, Name: p.Name, Created: created, RPID: p.RPID, Credential: c}
+	return passkeyDoc{Account: account, Name: p.Name, Created: created, Used: p.Used, RPID: p.RPID, Credential: c}
 }

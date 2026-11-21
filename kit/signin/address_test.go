@@ -155,6 +155,13 @@ func TestABasePathKeepsCookiesAndRedirectsUnderIt(t *testing.T) {
 func addServiceAt(t *testing.T, owner *browser, ret string) (*signintest.Provider, string) {
 	t.Helper()
 	p := signintest.NewProvider(t)
+	return p, addProvider(t, owner, p, ret)
+}
+
+// addProvider adds p as a sign-in service and passes its test sign-in as
+// ownerAtService, coming back to ret.
+func addProvider(t *testing.T, owner *browser, p *signintest.Provider, ret string) string {
+	t.Helper()
 	r := owner.api("POST", "methods/oidc", map[string]any{
 		"provider": "pocket-id", "issuer": p.URL, "clientId": p.ClientID, "secret": p.Secret, "ca": string(p.CA),
 	})
@@ -170,5 +177,5 @@ func addServiceAt(t *testing.T, owner *browser, ret string) (*signintest.Provide
 	if got := owner.via(p, start); got != ret+"?signin=testOk" {
 		t.Fatalf("test sign-in ended at %s", got)
 	}
-	return p, id
+	return id
 }

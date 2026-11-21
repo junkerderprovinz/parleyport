@@ -444,6 +444,23 @@ func (a *Auth) serviceSignIn(w http.ResponseWriter, r *http.Request, s *service,
 		idn.Seen, idn.Name = now, who.name
 		docs = append(docs, a.doc(kindIdentity, id, idn))
 	case errors.Is(err, ErrNotFound):
+		if acc, err = a.claimed(ctx, who); err != nil {
+			a.mu.Unlock()
+			a.internal(w, err)
+			return
+		}
+		if acc != nil {
+			if acc.Blocked {
+				a.mu.Unlock()
+				note(Entry{Account: acc.ID, Name: acc.Name}, "blocked")
+				return
+			}
+			docs = append(docs, gone(kindClaim, claimID(who.issuer, who.name)), a.doc(kindIdentity, id, identity{
+				Kind: identityService, Service: s.ID, Issuer: who.issuer, Subject: who.subject, Name: who.name, Account: acc.ID, Linked: now, Seen: now,
+			}))
+			defer a.note(ctx, r, Entry{Account: acc.ID, Name: acc.Name, Via: ViaService, Service: s.ID, Result: "claimed"})
+			break
+		}
 		if !validName(who.name) {
 			a.mu.Unlock()
 			note(Entry{}, "nameMissing")

@@ -76,6 +76,8 @@ type Imported struct {
 	Tokens     []ImportedToken
 	Identities []ImportedIdentity
 	Created    time.Time
+	// Seen is when the account last signed in.
+	Seen time.Time
 }
 
 // ImportedPasskey is a passkey as WebAuthn registered it.
@@ -91,6 +93,7 @@ type ImportedPasskey struct {
 	AttestationType string
 	RPID            string
 	Created         time.Time
+	Used            time.Time
 }
 
 // ImportedToken is an API token by the digest the app stored, which
@@ -104,11 +107,27 @@ type ImportedToken struct {
 }
 
 // ImportedIdentity binds the account to a person at a sign-in service.
+//
+// ClaimByName is for an account the app bound to a service by name alone,
+// without a subject. The first sign-in from Issuer under exactly Name binds
+// its subject, once, and only while the account has no password and is not
+// the owner.
 type ImportedIdentity struct {
-	Issuer  string
-	Subject string
-	Name    string
+	Issuer      string
+	Subject     string
+	Name        string
+	ClaimByName bool
 }
+
+// nameClaim waits for the first sign-in that binds an imported account by
+// name.
+type nameClaim struct {
+	Issuer  string `json:"issuer"`
+	Name    string `json:"name"`
+	Account string `json:"account"`
+}
+
+func claimID(issuer, name string) string { return shortID("claim", issuer, name) }
 
 // importAll runs Config.Import on a store without the package's documents
 // and writes what it returns in one batch with the mark that the import
@@ -136,9 +155,11 @@ func (a *Auth) importAll(ctx context.Context, m *meta) ([]Doc, error) {
 		if in.Owner {
 			owners++
 		}
+		// Checked starts at the import, so tokens of an account from
+		// outside keep working for a day without its service.
 		acc := &account{
 			ID: in.ID, Name: strings.TrimSpace(in.Name), Role: in.Role, Owner: in.Owner, Via: ViaPassword,
-			Created: in.Created, LegacyPassword: in.Password, TOTPLast: in.TOTPLast,
+			Created: in.Created, Seen: in.Seen, Checked: now, LegacyPassword: in.Password, TOTPLast: in.TOTPLast,
 			LegacyRecovery: in.Recovery, Handle: in.Handle, Imported: true,
 		}
 		if acc.Created.IsZero() {
@@ -172,6 +193,13 @@ func (a *Auth) importAll(ctx context.Context, m *meta) ([]Doc, error) {
 			}))
 		}
 		for _, id := range in.Identities {
+			if id.ClaimByName {
+				if in.Owner || in.Password != "" || id.Subject != "" || id.Issuer == "" || id.Name == "" {
+					return nil, fmt.Errorf("signin: import: account %q cannot be claimed by name", in.Name)
+				}
+				docs = append(docs, a.doc(kindClaim, claimID(id.Issuer, id.Name), nameClaim{Issuer: id.Issuer, Name: id.Name, Account: acc.ID}))
+				continue
+			}
 			docs = append(docs, a.doc(kindIdentity, identityID(identityService, id.Issuer, id.Subject), identity{
 				Kind: identityService, Issuer: id.Issuer, Subject: id.Subject, Name: id.Name, Account: acc.ID, Linked: now,
 			}))
@@ -191,6 +219,28 @@ func (a *Auth) importAll(ctx context.Context, m *meta) ([]Doc, error) {
 }
 
 const swapGrace = 2 * time.Minute
+
+// claimed is the imported account that waits for its first sign-in from
+// who's issuer under exactly who's name, while it has no password. The
+// caller holds mu.
+func (a *Auth) claimed(ctx context.Context, who *person) (*account, error) {
+	c := new(nameClaim)
+	err := a.load(ctx, kindClaim, claimID(who.issuer, who.name), c)
+	if errors.Is(err, ErrNotFound) || (err == nil && (c.Issuer != who.issuer || c.Name != who.name)) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	acc, err := a.account(ctx, c.Account)
+	if errors.Is(err, ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil || acc.hasPassword() {
+		return nil, err
+	}
+	return acc, nil
+}
 
 // swap marks an old session that was swapped for the session of the
 // package with the id Session.

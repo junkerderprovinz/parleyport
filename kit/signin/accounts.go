@@ -213,7 +213,7 @@ func (a *Auth) deleteAccount(w http.ResponseWriter, r *http.Request, f *found) {
 	docs, err := a.endAll(r, acc.ID)
 	if err == nil {
 		var more []Doc
-		for _, kind := range []string{kindPasskey, kindIdentity} {
+		for _, kind := range []string{kindPasskey, kindIdentity, kindClaim} {
 			if more, err = a.wipe(ctx, kind, owned(acc.ID)); err != nil {
 				break
 			}
