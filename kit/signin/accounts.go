@@ -385,6 +385,11 @@ func (a *Auth) removeLocked(r *http.Request, f *found, id string) error {
 	if err := a.changing(ctx, changeOf(ChangeRemove, acc)); err != nil {
 		return err
 	}
+	// Drop goes first, so the old fields are gone even while the app's own
+	// cleanup still waits.
+	if acc.Imported && a.cfg.Legacy.Drop != nil {
+		docs = append(docs, a.ending(acc.ID, EndRemoved, true))
+	}
 	docs = append(docs, gone(kindAccount, acc.ID), a.doc(kindRemoved, acc.ID, removed{Name: acc.Name, At: a.now()}), a.ending(acc.ID, EndRemoved, false))
 	return a.cfg.Store.Apply(ctx, docs...)
 }

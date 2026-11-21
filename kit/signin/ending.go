@@ -36,7 +36,7 @@ func (a *Auth) endingsOf(acc *account, what Ending) []Doc {
 	if what != EndWay {
 		docs = append(docs, a.ending(acc.ID, what, false))
 	}
-	if acc.Imported && a.cfg.Legacy.Drop != nil && what != EndRemoved {
+	if acc.Imported && a.cfg.Legacy.Drop != nil {
 		docs = append(docs, a.ending(acc.ID, what, true))
 		if what != EndResetOther {
 			acc.Imported = false

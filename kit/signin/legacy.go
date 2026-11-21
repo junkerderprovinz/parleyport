@@ -31,8 +31,8 @@ type Legacy struct {
 	// an ended password or token back. For EndResetOther only the old
 	// sessions and tokens go, since the account's password still stands;
 	// for anything else every old field goes, and Drop is not called again
-	// for that account. It runs again, also after a restart, until it
-	// returns nil.
+	// for that account. For EndRemoved it runs before Hooks.Ended. It runs
+	// again, also after a restart, until it returns nil.
 	Drop func(ctx context.Context, account string, what Ending) error
 }
 
