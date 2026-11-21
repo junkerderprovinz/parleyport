@@ -26,6 +26,7 @@ const (
 	kindLog      = "log"
 	kindEnding   = "ending"
 	kindSwapped  = "swapped"
+	kindRemoved  = "removed"
 
 	metaID = "signin"
 )

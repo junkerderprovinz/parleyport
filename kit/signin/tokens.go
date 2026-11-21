@@ -98,22 +98,32 @@ func (a *Auth) postToken(w http.ResponseWriter, r *http.Request, f *found) {
 }
 
 func (a *Auth) deleteToken(w http.ResponseWriter, r *http.Request, f *found) {
-	id := r.PathValue("id")
 	a.mu.Lock()
-	t := new(apiToken)
-	err := a.load(r.Context(), kindToken, id, t)
-	if err != nil || t.Account != f.v.Account {
-		a.mu.Unlock()
-		fail(w, http.StatusNotFound, "notFound")
-		return
-	}
-	err = a.cfg.Store.Apply(r.Context(), gone(kindToken, id))
+	err := a.removeToken(r.Context(), f.v.Account, r.PathValue("id"))
 	a.mu.Unlock()
 	if err != nil {
-		a.internal(w, err)
+		a.answer(w, r, f, err)
 		return
 	}
+	a.runEndings(r.Context())
 	ok(w, nil)
+}
+
+// removeToken deletes the token id of account. The caller holds mu.
+func (a *Auth) removeToken(ctx context.Context, account, id string) error {
+	t := new(apiToken)
+	if err := a.load(ctx, kindToken, id, t); err != nil || t.Account != account {
+		return refuse(http.StatusNotFound, "notFound")
+	}
+	docs := []Doc{gone(kindToken, id)}
+	if t.Legacy {
+		more, err := a.wayGone(ctx, account)
+		if err != nil {
+			return err
+		}
+		docs = append(docs, more...)
+	}
+	return a.cfg.Store.Apply(ctx, docs...)
 }
 
 // byToken finds the visitor behind an API token: one in the kit's form by

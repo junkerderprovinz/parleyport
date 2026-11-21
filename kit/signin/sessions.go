@@ -87,7 +87,8 @@ func (a *Auth) deleteSessions(w http.ResponseWriter, r *http.Request, f *found) 
 	ended := max(0, len(docs)-1)
 	if err == nil {
 		acc.Epoch++
-		docs = append(docs, a.doc(kindAccount, acc.ID, acc), a.ending(acc.ID, EndEverywhere))
+		docs = append(docs, a.endingsOf(acc, EndEverywhere)...)
+		docs = append(docs, a.doc(kindAccount, acc.ID, acc))
 		docs = append(docs, a.newSession(w, r, f, a.reissue(r, f, acc))...)
 		err = a.cfg.Store.Apply(ctx, docs...)
 	}
@@ -96,7 +97,7 @@ func (a *Auth) deleteSessions(w http.ResponseWriter, r *http.Request, f *found) 
 		a.internal(w, err)
 		return
 	}
-	a.afterEpoch(ctx, acc)
+	a.runEndings(ctx)
 	ok(w, map[string]int{"ended": ended})
 }
 

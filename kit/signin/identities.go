@@ -1,6 +1,7 @@
 package signin
 
 import (
+	"context"
 	"net/http"
 	"time"
 )
@@ -33,35 +34,41 @@ func (a *Auth) getIdentities(w http.ResponseWriter, r *http.Request, f *found) {
 // password keeps its last one, or nobody could sign in as it any more.
 func (a *Auth) deleteIdentity(w http.ResponseWriter, r *http.Request, f *found) {
 	ctx := r.Context()
-	id := r.PathValue("id")
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	idn := new(identity)
-	if err := a.load(ctx, kindIdentity, id, idn); err != nil || idn.Account != f.v.Account {
-		fail(w, http.StatusNotFound, "notFound")
+	err := a.unlink(ctx, f.v.Account, r.PathValue("id"))
+	a.mu.Unlock()
+	if err != nil {
+		a.answer(w, r, f, err)
 		return
 	}
-	acc, err := a.account(ctx, f.v.Account)
+	a.runEndings(ctx)
+	ok(w, nil)
+}
+
+// unlink removes the binding id of account. The caller holds mu.
+func (a *Auth) unlink(ctx context.Context, account, id string) error {
+	idn := new(identity)
+	if err := a.load(ctx, kindIdentity, id, idn); err != nil || idn.Account != account {
+		return refuse(http.StatusNotFound, "notFound")
+	}
+	acc, err := a.account(ctx, account)
 	if err != nil {
-		a.internal(w, err)
-		return
+		return err
 	}
 	if !acc.hasPassword() {
 		mine, err := a.wipe(ctx, kindIdentity, owned(acc.ID))
 		if err != nil {
-			a.internal(w, err)
-			return
+			return err
 		}
 		if len(mine) <= 1 {
-			fail(w, http.StatusConflict, "lastWayIn")
-			return
+			return refuse(http.StatusConflict, "lastWayIn")
 		}
 	}
-	if err := a.cfg.Store.Apply(ctx, gone(kindIdentity, id)); err != nil {
-		a.internal(w, err)
-		return
+	docs, err := a.wayGone(ctx, acc.ID)
+	if err != nil {
+		return err
 	}
-	ok(w, nil)
+	return a.cfg.Store.Apply(ctx, append(docs, gone(kindIdentity, id))...)
 }
 
 func (a *Auth) postIdentityLink(w http.ResponseWriter, r *http.Request, f *found) {

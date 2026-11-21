@@ -90,7 +90,7 @@ func (a *Auth) putPassword(w http.ResponseWriter, r *http.Request, f *found) {
 	}
 	acc.Password, acc.LegacyPassword = hash, ""
 	acc.Epoch++
-	docs := []Doc{a.doc(kindAccount, acc.ID, acc), a.ending(acc.ID, EndPassword)}
+	docs := append(a.endingsOf(acc, EndPassword), a.doc(kindAccount, acc.ID, acc))
 	docs = append(docs, a.newSession(w, r, f, a.reissue(r, f, acc))...)
 	err = a.cfg.Store.Apply(ctx, docs...)
 	a.mu.Unlock()
@@ -98,7 +98,7 @@ func (a *Auth) putPassword(w http.ResponseWriter, r *http.Request, f *found) {
 		a.internal(w, err)
 		return
 	}
-	a.afterEpoch(ctx, acc)
+	a.runEndings(ctx)
 	a.note(ctx, r, Entry{Account: acc.ID, Name: acc.Name, Result: "passwordChanged"})
 	ok(w, nil)
 }
@@ -163,7 +163,7 @@ func (a *Auth) firstPassword(w http.ResponseWriter, r *http.Request, f *found, n
 	}
 	acc.Password, acc.LegacyPassword = hash, ""
 	acc.Epoch++
-	docs := []Doc{a.doc(kindAccount, acc.ID, acc), a.ending(acc.ID, EndFirstPassword)}
+	docs := append(a.endingsOf(acc, EndFirstPassword), a.doc(kindAccount, acc.ID, acc))
 	docs = append(docs, a.newSession(w, r, f, sessionOf(acc, ViaPassword, ""))...)
 	err = a.cfg.Store.Apply(ctx, docs...)
 	if err == nil {
@@ -233,7 +233,8 @@ func (a *Auth) openUp(ctx context.Context) ([]Doc, error) {
 		acc.Password, acc.LegacyPassword = "", ""
 		acc.TOTP, acc.TOTPPending, acc.Recovery, acc.LegacyRecovery = nil, nil, nil, nil
 		acc.Epoch++
-		docs = append(docs, a.doc(kindAccount, acc.ID, acc), a.ending(acc.ID, EndOpened))
+		docs = append(docs, a.endingsOf(acc, EndOpened)...)
+		docs = append(docs, a.doc(kindAccount, acc.ID, acc))
 	}
 	for _, kind := range []string{kindSession, kindToken, kindPasskey} {
 		more, err := a.wipe(ctx, kind, func([]byte) bool { return true })

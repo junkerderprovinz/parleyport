@@ -81,41 +81,45 @@ func (a *Auth) postTOTPConfirm(w http.ResponseWriter, r *http.Request, f *found)
 		return
 	}
 	ctx := r.Context()
-	now := a.now()
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	acc, err := a.stillValid(ctx, f)
+	codes, err := a.confirmTOTP(w, r, f, in.Code)
+	a.mu.Unlock()
 	if err != nil {
-		fail(w, http.StatusUnauthorized, "signInFirst")
+		a.answer(w, r, f, err)
 		return
 	}
+	a.runEndings(ctx)
+	ok(w, map[string]any{"codes": codes})
+}
+
+// confirmTOTP turns two-factor on with the pending secret once code fits
+// it. The caller holds mu.
+func (a *Auth) confirmTOTP(w http.ResponseWriter, r *http.Request, f *found, code string) ([]string, error) {
+	now := a.now()
+	acc, err := a.stillValid(r.Context(), f)
+	if err != nil {
+		return nil, refuse(http.StatusUnauthorized, "signInFirst")
+	}
 	if len(acc.TOTPPending) == 0 || now.Sub(acc.TOTPPendingAt) > pendingLife {
-		fail(w, http.StatusConflict, "setupExpired")
-		return
+		return nil, refuse(http.StatusConflict, "setupExpired")
 	}
 	secret, err := a.openFor("totp-pending", acc.ID, acc.TOTPPending)
 	if err != nil {
-		a.internal(w, err)
-		return
+		return nil, err
 	}
-	step, good := totp.Check(secret, strings.TrimSpace(in.Code), now, 0)
+	step, good := totp.Check(secret, strings.TrimSpace(code), now, 0)
 	if !good {
-		fail(w, http.StatusUnauthorized, "wrongCode")
-		return
+		return nil, refuse(http.StatusUnauthorized, "wrongCode")
 	}
 	if acc.TOTP, err = a.sealFor("totp", acc.ID, secret); err != nil {
-		a.internal(w, err)
-		return
+		return nil, err
 	}
 	acc.TOTPLast, acc.TOTPPending, acc.TOTPPendingAt = step, nil, time.Time{}
 	codes := a.newCodes(acc)
 	acc.Epoch++
-	docs := append(a.newSession(w, r, f, a.reissue(r, f, acc)), a.doc(kindAccount, acc.ID, acc))
-	if err := a.cfg.Store.Apply(ctx, docs...); err != nil {
-		a.internal(w, err)
-		return
-	}
-	ok(w, map[string]any{"codes": codes})
+	docs := append(a.endingsOf(acc, EndTwoFactor), a.doc(kindAccount, acc.ID, acc))
+	docs = append(docs, a.newSession(w, r, f, a.reissue(r, f, acc))...)
+	return codes, a.cfg.Store.Apply(r.Context(), docs...)
 }
 
 func (a *Auth) deleteTOTP(w http.ResponseWriter, r *http.Request, f *found) {
@@ -136,34 +140,40 @@ func (a *Auth) deleteTOTP(w http.ResponseWriter, r *http.Request, f *found) {
 		return
 	}
 	a.mu.Lock()
-	defer a.mu.Unlock()
+	err := a.endTOTP(w, r, f, in.Code, key, now)
+	a.mu.Unlock()
+	if err != nil {
+		a.answer(w, r, f, err)
+		return
+	}
+	a.runEndings(ctx)
+	ok(w, nil)
+}
+
+// endTOTP turns two-factor off once code is one of its codes. The caller
+// holds mu.
+func (a *Auth) endTOTP(w http.ResponseWriter, r *http.Request, f *found, code, key string, now time.Time) error {
+	ctx := r.Context()
 	acc, err := a.stillValid(ctx, f)
 	if err != nil {
-		fail(w, http.StatusUnauthorized, "signInFirst")
-		return
+		return refuse(http.StatusUnauthorized, "signInFirst")
 	}
 	if !acc.twoFactor() {
-		ok(w, nil)
-		return
+		return nil
 	}
-	used, err := a.useSecondFactor(ctx, acc, in.Code, now)
+	used, err := a.useSecondFactor(ctx, acc, code, now)
 	if err != nil {
-		a.internal(w, err)
-		return
+		return err
 	}
 	if used == "" {
 		a.limits.fail(perCode, key, now)
-		fail(w, http.StatusUnauthorized, "wrongCode")
-		return
+		return refuse(http.StatusUnauthorized, "wrongCode")
 	}
 	acc.TOTP, acc.TOTPLast, acc.Recovery, acc.LegacyRecovery = nil, 0, nil, nil
 	acc.Epoch++
-	docs := append(a.newSession(w, r, f, a.reissue(r, f, acc)), a.doc(kindAccount, acc.ID, acc))
-	if err := a.cfg.Store.Apply(ctx, docs...); err != nil {
-		a.internal(w, err)
-		return
-	}
-	ok(w, nil)
+	docs := append(a.endingsOf(acc, EndTwoFactor), a.doc(kindAccount, acc.ID, acc))
+	docs = append(docs, a.newSession(w, r, f, a.reissue(r, f, acc))...)
+	return a.cfg.Store.Apply(ctx, docs...)
 }
 
 func (a *Auth) postTOTPCodes(w http.ResponseWriter, r *http.Request, f *found) {

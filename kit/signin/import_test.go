@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -18,6 +19,16 @@ import (
 type oldApp struct {
 	imports, checks, drops atomic.Int32
 	issued                 time.Time
+
+	mu      sync.Mutex
+	dropped []string
+}
+
+// droppedWith lists the calls of Legacy.Drop as account:what.
+func (o *oldApp) droppedWith() []string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]string(nil), o.dropped...)
 }
 
 func (o *oldApp) option(owner signin.Imported) option {
@@ -46,7 +57,13 @@ func (o *oldApp) option(owner signin.Imported) option {
 				}
 				return "digest:" + tok, true
 			},
-			Drop: func(context.Context, string) error { o.drops.Add(1); return nil },
+			Drop: func(_ context.Context, account string, what signin.Ending) error {
+				o.drops.Add(1)
+				o.mu.Lock()
+				o.dropped = append(o.dropped, account+":"+string(what))
+				o.mu.Unlock()
+				return nil
+			},
 		}
 	}
 }

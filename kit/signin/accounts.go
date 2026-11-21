@@ -169,19 +169,18 @@ func (a *Auth) patchAccount(w http.ResponseWriter, r *http.Request, f *found) {
 		}
 		acc.Role = *in.Role
 	}
-	docs := []Doc{a.doc(kindAccount, acc.ID, acc)}
+	var docs []Doc
 	if why != "" {
 		acc.Epoch++
-		docs[0] = a.doc(kindAccount, acc.ID, acc)
 		ended, err := a.endAll(r, acc.ID)
 		if err != nil {
 			a.mu.Unlock()
 			a.internal(w, err)
 			return
 		}
-		docs = append(docs, ended...)
-		docs = append(docs, a.ending(acc.ID, why))
+		docs = append(ended, a.endingsOf(acc, why)...)
 	}
+	docs = append(docs, a.doc(kindAccount, acc.ID, acc))
 	err = a.cfg.Store.Apply(ctx, docs...)
 	a.mu.Unlock()
 	if err != nil {
@@ -222,7 +221,7 @@ func (a *Auth) deleteAccount(w http.ResponseWriter, r *http.Request, f *found) {
 		}
 	}
 	if err == nil {
-		docs = append(docs, gone(kindAccount, acc.ID), a.ending(acc.ID, EndRemoved))
+		docs = append(docs, gone(kindAccount, acc.ID), a.ending(acc.ID, EndRemoved, false))
 		err = a.cfg.Store.Apply(ctx, docs...)
 	}
 	a.mu.Unlock()

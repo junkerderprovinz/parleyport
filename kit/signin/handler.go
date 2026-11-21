@@ -192,6 +192,32 @@ func throttled(w http.ResponseWriter, wait time.Duration) {
 	fail(w, http.StatusTooManyRequests, "throttled", "retryAfter", secs)
 }
 
+// Refusal is a request the package turned down. Status and Code are what
+// the contract answers it with, such as 409 and nameTaken.
+type Refusal struct {
+	Status int
+	Code   string
+}
+
+func (e *Refusal) Error() string { return "signin: " + e.Code }
+
+func refuse(status int, code string) error { return &Refusal{Status: status, Code: code} }
+
+// answer fails the request as err says.
+func (a *Auth) answer(w http.ResponseWriter, r *http.Request, f *found, err error) {
+	var no *Refusal
+	switch {
+	case errors.As(err, &no):
+		fail(w, no.Status, no.Code)
+	case errors.Is(err, ErrNotFresh):
+		a.notFresh(w, r, f)
+	case errors.Is(err, ErrNotFound):
+		fail(w, http.StatusNotFound, "notFound")
+	default:
+		a.internal(w, err)
+	}
+}
+
 func (a *Auth) internal(w http.ResponseWriter, err error) {
 	a.log.Error("signin: request failed", "err", err)
 	fail(w, http.StatusInternalServerError, "internal")

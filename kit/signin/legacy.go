@@ -29,10 +29,14 @@ type Legacy struct {
 	// Token returns the digest the app stored for an incoming token in its
 	// old form, so the imported token is found.
 	Token func(token string) (digest string, ok bool)
-	// Drop removes the app's old fields for account once the package
-	// ended its sessions for the first time, so going back to the version
-	// before cannot bring an ended password or token back.
-	Drop func(ctx context.Context, account string) error
+	// Drop removes the app's old fields for account once the package ended
+	// one of its ways in, so going back to the version before cannot bring
+	// an ended password or token back. For EndResetOther only the old
+	// sessions and tokens go, since the account's password still stands;
+	// for anything else every old field goes, and Drop is not called again
+	// for that account. It runs again, also after a restart, until it
+	// returns nil.
+	Drop func(ctx context.Context, account string, what Ending) error
 }
 
 // Imported is one account an app had before it used the package, as its

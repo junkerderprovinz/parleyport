@@ -2,6 +2,7 @@ package signin
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -408,31 +409,49 @@ func (a *Auth) patchPasskey(w http.ResponseWriter, r *http.Request, f *found) {
 		fail(w, http.StatusBadRequest, "nameInvalid")
 		return
 	}
-	a.ownPasskey(w, r, f, func(id string, p *passkeyDoc) Doc {
-		p.Name = name
-		return a.doc(kindPasskey, id, p)
-	})
-}
-
-func (a *Auth) deletePasskey(w http.ResponseWriter, r *http.Request, f *found) {
-	a.ownPasskey(w, r, f, func(id string, _ *passkeyDoc) Doc { return gone(kindPasskey, id) })
-}
-
-func (a *Auth) ownPasskey(w http.ResponseWriter, r *http.Request, f *found, change func(string, *passkeyDoc) Doc) {
-	id := r.PathValue("id")
 	a.mu.Lock()
-	p := new(passkeyDoc)
-	err := a.load(r.Context(), kindPasskey, id, p)
-	if err != nil || p.Account != f.v.Account {
-		a.mu.Unlock()
-		fail(w, http.StatusNotFound, "notFound")
-		return
-	}
-	err = a.cfg.Store.Apply(r.Context(), change(id, p))
+	err := a.ownPasskey(r.Context(), f.v.Account, r.PathValue("id"), func(id string, p *passkeyDoc) ([]Doc, error) {
+		p.Name = name
+		return []Doc{a.doc(kindPasskey, id, p)}, nil
+	})
 	a.mu.Unlock()
 	if err != nil {
-		a.internal(w, err)
+		a.answer(w, r, f, err)
 		return
 	}
 	ok(w, nil)
+}
+
+func (a *Auth) deletePasskey(w http.ResponseWriter, r *http.Request, f *found) {
+	a.mu.Lock()
+	err := a.removePasskey(r.Context(), f.v.Account, r.PathValue("id"))
+	a.mu.Unlock()
+	if err != nil {
+		a.answer(w, r, f, err)
+		return
+	}
+	a.runEndings(r.Context())
+	ok(w, nil)
+}
+
+// removePasskey deletes the passkey id of account. The caller holds mu.
+func (a *Auth) removePasskey(ctx context.Context, account, id string) error {
+	return a.ownPasskey(ctx, account, id, func(id string, _ *passkeyDoc) ([]Doc, error) {
+		more, err := a.wayGone(ctx, account)
+		return append(more, gone(kindPasskey, id)), err
+	})
+}
+
+// ownPasskey writes what change makes of the passkey id of account. The
+// caller holds mu.
+func (a *Auth) ownPasskey(ctx context.Context, account, id string, change func(string, *passkeyDoc) ([]Doc, error)) error {
+	p := new(passkeyDoc)
+	if err := a.load(ctx, kindPasskey, id, p); err != nil || p.Account != account {
+		return refuse(http.StatusNotFound, "notFound")
+	}
+	docs, err := change(id, p)
+	if err != nil {
+		return err
+	}
+	return a.cfg.Store.Apply(ctx, docs...)
 }

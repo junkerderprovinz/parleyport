@@ -113,7 +113,7 @@ func (a *Auth) postReset(w http.ResponseWriter, r *http.Request, f *found) {
 		a.internal(w, err)
 		return
 	}
-	a.afterEpoch(ctx, acc)
+	a.runEndings(ctx)
 	a.note(ctx, r, Entry{Account: acc.ID, Name: acc.Name, Via: ViaPassword, Result: "reset"})
 	ok(w, map[string]any{"removed": removed, "visitor": a.visitorOf(acc, ViaPassword, "")})
 }
@@ -135,11 +135,13 @@ func (a *Auth) resetDocs(r *http.Request, acc *account, hash string) ([]Doc, map
 	}
 	var docs []Doc
 	for _, other := range all {
+		what := EndResetOther
 		if other.ID == acc.ID {
-			other = acc
+			other, what = acc, EndReset
 		}
 		other.Epoch++
-		docs = append(docs, a.doc(kindAccount, other.ID, other), a.ending(other.ID, EndReset))
+		docs = append(docs, a.endingsOf(other, what)...)
+		docs = append(docs, a.doc(kindAccount, other.ID, other))
 	}
 	sessions, err := a.wipe(ctx, kindSession, func([]byte) bool { return true })
 	if err != nil {

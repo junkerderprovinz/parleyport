@@ -40,10 +40,15 @@ const (
 	EndPassword      Ending = "password"      // the password changed
 	EndEverywhere    Ending = "everywhere"    // signed out everywhere
 	EndReset         Ending = "reset"
+	EndResetOther    Ending = "resetOther" // another account's reset ended every session and token
 	EndBlocked       Ending = "blocked"
 	EndRemoved       Ending = "removed"
-	EndOpened        Ending = "opened" // the last password was removed
-	EndRole          Ending = "role"   // a lower role from the sign-in service or an admin
+	EndOpened        Ending = "opened"    // the last password was removed
+	EndRole          Ending = "role"      // a lower role from the sign-in service or an admin
+	EndTwoFactor     Ending = "twoFactor" // two-factor was turned on or off
+	// EndWay is one way in that went on its own: a token, a passkey or the
+	// binding to a sign-in service. Only Legacy.Drop hears it.
+	EndWay Ending = "way"
 )
 
 // ErrNotFresh is what Mint returns when the visitor has to sign in again
@@ -154,15 +159,16 @@ type Auth struct {
 	open     atomic.Bool
 	imported time.Time
 
-	argon   chan struct{}
-	dummy   string
-	limits  *limits
-	steps   *steps
-	reset   resetState
-	logs    logState
-	endMu   sync.Mutex
-	used    usedChallenges
-	tickets tickets
+	argon    chan struct{}
+	dummy    string
+	limits   *limits
+	steps    *steps
+	reset    resetState
+	logs     logState
+	endMu    sync.Mutex
+	endFails map[string]time.Time
+	used     usedChallenges
+	tickets  tickets
 
 	handler http.Handler
 	stop    chan struct{}
@@ -221,6 +227,7 @@ func Open(cfg Config) (*Auth, error) {
 	a.limits = newLimits()
 	a.steps = newSteps()
 	a.logs.last = map[string]logMark{}
+	a.endFails = map[string]time.Time{}
 
 	ctx := context.Background()
 	if err := a.start(ctx); err != nil {

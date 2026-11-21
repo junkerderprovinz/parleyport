@@ -55,7 +55,7 @@ func TestTheContractListsEveryRoute(t *testing.T) {
 // Codes reach the client through fail, or through a helper that returns one
 // for fail, and on the way back from a sign-in service through back.
 var (
-	apiCode      = regexp.MustCompile(`fail\(w, http\.Status\w+, "(\w+)"|return "([a-z]+[A-Z]\w*)"`)
+	apiCode      = regexp.MustCompile(`fail\(w, http\.Status\w+, "(\w+)"|refuse\(http\.Status\w+, "(\w+)"\)|return "([a-z]+[A-Z]\w*)"`)
 	redirectCode = regexp.MustCompile(`back\(w, r, [^,]+, "(\w+)"\)|note\(Entry\{[^}]*\}, "(\w+)"\)|code :?= "(\w+)"`)
 )
 
