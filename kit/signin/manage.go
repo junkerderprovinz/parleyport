@@ -17,11 +17,19 @@ import (
 // account.
 func (a *Auth) admin(r *http.Request) (*found, error) {
 	f := a.foundIn(r)
+	if f.ok && f.v.Via == ViaToken {
+		return nil, refuse(http.StatusForbidden, "notWithToken")
+	}
+	return a.reader(r)
+}
+
+// reader returns what Guard found for r when it is an admin, by a session
+// or an API token, who may look at other accounts.
+func (a *Auth) reader(r *http.Request) (*found, error) {
+	f := a.foundIn(r)
 	switch {
 	case !f.ok:
 		return nil, refuse(http.StatusUnauthorized, "signInFirst")
-	case f.v.Via == ViaToken:
-		return nil, refuse(http.StatusForbidden, "notWithToken")
 	case f.v.Via == ViaAnyone:
 		return nil, refuse(http.StatusConflict, "setPasswordFirst")
 	case f.v.Via == ViaDoor || !f.v.AtLeast(a.roles[0]):
@@ -76,8 +84,8 @@ func (a *Auth) CheckPassword(r *http.Request, bucket, name, pw string) (Visitor,
 	if a.cfg.Owner {
 		nameKey = bucket + "|name:owner"
 	}
-	if max(a.limits.wait(perAddress, addr, now), a.limits.wait(perName, nameKey, now)) > 0 {
-		return Visitor{}, refuse(http.StatusTooManyRequests, "throttled")
+	if wait := max(a.limits.wait(perAddress, addr, now), a.limits.wait(perName, nameKey, now)); wait > 0 {
+		return Visitor{}, &Refusal{Status: http.StatusTooManyRequests, Code: "throttled", Retry: wait}
 	}
 	acc, err := a.signInAccount(ctx, name)
 	if err != nil && !errors.Is(err, ErrNotFound) {
@@ -90,7 +98,7 @@ func (a *Auth) CheckPassword(r *http.Request, bucket, name, pw string) (Visitor,
 		err = a.burn(ctx)
 	}
 	if errors.Is(err, errBusy) {
-		return Visitor{}, refuse(http.StatusTooManyRequests, "throttled")
+		return Visitor{}, &Refusal{Status: http.StatusTooManyRequests, Code: "throttled", Retry: hashWait}
 	}
 	if err != nil {
 		return Visitor{}, err
@@ -252,9 +260,10 @@ func (a *Auth) locked(ctx context.Context, f *found, fn func() error) error {
 	return fn()
 }
 
-// Sessions lists the sessions of the account id that still count.
+// Sessions lists the sessions of the account id that still count. Like
+// Tokens and Passkeys it also answers an admin's API token.
 func (a *Auth) Sessions(r *http.Request, id string) ([]Session, error) {
-	f, err := a.admin(r)
+	f, err := a.reader(r)
 	if err != nil {
 		return nil, err
 	}
@@ -276,7 +285,7 @@ func (a *Auth) EndSession(r *http.Request, id, sid string) error {
 
 // Tokens lists the API tokens of the account id.
 func (a *Auth) Tokens(r *http.Request, id string) ([]Token, error) {
-	if _, err := a.admin(r); err != nil {
+	if _, err := a.reader(r); err != nil {
 		return nil, err
 	}
 	return a.tokensOf(r.Context(), id)
@@ -297,7 +306,7 @@ func (a *Auth) RevokeToken(r *http.Request, id, tid string) error {
 
 // Passkeys lists the passkeys of the account id.
 func (a *Auth) Passkeys(r *http.Request, id string) ([]Passkey, error) {
-	if _, err := a.admin(r); err != nil {
+	if _, err := a.reader(r); err != nil {
 		return nil, err
 	}
 	return a.passkeyList(r, id)

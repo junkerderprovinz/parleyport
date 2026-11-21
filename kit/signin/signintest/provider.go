@@ -24,7 +24,8 @@ type Person struct {
 	Name          string
 	Email         string
 	EmailVerified bool
-	Groups        []string
+	// Groups nil leaves the groups claim out, an empty list sends it empty.
+	Groups []string
 }
 
 // Provider is a sign-in service over OIDC that runs in the test, behind TLS
@@ -226,7 +227,10 @@ func (p *Provider) token(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *Provider) claims(person Person) map[string]any {
-	c := map[string]any{"sub": person.Subject, "preferred_username": person.Name, "groups": person.Groups}
+	c := map[string]any{"sub": person.Subject, "preferred_username": person.Name}
+	if person.Groups != nil {
+		c["groups"] = person.Groups
+	}
 	if person.Email != "" {
 		c["email"], c["email_verified"] = person.Email, person.EmailVerified
 	}

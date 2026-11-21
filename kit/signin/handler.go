@@ -234,10 +234,12 @@ func throttled(w http.ResponseWriter, wait time.Duration) {
 }
 
 // Refusal is a request the package turned down. Status and Code are what
-// the contract answers it with, such as 409 and nameTaken.
+// the contract answers it with, such as 409 and nameTaken. Retry is how
+// long to wait with throttled, for a Retry-After.
 type Refusal struct {
 	Status int
 	Code   string
+	Retry  time.Duration
 }
 
 func (e *Refusal) Error() string { return "signin: " + e.Code }
@@ -248,6 +250,8 @@ func refuse(status int, code string) error { return &Refusal{Status: status, Cod
 func (a *Auth) answer(w http.ResponseWriter, r *http.Request, f *found, err error) {
 	var no *Refusal
 	switch {
+	case errors.As(err, &no) && no.Retry > 0:
+		throttled(w, no.Retry)
 	case errors.As(err, &no):
 		fail(w, no.Status, no.Code)
 	case errors.Is(err, ErrNotFresh):

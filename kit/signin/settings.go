@@ -43,6 +43,13 @@ func (a *Auth) notFresh(w http.ResponseWriter, r *http.Request, f *found) {
 	fail(w, http.StatusForbidden, "signInAgain", "askPassword", a.asks(r.Context(), f))
 }
 
+// SignInAgain answers r as the contract answers a change that wants a
+// fresh sign-in, for an app whose own change got ErrNotFresh from Mint.
+func (a *Auth) SignInAgain(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	a.notFresh(w, r, a.foundIn(r))
+}
+
 func (a *Auth) getSettings(w http.ResponseWriter, r *http.Request, _ *found) {
 	s, err := a.settings(r.Context())
 	if err != nil {

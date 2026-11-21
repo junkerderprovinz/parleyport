@@ -402,11 +402,14 @@ func nameFrom(c map[string]any, path string) string {
 }
 
 // groupsFrom reads a list of groups, one group, or an object whose keys are
-// the groups.
+// the groups. A claim that is there but empty gives an empty list and a
+// missing one nil, so the app can tell someone who left every group from a
+// service that sent none.
 func groupsFrom(c map[string]any, path string) []string {
 	var out []string
 	switch v := claim(c, path).(type) {
 	case []any:
+		out = []string{}
 		for _, g := range v {
 			if s, ok := g.(string); ok {
 				out = append(out, s)
@@ -415,6 +418,7 @@ func groupsFrom(c map[string]any, path string) []string {
 	case string:
 		out = []string{v}
 	case map[string]any:
+		out = []string{}
 		for k := range v {
 			out = append(out, k)
 		}
