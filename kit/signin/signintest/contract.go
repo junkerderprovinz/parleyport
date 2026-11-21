@@ -29,8 +29,9 @@ type Options struct {
 
 // Run checks h, the app's whole handler with the guard in front, against
 // the sign-in contract: the answers match openapi.yaml, the session cookie
-// has the flags it needs, changes from another site are refused, and a
-// sign-out ends the session. Every deviation is an error on t.
+// has the flags it needs, changes from another site are refused while one
+// with the Origin of the address it went to counts, and a sign-out ends the
+// session. Every deviation is an error on t.
 func Run(t testing.TB, h http.Handler, opt Options) {
 	t.Helper()
 	for _, issue := range check(h, opt) {
