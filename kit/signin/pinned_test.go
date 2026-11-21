@@ -99,6 +99,7 @@ func TestAServiceFromTheConfigCannotBeChangedOrRemoved(t *testing.T) {
 	a := newApp(t, fromConfig(p, false))
 	owner := a.owner()
 	want(t, setService(t, owner, "config", map[string]any{"name": "Elsewhere"}), 409, "fromConfig")
+	want(t, setService(t, owner, "config", map[string]any{"name": "Elsewhere", "on": true}), 409, "fromConfig")
 	want(t, owner.api("DELETE", "methods/oidc/config", nil), 409, "fromConfig")
 	want(t, owner.api("POST", "methods/oidc/config/test", map[string]string{}), 409, "fromConfig")
 }

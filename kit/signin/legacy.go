@@ -226,7 +226,7 @@ const swapGrace = 2 * time.Minute
 func (a *Auth) claimed(ctx context.Context, who *person) (*account, error) {
 	c := new(nameClaim)
 	err := a.load(ctx, kindClaim, claimID(who.issuer, who.name), c)
-	if errors.Is(err, ErrNotFound) || (err == nil && (c.Issuer != who.issuer || c.Name != who.name)) {
+	if errors.Is(err, ErrNotFound) {
 		return nil, nil
 	}
 	if err != nil {

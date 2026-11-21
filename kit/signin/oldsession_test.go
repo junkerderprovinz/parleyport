@@ -63,8 +63,10 @@ func TestASwappedOldSessionIsFreshOnlyFromItsSignIn(t *testing.T) {
 	s.SignedAt = start.Add(-time.Hour)
 	a := withOldSessions(t, map[string]signin.OldSession{"one": s})
 	b := a.browser().oldCookie("one")
-	if me := b.api("GET", "me", nil).json(t); me["account"] != "7" || me["fresh"] != false {
-		t.Fatalf("a session renewed a minute ago but signed in an hour ago: %v", me)
+	for range 2 {
+		if me := b.api("GET", "me", nil).json(t); me["account"] != "7" || me["fresh"] != false {
+			t.Fatalf("a session renewed a minute ago but signed in an hour ago: %v", me)
+		}
 	}
 }
 
@@ -110,5 +112,16 @@ func TestAnOldServiceSessionNeedsItsServiceAfterADay(t *testing.T) {
 	}
 	if got := b.api("GET", "options", nil).json(t)["renew"]; got != "config" {
 		t.Fatalf("options renew = %v", got)
+	}
+}
+
+func TestAnOldSessionRenewedAfterTheImportDoesNotCount(t *testing.T) {
+	start := newClock().Now()
+	s := oldSession("one", start.Add(time.Minute))
+	s.SignedAt = start.Add(-time.Hour)
+	a := withOldSessions(t, map[string]signin.OldSession{"one": s})
+	a.clock.Add(2 * time.Minute)
+	if v := a.browser().oldCookie("one").visitor(); v.Via != "" {
+		t.Fatalf("an old session the older version renewed after the import counts: %+v", v)
 	}
 }
