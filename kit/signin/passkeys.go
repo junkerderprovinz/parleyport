@@ -51,11 +51,18 @@ func (a *Auth) relyingParty() *webauthn.WebAuthn {
 	return w
 }
 
+// public is Config.Public with its host as browsers write it.
 func (a *Auth) public() *url.URL {
 	if a.cfg.Public == nil {
 		return nil
 	}
-	return a.cfg.Public()
+	u := a.cfg.Public()
+	if u == nil {
+		return nil
+	}
+	n := *u
+	n.Host = hostOf(n.Scheme, n.Host)
+	return &n
 }
 
 type passkeyUser struct {

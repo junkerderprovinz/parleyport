@@ -93,15 +93,15 @@ func (t *tickets) take(key string, now time.Time) (ticket, bool) {
 	return tk, ok && now.Before(tk.expires)
 }
 
-// safeReturn keeps a way back that stays on the app: a path from its root,
+// safeReturn keeps a way back that stays on the app: a path below its base,
 // never an address of its own or one a browser reads as one.
-func safeReturn(s string) string {
+func (a *Auth) safeReturn(s string) string {
 	if !strings.HasPrefix(s, "/") || strings.HasPrefix(s, "//") || strings.ContainsAny(s, "\\\r\n") {
-		return "/"
+		return a.base
 	}
 	u, err := url.Parse(s)
-	if err != nil || u.Scheme != "" || u.Host != "" {
-		return "/"
+	if err != nil || u.Scheme != "" || u.Host != "" || !strings.HasPrefix(u.Path+"/", a.base) {
+		return a.base
 	}
 	return u.RequestURI()
 }
@@ -180,7 +180,7 @@ func (a *Auth) getOIDCStart(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	f := a.foundIn(r)
 	q := r.URL.Query()
-	ret := safeReturn(q.Get("return"))
+	ret := a.safeReturn(q.Get("return"))
 	s := new(service)
 	if err := a.load(ctx, kindService, r.PathValue("id"), s); err != nil {
 		a.back(w, r, ret, "serviceUnknown")
@@ -273,7 +273,7 @@ func (a *Auth) getOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	fl, good := a.openFlow(w, r)
 	if !good || !equal(q.Get("state"), fl.State) {
-		a.back(w, r, "/", "flowExpired")
+		a.back(w, r, a.base, "flowExpired")
 		return
 	}
 	s := new(service)
@@ -625,8 +625,8 @@ func (a *Auth) postServiceTicket(w http.ResponseWriter, r *http.Request, f *foun
 	}
 	raw := token.Random(24)
 	a.tickets.put(a.macHex("ticket", raw), ticket{account: f.v.Account, service: s.ID, purpose: purpose, expires: a.now().Add(ticketLife)}, a.now())
-	q := url.Values{"ticket": {raw}, "return": {safeReturn(in.Return)}}
-	ok(w, map[string]string{"url": oidcPath + s.ID + "?" + q.Encode()})
+	q := url.Values{"ticket": {raw}, "return": {a.safeReturn(in.Return)}}
+	ok(w, map[string]string{"url": a.under(oidcPath) + s.ID + "?" + q.Encode()})
 }
 
 func (a *Auth) postServiceTest(w http.ResponseWriter, r *http.Request, f *found) {

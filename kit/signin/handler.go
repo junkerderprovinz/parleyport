@@ -21,10 +21,13 @@ const APIPrefix = "/api/signin/v1/"
 const BrowserPrefix = "/signin/"
 
 // Handler serves the contract under APIPrefix and the browser routes under
-// BrowserPrefix. Mount it on both:
+// BrowserPrefix, both below Config.Base. Mount it on both:
 //
 //	mux.Handle(signin.APIPrefix, auth.Handler())
 //	mux.Handle(signin.BrowserPrefix, auth.Handler())
+//
+// With a base such as /files/ the paths are /files/api/signin/v1/ and
+// /files/signin/, and a handler in front that strips the base works too.
 //
 // It finds the visitor itself when Guard did not run first.
 func (a *Auth) Handler() http.Handler { return a.handler }
@@ -61,8 +64,28 @@ func (a *Auth) routes() http.Handler {
 		if _, ok := r.Context().Value(ctxKey{}).(*found); !ok {
 			r = r.WithContext(context.WithValue(r.Context(), ctxKey{}, a.find(w, r)))
 		}
+		if rest, under := strings.CutPrefix(r.URL.Path, strings.TrimSuffix(a.base, "/")); a.base != "/" && under && strings.HasPrefix(rest, "/") {
+			r2 := new(http.Request)
+			*r2 = *r
+			u := *r.URL
+			u.Path, u.RawPath = rest, ""
+			r2.URL = &u
+			r = r2
+		}
 		mux.ServeHTTP(w, r)
 	})
+}
+
+// under is path on the app, below Base.
+func (a *Auth) under(path string) string { return a.base + strings.TrimPrefix(path, "/") }
+
+// cookiePath is where a cookie for path goes. A session is for the whole
+// site, which the __Host- name needs.
+func (a *Auth) cookiePath(path string) string {
+	if path == "/" {
+		return path
+	}
+	return a.under(path)
 }
 
 func (a *Auth) serveAPI(w http.ResponseWriter, r *http.Request, pattern string, need access, fn route) {
@@ -106,9 +129,11 @@ func (a *Auth) serveAPI(w http.ResponseWriter, r *http.Request, pattern string, 
 }
 
 // sameOrigin reports whether a change comes from the app's own pages. A
-// browser says so in Sec-Fetch-Site, or an older one in Origin, which must
-// then be the app's public address, or without one the host it asked for.
-// With neither header, only an API token counts, never a cookie.
+// browser says so in Sec-Fetch-Site, or one that sends it only to https
+// pages in Origin, which must then be the app's public address or the host
+// it asked for, such as its address on the LAN. A page of another site
+// carries no cookie of that host. With neither header, only an API token
+// counts, never a cookie.
 func (a *Auth) sameOrigin(r *http.Request) bool {
 	switch r.Header.Get("Sec-Fetch-Site") {
 	case "same-origin", "none":
@@ -121,8 +146,8 @@ func (a *Auth) sameOrigin(r *http.Request) bool {
 	if origin == "" {
 		return strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ")
 	}
-	if u := a.public(); u != nil {
-		return origin == u.Scheme+"://"+u.Host
+	if u := a.public(); u != nil && origin == u.Scheme+"://"+u.Host {
+		return true
 	}
 	scheme := "http"
 	if a.https(r) {

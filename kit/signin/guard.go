@@ -254,14 +254,14 @@ func (a *Auth) setCookie(w http.ResponseWriter, r *http.Request, base, value, pa
 		return
 	}
 	http.SetCookie(w, &http.Cookie{
-		Name: a.cookieName(r, base, path), Value: value, Path: path, MaxAge: int(life.Seconds()),
+		Name: a.cookieName(r, base, path), Value: value, Path: a.cookiePath(path), MaxAge: int(life.Seconds()),
 		HttpOnly: true, Secure: a.https(r), SameSite: http.SameSiteLaxMode,
 	})
 }
 
 func (a *Auth) clearCookie(w http.ResponseWriter, r *http.Request, base, path string) {
 	http.SetCookie(w, &http.Cookie{
-		Name: a.cookieName(r, base, path), Value: "", Path: path, MaxAge: -1,
+		Name: a.cookieName(r, base, path), Value: "", Path: a.cookiePath(path), MaxAge: -1,
 		HttpOnly: true, Secure: a.https(r), SameSite: http.SameSiteLaxMode,
 	})
 }

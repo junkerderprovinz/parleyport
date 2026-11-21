@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -79,13 +80,22 @@ type Config struct {
 	// TokenPrefix starts every API token, two to eight lower-case letters,
 	// so secret scanners can find them.
 	TokenPrefix string
-	// Public is where people reach the app. Passkeys and sign-in services
-	// need it, and it never comes from the request's Host.
+	// Public is where people reach the app, by scheme and host. Passkeys
+	// and sign-in services need it, and it never comes from the request's
+	// Host.
 	Public func() *url.URL
+	// Base is the path the app serves the package under, such as /files/
+	// behind a proxy that shares one host between apps. Empty is /.
+	Base string
 	// Proxies are the proxies whose X-Forwarded-For and X-Forwarded-Proto
 	// count for the client address and for https. No header from a proxy
 	// ever signs anyone in.
 	Proxies []netip.Prefix
+	// TrustedPeer, when set, decides in place of Proxies whether the peer
+	// of a request is such a proxy, for a peer without an address such as
+	// one on a Unix socket. Proxies still name those further along
+	// X-Forwarded-For.
+	TrustedPeer func(*http.Request) bool
 	// MinPassword is the shortest password in characters. Zero is 12.
 	MinPassword int
 	// Import returns the accounts the app had before it used the package.
@@ -147,6 +157,7 @@ func (v Visitor) AtLeast(role string) bool {
 type Auth struct {
 	cfg     Config
 	d       string
+	base    string
 	roles   []string
 	scopes  []string
 	minPass int
@@ -205,6 +216,13 @@ func Open(cfg Config) (*Auth, error) {
 	}
 	if a.cfg.Name == "" {
 		a.cfg.Name = a.d
+	}
+	a.base = "/" + strings.Trim(a.cfg.Base, "/") + "/"
+	if a.base == "//" {
+		a.base = "/"
+	}
+	if strings.ContainsAny(a.base, "?#") || strings.Contains(a.base, "//") {
+		return nil, fmt.Errorf("signin: base %q is not a path", a.cfg.Base)
 	}
 	if a.cfg.TokenPrefix == "" {
 		a.cfg.TokenPrefix = defaultPrefix(a.d)

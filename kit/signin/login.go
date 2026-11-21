@@ -39,7 +39,7 @@ func (a *Auth) getOptions(w http.ResponseWriter, r *http.Request, f *found) {
 	if f.renew != "" {
 		out["renew"] = f.renew
 	}
-	if !a.open.Load() && a.relyingParty() != nil {
+	if !a.open.Load() && a.atPublic(r) && a.relyingParty() != nil {
 		keys, err := a.cfg.Store.List(r.Context(), kindPasskey)
 		if err != nil {
 			a.internal(w, err)

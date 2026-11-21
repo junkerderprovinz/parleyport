@@ -50,6 +50,8 @@ type app struct {
 	clock *clock
 	srv   *httptest.Server
 	cfg   signin.Config
+	// base is the path the app serves the package under, Config.Base.
+	base  string
 	ended []string
 	mu    sync.Mutex
 }
@@ -104,9 +106,13 @@ func (a *app) open() {
 	}
 	a.t.Cleanup(func() { _ = auth.Close() })
 	a.auth = auth
+	a.base = a.cfg.Base
+	if a.base == "" {
+		a.base = "/"
+	}
 	mux := http.NewServeMux()
-	mux.Handle("/api/signin/v1/", auth.Handler())
-	mux.Handle("/signin/", auth.Handler())
+	mux.Handle(a.base+"api/signin/v1/", auth.Handler())
+	mux.Handle(a.base+"signin/", auth.Handler())
 	mux.HandleFunc("/app", func(w http.ResponseWriter, r *http.Request) {
 		v, ok := signin.From(r.Context())
 		if !ok {
@@ -183,6 +189,10 @@ func (b *browser) do(method, path string, body any, header ...string) reply {
 		req.Header[k] = v
 	}
 	for i := 0; i+1 < len(header); i += 2 {
+		if header[i] == "Host" {
+			req.Host = header[i+1]
+			continue
+		}
 		req.Header.Set(header[i], header[i+1])
 	}
 	res, err := b.c.Do(req)
@@ -196,7 +206,7 @@ func (b *browser) do(method, path string, body any, header ...string) reply {
 
 func (b *browser) api(method, path string, body any, header ...string) reply {
 	b.t.Helper()
-	return b.do(method, "/api/signin/v1/"+path, body, header...)
+	return b.do(method, b.a.base+"api/signin/v1/"+path, body, header...)
 }
 
 // visitor asks /app who the guard found, or returns an empty visitor.

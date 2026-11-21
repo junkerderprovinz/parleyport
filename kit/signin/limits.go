@@ -41,8 +41,12 @@ type limits struct {
 
 func newLimits() *limits { return &limits{m: map[string]*bucket{}} }
 
-// wait returns how long key has to wait under r, zero when it may try.
+// wait returns how long key has to wait under r, zero when it may try. An
+// empty key never waits.
 func (l *limits) wait(r rule, key string, now time.Time) time.Duration {
+	if key == "" {
+		return 0
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	b := l.m[key]
@@ -64,6 +68,9 @@ func (l *limits) wait(r rule, key string, now time.Time) time.Duration {
 
 // fail counts one failure of key under r.
 func (l *limits) fail(r rule, key string, now time.Time) {
+	if key == "" {
+		return
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	b := l.m[key]
@@ -126,12 +133,21 @@ func (a *Auth) trusted(ip netip.Addr) bool {
 	return false
 }
 
+// proxied reports whether the peer of r is a proxy whose forwarded headers
+// count.
+func (a *Auth) proxied(r *http.Request) bool {
+	if a.cfg.TrustedPeer != nil {
+		return a.cfg.TrustedPeer(r)
+	}
+	return a.trusted(peer(r))
+}
+
 // client is the address a request comes from: the peer, or behind proxies
-// from Config.Proxies the last address in X-Forwarded-For that is not one of
-// them. A header from any other peer never counts.
+// the last address in X-Forwarded-For that is not one of them. A header
+// from any other peer never counts.
 func (a *Auth) client(r *http.Request) netip.Addr {
 	ip := peer(r)
-	if !ip.IsValid() || !a.trusted(ip) {
+	if !a.proxied(r) {
 		return ip
 	}
 	hops := strings.Split(strings.Join(r.Header.Values("X-Forwarded-For"), ","), ",")
@@ -150,9 +166,11 @@ func (a *Auth) client(r *http.Request) netip.Addr {
 }
 
 // addressKey groups IPv6 by /64, the block one connection usually holds.
+// Requests without an address, such as those on a Unix socket, are not
+// counted per address, or one stranger would hold all of them back.
 func addressKey(ip netip.Addr) string {
 	if !ip.IsValid() {
-		return "addr:none"
+		return ""
 	}
 	if ip.Is6() {
 		p, _ := ip.Prefix(64)
@@ -168,9 +186,28 @@ func (a *Auth) https(r *http.Request) bool {
 	if r.TLS != nil {
 		return true
 	}
-	if a.trusted(peer(r)) && strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+	if a.proxied(r) && strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
 		return true
 	}
 	u := a.public()
-	return u != nil && u.Scheme == "https" && strings.EqualFold(r.Host, u.Host)
+	return u != nil && u.Scheme == "https" && a.atPublic(r)
+}
+
+// atPublic reports whether r asks for the app by its public host.
+func (a *Auth) atPublic(r *http.Request) bool {
+	u := a.public()
+	return u != nil && hostOf(u.Scheme, r.Host) == u.Host
+}
+
+// hostOf is host as a browser writes it in an origin: in lower case and
+// without the default port of scheme.
+func hostOf(scheme, host string) string {
+	host = strings.ToLower(host)
+	switch {
+	case scheme == "https":
+		return strings.TrimSuffix(host, ":443")
+	case scheme == "http":
+		return strings.TrimSuffix(host, ":80")
+	}
+	return host
 }

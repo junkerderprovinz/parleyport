@@ -65,7 +65,7 @@ func (a *Auth) redirectURI() string {
 	if u == nil {
 		return ""
 	}
-	return strings.TrimSuffix(u.String(), "/") + oidcPath + "callback"
+	return u.Scheme + "://" + u.Host + a.under(oidcPath) + "callback"
 }
 
 func (a *Auth) services(ctx context.Context) ([]*service, error) {

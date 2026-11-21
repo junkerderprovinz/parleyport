@@ -69,7 +69,7 @@ func TestAPasskeySignsInFromThePasswordField(t *testing.T) {
 	if v := b.visitor(); v.Via != signin.ViaPasskey || v.Name != owner.visitor().Name {
 		t.Fatalf("visitor %+v", v)
 	}
-	if a.browser().api("GET", "options", nil).json(t)["passkeys"] != true {
+	if a.browser().api("GET", "options", nil, "Host", a.cfg.Public().Host).json(t)["passkeys"] != true {
 		t.Fatal("options does not offer passkeys")
 	}
 }
