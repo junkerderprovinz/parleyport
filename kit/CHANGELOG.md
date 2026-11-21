@@ -2,6 +2,25 @@
 
 Every version of the kit, written by hand. The kit is versioned apart from the server, with tags of the form `kit/vX.Y.Z`. What changed in the relay itself is in the [server's release notes](https://github.com/junkerderprovinz/parleyport/releases).
 
+## Unreleased
+
+One sign-in for every app of the kit, in the new package `signin`.
+
+**Adopting apps:**
+
+- **Moving up:** nothing changes for an app that does not use `signin`.
+- **Taking it on:** open it with `signin.Open` on a store from `sqlstore`, `filestore` or `memstore`, put `Guard` in front of the app's routes and mount `Handler` on `/api/signin/v1/` and `/signin/`. `signintest.Run` checks the app against the contract.
+
+## ✨ Added
+
+- **`signin` signs people in with a password, two-factor, passkeys and sign-in services over OIDC.** It also brings sessions, API tokens, the reset through the container log and the sign-in log, and the contract in `openapi.yaml` answers with codes only. Until a password is set the app is open.
+- **An app with accounts of its own moves them over once.** `Config.Import` and `Legacy` take old passwords, second factors, recovery codes, passkeys, tokens and sessions as they are. An old session counts as its swapped one for two minutes, for the requests a page sends at once, and an account bound to a service by name alone is claimed by its first sign-in from there.
+- **Going back to the older version brings no ended way in back.** `Legacy.Drop` hears every ending of an imported account from an outbox in the store until the app has taken it, also when a single token or passkey goes.
+- **An app keeps its own account table in step.** `Config.NewID` gives new accounts the app's ids, `Hooks.Changing` hears every change before it is written, and the account methods of `Auth` let the app's own screens do what the contract's account routes do. A removed account's name stays taken until the app has cleaned up after it.
+- **An app sets up a sign-in service itself and decides who comes in.** `Config.Services` keeps the paths the service already knows and needs no test sign-in, `Config.Closed` keeps such an app closed without a password, and `Hooks.Admit` turns people away or gives them a role, on every sign-in and renewal.
+- **The app's own ways in follow the same rules.** `CheckPassword` checks HTTP Basic credentials under the sign-in's throttle, `TokenVisitor` reads a token, and `Alive` tells a terminal whether its session still counts.
+- **It works below a base path and behind a Unix socket.** `Config.Base` keeps cookies and every way back under the app's path, and `Config.TrustedPeer` names a proxy without an address.
+
 ## 1.0.5 - 2026-11-19
 
 A member that closes while it checks a newcomer no longer shuts that newcomer out.
