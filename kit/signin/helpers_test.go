@@ -113,6 +113,13 @@ func (a *app) open() {
 	mux := http.NewServeMux()
 	mux.Handle(a.base+"api/signin/v1/", auth.Handler())
 	mux.Handle(a.base+"signin/", auth.Handler())
+	for _, s := range a.cfg.Services {
+		for _, path := range []string{s.StartPath, s.CallbackPath} {
+			if path != "" {
+				mux.Handle(a.base+strings.TrimPrefix(path, "/"), auth.Handler())
+			}
+		}
+	}
 	mux.HandleFunc("/app", func(w http.ResponseWriter, r *http.Request) {
 		v, ok := signin.From(r.Context())
 		if !ok {

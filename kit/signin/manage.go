@@ -211,7 +211,7 @@ func (a *Auth) Revoke(r *http.Request, id string) error {
 		if err != nil {
 			return err
 		}
-		docs, err := a.endAll(r, acc.ID)
+		docs, err := a.endAll(ctx, acc.ID)
 		if err != nil {
 			return err
 		}

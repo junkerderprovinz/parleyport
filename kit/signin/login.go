@@ -24,7 +24,7 @@ var errBusy = errors.New("signin: too many sign-ins at once")
 
 func (a *Auth) getOptions(w http.ResponseWriter, r *http.Request, f *found) {
 	out := map[string]any{
-		"open":        a.open.Load(),
+		"open":        a.Anyone(),
 		"owner":       a.cfg.Owner,
 		"minPassword": a.minPass,
 		"signedIn":    f.ok && f.v.Via != ViaAnyone,
@@ -39,7 +39,7 @@ func (a *Auth) getOptions(w http.ResponseWriter, r *http.Request, f *found) {
 	if f.renew != "" {
 		out["renew"] = f.renew
 	}
-	if !a.open.Load() && a.atPublic(r) && a.relyingParty() != nil {
+	if !a.Anyone() && a.atPublic(r) && a.relyingParty() != nil {
 		keys, err := a.cfg.Store.List(r.Context(), kindPasskey)
 		if err != nil {
 			a.internal(w, err)
@@ -59,7 +59,7 @@ func (a *Auth) postLogin(w http.ResponseWriter, r *http.Request, f *found) {
 		return
 	}
 	ctx := r.Context()
-	if a.open.Load() {
+	if a.Anyone() {
 		fail(w, http.StatusConflict, "setPasswordFirst")
 		return
 	}

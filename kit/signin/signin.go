@@ -48,6 +48,7 @@ const (
 	EndRole          Ending = "role"      // a lower role from the sign-in service or an admin
 	EndTwoFactor     Ending = "twoFactor" // two-factor was turned on or off
 	EndRevoked       Ending = "revoked"   // an admin ended every session, token and passkey
+	EndRefused       Ending = "refused"   // Hooks.Admit turned the account away
 	// EndWay is one way in that went on its own: a token, a passkey or the
 	// binding to a sign-in service. Only Legacy.Drop hears it.
 	EndWay Ending = "way"
@@ -104,6 +105,13 @@ type Config struct {
 	// account or a removed account the app has not cleaned up yet still
 	// holds is never used.
 	NewID func() (string, error)
+	// Services are sign-in services the app sets up itself, such as from its
+	// configuration file.
+	Services []ServiceSpec
+	// Closed, while it reports true, keeps the app closed when no account
+	// has a password, for an app that one of Services guards. Only those
+	// services then let anyone in.
+	Closed func() bool
 	// Import returns the accounts the app had before it used the package.
 	// It runs once, on a store without the package's documents, and what
 	// it returns is written in one batch, so a failed import leaves nothing
@@ -127,6 +135,13 @@ type Hooks struct {
 	// SignedIn runs after every sign-in with the service groups the sign-in
 	// service reported.
 	SignedIn func(ctx context.Context, v Visitor, groups []string)
+	// Admit runs whenever a sign-in service lets someone through, also on a
+	// silent renewal, so the app decides who comes in. An error turns them
+	// away and ends the sessions and tokens of their account. A role, unless
+	// empty, is the account's role from then on, and a lower one ends its
+	// sessions and tokens. The owner keeps its role, and turning it away ends
+	// only this sign-in. Admit runs under the same lock as Changing.
+	Admit func(ctx context.Context, in Arrival) (role string, err error)
 	// Changing runs before the package writes a change to an account, so an
 	// app with an account table of its own keeps it in step. An error stops
 	// the change. It runs under the lock of every sign-in, so it does not
@@ -137,6 +152,15 @@ type Hooks struct {
 	Doors []Door
 	// Logged gets every entry of the sign-in log, for notifications.
 	Logged func(ctx context.Context, e Entry)
+}
+
+// Arrival is someone a sign-in service let through, for Hooks.Admit.
+// Account is the account they come in as and Role its role now, both
+// empty for a newcomer.
+type Arrival struct {
+	Service, Issuer, Subject, Name string
+	Groups                         []string
+	Account, Role                  string
 }
 
 // Door is a way in the app keeps for itself. It returns the account a
@@ -177,9 +201,11 @@ type Auth struct {
 
 	// mu covers every read, decide and write, so a reset cannot cross a
 	// sign-in and two first passwords cannot both win.
-	mu       sync.Mutex
-	open     atomic.Bool
-	imported time.Time
+	mu sync.Mutex
+	// noPassword is whether no account has a password, which opens the app
+	// unless Config.Closed keeps it closed.
+	noPassword atomic.Bool
+	imported   time.Time
 
 	argon    chan struct{}
 	dummy    string
@@ -283,7 +309,9 @@ func (a *Auth) Close() error {
 }
 
 // Anyone reports whether nobody can sign in, so every visitor is admin.
-func (a *Auth) Anyone() bool { return a.open.Load() }
+func (a *Auth) Anyone() bool {
+	return a.noPassword.Load() && (a.cfg.Closed == nil || !a.cfg.Closed())
+}
 
 // From returns the visitor Guard found for the request of ctx.
 func From(ctx context.Context) (Visitor, bool) {
@@ -309,7 +337,7 @@ func (a *Auth) Mint(r *http.Request, mint func() error) error {
 		if _, err := a.stillValid(r.Context(), f); err != nil {
 			return ErrNotFresh
 		}
-	} else if !a.open.Load() {
+	} else if !a.Anyone() {
 		return ErrNotFresh
 	}
 	return mint()
@@ -342,6 +370,9 @@ func (a *Auth) start(ctx context.Context) error {
 		return errors.New("signin: the store was written with another seal key")
 	}
 	a.imported = m.Imported
+	if err := a.pin(ctx); err != nil {
+		return err
+	}
 	return a.refreshOpen(ctx)
 }
 
@@ -358,7 +389,7 @@ func (a *Auth) refreshOpen(ctx context.Context) error {
 			open = false
 		}
 	}
-	a.open.Store(open)
+	a.noPassword.Store(open)
 	return nil
 }
 

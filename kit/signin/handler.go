@@ -60,6 +60,22 @@ func (a *Auth) routes() http.Handler {
 	})
 	mux.HandleFunc("GET "+oidcPath+"callback", a.getOIDCCallback)
 	mux.HandleFunc("GET "+oidcPath+"{id}", a.getOIDCStart)
+	for _, s := range a.cfg.Services {
+		if s.StartPath != "" {
+			mux.HandleFunc("GET "+s.StartPath, func(w http.ResponseWriter, r *http.Request) {
+				// The app's older start took the way back as redirect.
+				q := r.URL.Query()
+				ret := q.Get("return")
+				if ret == "" {
+					ret = q.Get("redirect")
+				}
+				a.startService(w, r, s.ID, ret)
+			})
+		}
+		if s.CallbackPath != "" {
+			mux.HandleFunc("GET "+s.CallbackPath, func(w http.ResponseWriter, r *http.Request) { a.callback(w, r, s.CallbackPath) })
+		}
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := r.Context().Value(ctxKey{}).(*found); !ok {
 			r = r.WithContext(context.WithValue(r.Context(), ctxKey{}, a.find(w, r)))

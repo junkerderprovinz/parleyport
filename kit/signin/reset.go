@@ -25,7 +25,7 @@ type resetState struct {
 }
 
 func (a *Auth) postResetCode(w http.ResponseWriter, _ *http.Request, _ *found) {
-	if a.open.Load() {
+	if a.Anyone() {
 		fail(w, http.StatusConflict, "setPasswordFirst")
 		return
 	}

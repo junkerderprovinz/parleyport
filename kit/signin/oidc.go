@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"slices"
@@ -170,19 +171,25 @@ func (a *Auth) dial(ctx context.Context, s *service) (*remote, error) {
 		ctx: ctx, provider: p,
 		config: oauth2.Config{
 			ClientID: s.ClientID, ClientSecret: string(secret), Endpoint: p.Endpoint(),
-			RedirectURL: a.redirectURI(), Scopes: strings.Fields(s.Scopes),
+			RedirectURL: a.redirectURI(s), Scopes: strings.Fields(s.Scopes),
 		},
 		verifier: p.Verifier(&oidc.Config{ClientID: s.ClientID, SupportedSigningAlgs: algs}),
 	}, nil
 }
 
 func (a *Auth) getOIDCStart(w http.ResponseWriter, r *http.Request) {
+	a.startService(w, r, r.PathValue("id"), r.URL.Query().Get("return"))
+}
+
+// startService sends the browser to the sign-in service id, to come back
+// to ret.
+func (a *Auth) startService(w http.ResponseWriter, r *http.Request, id, ret string) {
 	ctx := r.Context()
 	f := a.foundIn(r)
 	q := r.URL.Query()
-	ret := a.safeReturn(q.Get("return"))
+	ret = a.safeReturn(ret)
 	s := new(service)
-	if err := a.load(ctx, kindService, r.PathValue("id"), s); err != nil {
+	if err := a.load(ctx, kindService, id, s); err != nil {
 		a.back(w, r, ret, "serviceUnknown")
 		return
 	}
@@ -205,7 +212,7 @@ func (a *Auth) getOIDCStart(w http.ResponseWriter, r *http.Request) {
 		fl.Purpose, fl.Session = forRenew, a.sessionID(f.cookie)
 		opts = append(opts, oauth2.SetAuthURLParam("prompt", "none"))
 	}
-	if a.open.Load() || (fl.Purpose != forTest && !s.On) {
+	if a.waits(s) || (fl.Purpose != forTest && !s.On) {
 		a.back(w, r, ret, "serviceOff")
 		return
 	}
@@ -220,7 +227,7 @@ func (a *Auth) getOIDCStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fl.State, fl.Nonce, fl.Verifier = token.Random(24), token.Random(24), oauth2.GenerateVerifier()
-	if err := a.sealFlow(w, r, fl); err != nil {
+	if err := a.sealFlow(w, r, fl, s.flowPath()); err != nil {
 		a.internal(w, err)
 		return
 	}
@@ -229,7 +236,7 @@ func (a *Auth) getOIDCStart(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, rem.config.AuthCodeURL(fl.State, opts...), http.StatusFound)
 }
 
-func (a *Auth) sealFlow(w http.ResponseWriter, r *http.Request, fl flow) error {
+func (a *Auth) sealFlow(w http.ResponseWriter, r *http.Request, fl flow, path string) error {
 	plain, err := json.Marshal(fl)
 	if err != nil {
 		return err
@@ -238,13 +245,13 @@ func (a *Auth) sealFlow(w http.ResponseWriter, r *http.Request, fl flow) error {
 	if err != nil {
 		return err
 	}
-	a.setCookie(w, r, "oidc", base64.RawURLEncoding.EncodeToString(sealed), oidcPath, flowLife)
+	a.setCookie(w, r, "oidc", base64.RawURLEncoding.EncodeToString(sealed), path, flowLife)
 	return nil
 }
 
-func (a *Auth) openFlow(w http.ResponseWriter, r *http.Request) (*flow, bool) {
-	raw := a.readCookie(r, "oidc", oidcPath)
-	a.clearCookie(w, r, "oidc", oidcPath)
+func (a *Auth) openFlow(w http.ResponseWriter, r *http.Request, path string) (*flow, bool) {
+	raw := a.readCookie(r, "oidc", path)
+	a.clearCookie(w, r, "oidc", path)
 	sealed, err := base64.RawURLEncoding.DecodeString(raw)
 	if err != nil || raw == "" {
 		return nil, false
@@ -269,15 +276,21 @@ type person struct {
 }
 
 func (a *Auth) getOIDCCallback(w http.ResponseWriter, r *http.Request) {
+	a.callback(w, r, oidcPath)
+}
+
+// callback takes the browser back from a sign-in service on path, which
+// the flow cookie and the service of the flow share.
+func (a *Auth) callback(w http.ResponseWriter, r *http.Request, path string) {
 	ctx := r.Context()
 	q := r.URL.Query()
-	fl, good := a.openFlow(w, r)
+	fl, good := a.openFlow(w, r, path)
 	if !good || !equal(q.Get("state"), fl.State) {
 		a.back(w, r, a.base, "flowExpired")
 		return
 	}
 	s := new(service)
-	if err := a.load(ctx, kindService, fl.Service, s); err != nil {
+	if err := a.load(ctx, kindService, fl.Service, s); err != nil || s.flowPath() != path {
 		a.back(w, r, fl.Return, "serviceUnknown")
 		return
 	}
@@ -412,91 +425,29 @@ func groupsFrom(c map[string]any, path string) []string {
 
 func (a *Auth) serviceSignIn(w http.ResponseWriter, r *http.Request, s *service, fl *flow, who *person) {
 	ctx := r.Context()
-	now := a.now()
-	note := func(e Entry, code string) {
-		e.Via, e.Service, e.Result = ViaService, s.ID, code
-		a.note(ctx, r, e)
-		a.back(w, r, fl.Return, code)
-	}
 	a.mu.Lock()
-	if !a.serviceOn(ctx, s) {
-		a.mu.Unlock()
-		note(Entry{Name: a.typedName(ctx, who.name)}, "serviceOff")
-		return
+	in, err := a.arrive(ctx, s, who)
+	if err == nil && in.code != "" && len(in.docs) > 0 {
+		err = a.cfg.Store.Apply(ctx, in.docs...)
 	}
-	id := identityID(identityService, who.issuer, who.subject)
-	idn := new(identity)
-	err := a.load(ctx, kindIdentity, id, idn)
-	var acc *account
-	var docs []Doc
-	switch {
-	case err == nil:
-		if acc, err = a.account(ctx, idn.Account); err != nil {
-			a.mu.Unlock()
-			note(Entry{Name: who.name}, "noAccount")
-			return
-		}
-		if acc.Blocked {
-			a.mu.Unlock()
-			note(Entry{Account: acc.ID, Name: acc.Name}, "blocked")
-			return
-		}
-		idn.Seen, idn.Name = now, who.name
-		docs = append(docs, a.doc(kindIdentity, id, idn))
-	case errors.Is(err, ErrNotFound):
-		if acc, err = a.claimed(ctx, who); err != nil {
-			a.mu.Unlock()
+	if err != nil || in.code != "" {
+		a.mu.Unlock()
+		if err != nil {
 			a.internal(w, err)
 			return
 		}
-		if acc != nil {
-			if acc.Blocked {
-				a.mu.Unlock()
-				note(Entry{Account: acc.ID, Name: acc.Name}, "blocked")
-				return
-			}
-			docs = append(docs, gone(kindClaim, claimID(who.issuer, who.name)), a.doc(kindIdentity, id, identity{
-				Kind: identityService, Service: s.ID, Issuer: who.issuer, Subject: who.subject, Name: who.name, Account: acc.ID, Linked: now, Seen: now,
-			}))
-			defer a.note(ctx, r, Entry{Account: acc.ID, Name: acc.Name, Via: ViaService, Service: s.ID, Result: "claimed"})
-			break
-		}
-		if !validName(who.name) {
-			a.mu.Unlock()
-			note(Entry{}, "nameMissing")
-			return
-		}
-		if free, err := a.nameFree(ctx, who.name, ""); err != nil || !free {
-			a.mu.Unlock()
-			note(Entry{Name: who.name}, "nameTaken")
-			return
-		}
-		if a.limits.wait(newcomers, "newcomers", now) > 0 {
-			a.mu.Unlock()
-			note(Entry{Name: a.typedName(ctx, who.name)}, "throttled")
-			return
-		}
-		a.limits.fail(newcomers, "newcomers", now)
-		acc = &account{Name: who.name, Role: a.roles[0], Via: ViaService, Service: s.ID, Created: now}
-		if err := a.newcomer(ctx, acc, who); err != nil {
-			a.mu.Unlock()
-			a.log.Warn("signin: the app took no new account", "service", s.ID, "err", err)
-			note(Entry{Name: who.name}, "noAccount")
-			return
-		}
-		docs = append(docs, a.doc(kindIdentity, id, identity{
-			Kind: identityService, Service: s.ID, Issuer: who.issuer, Subject: who.subject, Name: who.name, Account: acc.ID, Linked: now, Seen: now,
-		}))
-		defer a.note(ctx, r, Entry{Account: acc.ID, Name: acc.Name, Via: ViaService, Service: s.ID, Result: "newAccount"})
-	default:
-		a.mu.Unlock()
-		a.internal(w, err)
+		a.runEndings(ctx)
+		in.note.Via, in.note.Service, in.note.Result = ViaService, s.ID, in.code
+		a.note(ctx, r, in.note)
+		a.back(w, r, fl.Return, in.code)
 		return
 	}
+	now := a.now()
+	acc := in.acc
 	acc.Checked, acc.Groups, acc.Seen = now, who.groups, now
 	ss := sessionOf(acc, ViaService, s.ID)
 	ss.Checked = now
-	docs = append(docs, a.doc(kindAccount, acc.ID, acc))
+	docs := append(in.docs, a.doc(kindAccount, acc.ID, acc))
 	docs = append(docs, a.newSession(w, r, a.foundIn(r), ss)...)
 	err = a.cfg.Store.Apply(ctx, docs...)
 	a.mu.Unlock()
@@ -504,12 +455,155 @@ func (a *Auth) serviceSignIn(w http.ResponseWriter, r *http.Request, s *service,
 		a.internal(w, err)
 		return
 	}
+	a.runEndings(ctx)
+	if in.note.Result != "" {
+		a.note(ctx, r, in.note)
+	}
 	v := a.visitorOf(acc, ViaService, s.ID)
 	a.note(ctx, r, Entry{Account: acc.ID, Name: acc.Name, Via: ViaService, Service: s.ID, Result: "ok"})
 	if a.cfg.Hooks.SignedIn != nil {
 		a.cfg.Hooks.SignedIn(ctx, v, who.groups)
 	}
 	a.back(w, r, fl.Return, "")
+}
+
+// arrival is where someone a sign-in service let through ends up: an
+// account and the docs for it, or a code that turns them away. note is
+// what the log says about either.
+type arrival struct {
+	acc  *account
+	docs []Doc
+	note Entry
+	code string
+}
+
+// arrive finds the account of who at s, by the binding, a claim by name or
+// as a newcomer, and asks the app whether who may come in. The caller
+// holds mu.
+func (a *Auth) arrive(ctx context.Context, s *service, who *person) (arrival, error) {
+	now := a.now()
+	if !a.serviceOn(ctx, s) {
+		return arrival{note: Entry{Name: a.typedName(ctx, who.name)}, code: "serviceOff"}, nil
+	}
+	id := identityID(identityService, who.issuer, who.subject)
+	bound := identity{Kind: identityService, Service: s.ID, Issuer: who.issuer, Subject: who.subject, Name: who.name, Linked: now, Seen: now}
+	var in arrival
+	idn := new(identity)
+	switch err := a.load(ctx, kindIdentity, id, idn); {
+	case err == nil:
+		if in.acc, err = a.account(ctx, idn.Account); err != nil {
+			return arrival{note: Entry{Name: who.name}, code: "noAccount"}, nil
+		}
+		idn.Seen, idn.Name = now, who.name
+		in.docs = append(in.docs, a.doc(kindIdentity, id, idn))
+	case errors.Is(err, ErrNotFound):
+		if in.acc, err = a.claimed(ctx, who); err != nil {
+			return arrival{}, err
+		}
+		if in.acc != nil {
+			bound.Account = in.acc.ID
+			in.docs = append(in.docs, gone(kindClaim, claimID(who.issuer, who.name)), a.doc(kindIdentity, id, bound))
+			in.note = Entry{Account: in.acc.ID, Name: in.acc.Name, Via: ViaService, Service: s.ID, Result: "claimed"}
+		}
+	default:
+		return arrival{}, err
+	}
+	if in.acc != nil && in.acc.Blocked {
+		return arrival{note: Entry{Account: in.acc.ID, Name: in.acc.Name}, code: "blocked"}, nil
+	}
+	if in.acc == nil {
+		if !validName(who.name) {
+			return arrival{code: "nameMissing"}, nil
+		}
+		free, err := a.nameFree(ctx, who.name, "")
+		if err != nil {
+			return arrival{}, err
+		}
+		if !free {
+			return arrival{note: Entry{Name: who.name}, code: "nameTaken"}, nil
+		}
+		if a.limits.wait(newcomers, "newcomers", now) > 0 {
+			return arrival{note: Entry{Name: a.typedName(ctx, who.name)}, code: "throttled"}, nil
+		}
+		in.acc = &account{Name: who.name, Role: a.roles[0], Via: ViaService, Service: s.ID, Created: now}
+	}
+	ended, err := a.admit(ctx, s, who, in.acc)
+	if errors.Is(err, errNotAdmitted) {
+		return arrival{docs: ended, note: Entry{Account: in.acc.ID, Name: who.name}, code: "notAdmitted"}, nil
+	}
+	if err != nil {
+		return arrival{}, err
+	}
+	in.docs = append(in.docs, ended...)
+	if in.acc.ID == "" {
+		a.limits.fail(newcomers, "newcomers", now)
+		if err := a.newcomer(ctx, in.acc, who); err != nil {
+			a.log.Warn("signin: the app took no new account", "service", s.ID, "err", err)
+			return arrival{note: Entry{Name: who.name}, code: "noAccount"}, nil
+		}
+		bound.Account = in.acc.ID
+		in.docs = append(in.docs, a.doc(kindIdentity, id, bound))
+		in.note = Entry{Account: in.acc.ID, Name: in.acc.Name, Via: ViaService, Service: s.ID, Result: "newAccount"}
+	}
+	return in, nil
+}
+
+var errNotAdmitted = errors.New("signin: the app turned the visitor away")
+
+// admit asks Hooks.Admit whether who may come in through s as acc, whose
+// id is empty for a newcomer, and applies the role it gives. Turning away
+// an account that is not the owner ends its sessions and tokens, and so
+// does a lower role. It returns the docs for that. The caller holds mu.
+func (a *Auth) admit(ctx context.Context, s *service, who *person, acc *account) ([]Doc, error) {
+	if a.cfg.Hooks.Admit == nil {
+		return nil, nil
+	}
+	in := Arrival{Service: s.ID, Issuer: who.issuer, Subject: who.subject, Name: who.name, Groups: who.groups}
+	if acc.ID != "" {
+		in.Account, in.Role = acc.ID, a.visitorOf(acc, acc.Via, acc.Service).Role
+	}
+	role, err := a.cfg.Hooks.Admit(ctx, in)
+	if err == nil && role != "" && !slices.Contains(a.roles, role) {
+		err = fmt.Errorf("signin: Admit gave the unknown role %q", role)
+	}
+	if err != nil {
+		a.log.Info("signin: the app turned away someone a sign-in service let through", "service", s.ID, "err", err)
+		if in.Account == "" || acc.Owner {
+			return nil, errNotAdmitted
+		}
+		docs, err := a.endWays(ctx, acc, EndRefused)
+		if err != nil {
+			return nil, err
+		}
+		return docs, errNotAdmitted
+	}
+	if role == "" || acc.Owner || role == acc.Role {
+		return nil, nil
+	}
+	lower := slices.Index(a.roles, role) > slices.Index(a.roles, acc.Role)
+	acc.Role = role
+	if in.Account == "" {
+		return nil, nil
+	}
+	if err := a.changing(ctx, changeOf(ChangeRole, acc)); err != nil {
+		return nil, err
+	}
+	if !lower {
+		return nil, nil
+	}
+	return a.endWays(ctx, acc, EndRole)
+}
+
+// endWays raises acc's epoch and ends its sessions and tokens for why. The
+// caller holds mu.
+func (a *Auth) endWays(ctx context.Context, acc *account, why Ending) ([]Doc, error) {
+	acc.Epoch++
+	docs, err := a.endAll(ctx, acc.ID)
+	if err != nil {
+		return nil, err
+	}
+	docs = append(docs, a.endingsOf(acc, why)...)
+	return append(docs, a.doc(kindAccount, acc.ID, acc)), nil
 }
 
 // newcomer gives acc, which a sign-in service brings for who, an id and
@@ -526,8 +620,8 @@ func (a *Auth) newcomer(ctx context.Context, acc *account, who *person) error {
 }
 
 // renewService confirms a session that ran out of its day without asking the
-// person anything. It never makes an account, and a different subject ends
-// the session.
+// person anything, and asks the app again whether they may come in. It
+// never makes an account, and a different subject ends the session.
 func (a *Auth) renewService(w http.ResponseWriter, r *http.Request, s *service, fl *flow, who *person) {
 	ctx := r.Context()
 	a.mu.Lock()
@@ -549,6 +643,27 @@ func (a *Auth) renewService(w http.ResponseWriter, r *http.Request, s *service, 
 		a.back(w, r, fl.Return, "renewNeeded")
 		return
 	}
+	docs, err := a.admit(ctx, s, who, acc)
+	if errors.Is(err, errNotAdmitted) || (err == nil && acc.Epoch != sess.Epoch) {
+		code := "renewNeeded"
+		if err != nil {
+			code = "notAdmitted"
+		}
+		err = a.cfg.Store.Apply(ctx, append(docs, gone(kindSession, fl.Session))...)
+		a.mu.Unlock()
+		if err != nil {
+			a.internal(w, err)
+			return
+		}
+		a.runEndings(ctx)
+		a.back(w, r, fl.Return, code)
+		return
+	}
+	if err != nil {
+		a.mu.Unlock()
+		a.internal(w, err)
+		return
+	}
 	now := a.now()
 	sess.Checked, sess.Seen = now, now
 	acc.Checked, acc.Groups = now, who.groups
@@ -557,6 +672,11 @@ func (a *Auth) renewService(w http.ResponseWriter, r *http.Request, s *service, 
 	if err != nil {
 		a.internal(w, err)
 		return
+	}
+	if a.cfg.Hooks.SignedIn != nil {
+		v := a.visitorOf(acc, ViaService, s.ID)
+		v.session, v.signedAt, v.epoch = fl.Session, sess.SignedAt, sess.Epoch
+		a.cfg.Hooks.SignedIn(ctx, v, who.groups)
 	}
 	a.back(w, r, fl.Return, "")
 }
@@ -570,7 +690,7 @@ func (a *Auth) bindService(w http.ResponseWriter, r *http.Request, s *service, f
 	now := a.now()
 	a.mu.Lock()
 	acc, err := a.account(ctx, fl.Account)
-	if err != nil || acc.Blocked || a.open.Load() || !a.sameSession(ctx, r, fl, acc) {
+	if err != nil || acc.Blocked || a.waits(s) || !a.sameSession(ctx, r, fl, acc) {
 		a.mu.Unlock()
 		a.back(w, r, fl.Return, "signInFirst")
 		return
@@ -611,10 +731,19 @@ func (a *Auth) bindService(w http.ResponseWriter, r *http.Request, s *service, f
 // in, which a reset or an admin may have changed while the browser was at
 // the service.
 func (a *Auth) serviceOn(ctx context.Context, s *service) bool {
-	if a.open.Load() || a.load(ctx, kindService, s.ID, s) != nil {
+	if a.load(ctx, kindService, s.ID, s) != nil || a.waits(s) {
 		return false
 	}
 	return s.On
+}
+
+// waits reports whether s waits for a password before it lets anyone in.
+// One of Config.Services only waits while the app is open.
+func (a *Auth) waits(s *service) bool {
+	if s.Pinned {
+		return a.Anyone()
+	}
+	return a.noPassword.Load()
 }
 
 // sameSession reports whether the browser finishing a test or a link is
@@ -653,6 +782,10 @@ func (a *Auth) postServiceTicket(w http.ResponseWriter, r *http.Request, f *foun
 	s := new(service)
 	if err := a.load(r.Context(), kindService, id, s); err != nil {
 		a.missing(w, err)
+		return
+	}
+	if purpose == forTest && s.Pinned {
+		fail(w, http.StatusConflict, "fromConfig")
 		return
 	}
 	if purpose == forLink && !s.On {

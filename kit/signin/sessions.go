@@ -103,13 +103,13 @@ func (a *Auth) deleteSessions(w http.ResponseWriter, r *http.Request, f *found) 
 
 // endAll returns deletes for every session and token of account. The caller
 // holds mu.
-func (a *Auth) endAll(r *http.Request, account string) ([]Doc, error) {
+func (a *Auth) endAll(ctx context.Context, account string) ([]Doc, error) {
 	belongs := owned(account)
-	docs, err := a.wipe(r.Context(), kindSession, belongs)
+	docs, err := a.wipe(ctx, kindSession, belongs)
 	if err != nil {
 		return nil, err
 	}
-	more, err := a.wipe(r.Context(), kindToken, belongs)
+	more, err := a.wipe(ctx, kindToken, belongs)
 	return append(docs, more...), err
 }
 

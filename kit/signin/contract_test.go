@@ -56,7 +56,7 @@ func TestTheContractListsEveryRoute(t *testing.T) {
 // for fail, and on the way back from a sign-in service through back.
 var (
 	apiCode      = regexp.MustCompile(`fail\(w, http\.Status\w+, "(\w+)"|refuse\(http\.Status\w+, "(\w+)"\)|return "([a-z]+[A-Z]\w*)"`)
-	redirectCode = regexp.MustCompile(`back\(w, r, [^,]+, "(\w+)"\)|note\(Entry\{[^}]*\}, "(\w+)"\)|code :?= "(\w+)"`)
+	redirectCode = regexp.MustCompile(`back\(w, r, [^,]+, "(\w+)"\)|note\(Entry\{[^}]*\}, "(\w+)"\)|code :?= "(\w+)"|code: "(\w+)"`)
 )
 
 func codesIn(t *testing.T, re *regexp.Regexp) []string {

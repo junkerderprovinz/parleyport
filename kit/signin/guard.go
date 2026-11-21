@@ -56,7 +56,7 @@ func (a *Auth) foundIn(r *http.Request) *found {
 func (a *Auth) find(w http.ResponseWriter, r *http.Request) *found {
 	ctx := r.Context()
 	f := &found{}
-	if a.open.Load() {
+	if a.Anyone() {
 		f.ok, f.v = true, Visitor{Role: a.roles[0], Via: ViaAnyone, roles: a.roles}
 		return f
 	}

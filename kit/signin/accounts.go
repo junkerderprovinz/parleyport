@@ -330,7 +330,7 @@ func (a *Auth) changeLocked(r *http.Request, f *found, id string, in accountChan
 	var docs []Doc
 	if why != "" {
 		acc.Epoch++
-		if docs, err = a.endAll(r, acc.ID); err != nil {
+		if docs, err = a.endAll(ctx, acc.ID); err != nil {
 			return nil, err
 		}
 		docs = append(docs, a.endingsOf(acc, why)...)
@@ -371,7 +371,7 @@ func (a *Auth) removeLocked(r *http.Request, f *found, id string) error {
 	if acc.Owner {
 		return refuse(http.StatusForbidden, "accountOwner")
 	}
-	docs, err := a.endAll(r, acc.ID)
+	docs, err := a.endAll(ctx, acc.ID)
 	if err != nil {
 		return err
 	}

@@ -159,7 +159,7 @@ func (a *Auth) firstPassword(w http.ResponseWriter, r *http.Request, f *found, n
 		return
 	}
 	a.mu.Lock()
-	if !a.open.Load() {
+	if !a.Anyone() {
 		a.mu.Unlock()
 		fail(w, http.StatusConflict, "passwordSet")
 		return

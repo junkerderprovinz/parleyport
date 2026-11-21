@@ -162,7 +162,7 @@ func (a *Auth) openChallenge(w http.ResponseWriter, r *http.Request, path string
 }
 
 func (a *Auth) postPasskeyLoginOptions(w http.ResponseWriter, r *http.Request, _ *found) {
-	if a.open.Load() {
+	if a.Anyone() {
 		fail(w, http.StatusConflict, "setPasswordFirst")
 		return
 	}

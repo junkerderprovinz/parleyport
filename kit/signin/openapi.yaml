@@ -12,8 +12,10 @@ info:
 
     Besides this API the package serves the browser routes of a sign-in
     service: GET /signin/oidc/{id} with return, renew=1 or ticket, and
-    GET /signin/oidc/callback. They answer with redirects, and the outcome
-    comes back to the return path as ?signin=<code>, one of RedirectCode.
+    GET /signin/oidc/callback, below the app's base path. A service the app
+    sets up itself can also start and come back on paths of the app's own.
+    They answer with redirects, and the outcome comes back to the return
+    path as ?signin=<code>, one of RedirectCode.
 servers:
   - url: /api/signin/v1
 paths:
@@ -617,6 +619,7 @@ paths:
       responses:
         "200": { $ref: "#/components/responses/Done" }
         "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /methods/oidc/{id}/check:
     parameters:
       - { name: id, in: path, required: true, schema: { type: string } }
@@ -641,6 +644,7 @@ paths:
         "200": { $ref: "#/components/responses/StartURL" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /settings:
     get:
       operationId: getSettings
@@ -806,6 +810,7 @@ components:
             - notLocal
             - notOwner
             - notWithToken
+            - fromConfig
             - oneOwner
             - othersSignIn
             - passkeyRefused
@@ -852,6 +857,7 @@ components:
         - nameMissing
         - nameTaken
         - noAccount
+        - notAdmitted
         - renewNeeded
         - serviceOff
         - serviceRefused
@@ -995,7 +1001,7 @@ components:
         on: { type: boolean }
     Service:
       type: object
-      required: [id, provider, name, issuer, clientId, secretSet, scopes, nameClaim, groupsClaim, ca, on, paused, tested, redirect]
+      required: [id, provider, name, issuer, clientId, secretSet, scopes, nameClaim, groupsClaim, ca, on, paused, tested, redirect, fromConfig]
       properties:
         id: { type: string }
         provider: { type: string }
@@ -1012,6 +1018,7 @@ components:
         tested: { type: boolean }
         testedAt: { type: string, format: date-time }
         redirect: { type: string, description: The address to register at the service. }
+        fromConfig: { type: boolean, description: The app sets it up itself. Only on can change, to turn it on again after a reset. }
     Entry:
       type: object
       required: [at, result]
