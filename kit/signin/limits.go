@@ -203,10 +203,10 @@ func (a *Auth) atPublic(r *http.Request) bool {
 // without the default port of scheme.
 func hostOf(scheme, host string) string {
 	host = strings.ToLower(host)
-	switch {
-	case scheme == "https":
+	switch scheme {
+	case "https":
 		return strings.TrimSuffix(host, ":443")
-	case scheme == "http":
+	case "http":
 		return strings.TrimSuffix(host, ":80")
 	}
 	return host
