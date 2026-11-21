@@ -23,6 +23,8 @@ type Options struct {
 	Password string
 	// Name is the account's name, for an app with many accounts.
 	Name string
+	// Base is the path the app serves the package under, its Config.Base.
+	Base string
 }
 
 // Run checks h, the app's whole handler with the guard in front, against
@@ -67,6 +69,7 @@ func check(h http.Handler, opt Options) []string {
 	}
 	c.matches("GET me", c.do("GET", "me", nil), 200, "Me")
 	c.matches("GET me/sessions", c.do("GET", "me/sessions", nil), 200, "")
+	c.wantError("a change with the Origin of the address it went to", c.do("DELETE", "me/sessions/none", nil, "Origin", "https://app.test"), 404, "notFound")
 	c.wantError("POST logout from another site", c.do("POST", "logout", map[string]string{}, "Sec-Fetch-Site", "cross-site"), 403, "crossSite")
 	c.wantError("POST logout as a form", c.do("POST", "logout", map[string]string{}, "Content-Type", "text/plain"), 415, "notJSON")
 	c.matches("POST logout", c.do("POST", "logout", map[string]string{}), 200, "")
@@ -79,7 +82,11 @@ func (c *checker) do(method, path string, body any, header ...string) *httptest.
 	if body != nil {
 		raw, _ = json.Marshal(body)
 	}
-	r := httptest.NewRequest(method, "https://app.test"+signin.APIPrefix+path, bytes.NewReader(raw))
+	base := "/" + strings.Trim(c.opt.Base, "/") + "/"
+	if base == "//" {
+		base = "/"
+	}
+	r := httptest.NewRequest(method, "https://app.test"+base+strings.TrimPrefix(signin.APIPrefix, "/")+path, bytes.NewReader(raw))
 	if body != nil {
 		r.Header.Set("Content-Type", "application/json")
 		r.Header.Set("Sec-Fetch-Site", "same-origin")
