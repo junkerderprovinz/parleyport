@@ -106,30 +106,39 @@ func (a *Auth) sessionID(raw string) string { return a.macHex("session", raw)[:3
 
 func (a *Auth) bySession(ctx context.Context, raw string) (Visitor, string, error) {
 	id := a.sessionID(raw)
-	s := new(session)
+	v, s, renew, err := a.session(ctx, id)
+	if err == nil && a.now().Sub(s.Seen) > seenEvery {
+		a.touchSession(ctx, id)
+	}
+	return v, renew, err
+}
+
+// session reads the session id and who it stands for, under every rule a
+// session keeps: its life, a week without use, the account's epoch and
+// block, and through a sign-in service a confirmation within a day. A
+// session that only needs its service again names it in renew.
+func (a *Auth) session(ctx context.Context, id string) (v Visitor, s *session, renew string, err error) {
+	s = new(session)
 	if err := a.load(ctx, kindSession, id, s); err != nil {
-		return Visitor{}, "", err
+		return Visitor{}, nil, "", err
 	}
 	now := a.now()
 	if !now.Before(s.Expires) || now.Sub(s.Seen) > sessionIdle {
-		return Visitor{}, "", errors.New("session over")
+		return Visitor{}, nil, "", errors.New("session over")
 	}
 	acc, err := a.account(ctx, s.Account)
 	if err != nil {
-		return Visitor{}, "", err
+		return Visitor{}, nil, "", err
 	}
 	if acc.Blocked || acc.Epoch != s.Epoch {
-		return Visitor{}, "", errors.New("session ended")
+		return Visitor{}, nil, "", errors.New("session ended")
 	}
 	if s.Via == ViaService && now.Sub(s.Checked) > serviceLife {
-		return Visitor{}, s.Service, errors.New("session needs its sign-in service")
+		return Visitor{}, nil, s.Service, errors.New("session needs its sign-in service")
 	}
-	if now.Sub(s.Seen) > seenEvery {
-		a.touchSession(ctx, id)
-	}
-	v := a.visitorOf(acc, s.Via, s.Service)
+	v = a.visitorOf(acc, s.Via, s.Service)
 	v.session, v.signedAt, v.epoch = id, s.SignedAt, s.Epoch
-	return v, "", nil
+	return v, s, "", nil
 }
 
 // touchSession writes when a session was last used, under the lock so it

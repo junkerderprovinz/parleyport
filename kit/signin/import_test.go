@@ -22,6 +22,27 @@ type oldApp struct {
 
 	mu      sync.Mutex
 	dropped []string
+	// sessions are the old sessions by cookie value. Without them the
+	// cookie "valid" is the owner's, issued at issued for 30 days.
+	sessions map[string]signin.OldSession
+}
+
+func (o *oldApp) session(r *http.Request) (signin.OldSession, bool) {
+	c, err := r.Cookie("old_session")
+	if err != nil {
+		return signin.OldSession{}, false
+	}
+	if o.sessions != nil {
+		s, ok := o.sessions[c.Value]
+		return s, ok
+	}
+	if c.Value != "valid" {
+		return signin.OldSession{}, false
+	}
+	return signin.OldSession{
+		Account: "7", Key: "valid", Via: signin.ViaPassword,
+		Issued: o.issued, SignedAt: o.issued, Expires: o.issued.Add(30 * 24 * time.Hour),
+	}, true
 }
 
 // droppedWith lists the calls of Legacy.Drop as account:what.
@@ -42,15 +63,8 @@ func (o *oldApp) option(owner signin.Imported) option {
 				o.checks.Add(1)
 				return hash == "old:"+pw, nil
 			},
-			Session: func(r *http.Request) (string, time.Time, bool) {
-				c, err := r.Cookie("old_session")
-				if err != nil || c.Value != "valid" {
-					return "", time.Time{}, false
-				}
-				return "7", o.issued, true
-			},
-			SessionLife: 30 * 24 * time.Hour,
-			Recovery:    func(hash, code string) bool { return hash == "old:"+code },
+			Session:  o.session,
+			Recovery: func(hash, code string) bool { return hash == "old:"+code },
 			Token: func(tok string) (string, bool) {
 				if !strings.HasPrefix(tok, "old_") {
 					return "", false

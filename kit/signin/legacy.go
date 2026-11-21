@@ -16,14 +16,11 @@ import (
 type Legacy struct {
 	// Password checks pw against an imported hash.
 	Password func(ctx context.Context, hash, pw string) (bool, error)
-	// Session reads the app's old session cookie from r and returns the
-	// account and when it was issued. The guard accepts it once and swaps
-	// it for a new session in the same response.
-	Session func(r *http.Request) (account string, issued time.Time, ok bool)
-	// SessionLife is how long the app's old sessions lasted. An old session
-	// counts only up to its issue plus this, and never after the account's
-	// first epoch in the package.
-	SessionLife time.Duration
+	// Session reads the app's old session cookie from r. The guard swaps it
+	// once for a new session in the same response, and for two minutes
+	// after takes it as that session, for the requests a page sent at the
+	// same time.
+	Session func(r *http.Request) (OldSession, bool)
 	// Recovery checks code against one imported recovery code hash.
 	Recovery func(hash, code string) bool
 	// Token returns the digest the app stored for an incoming token in its
@@ -37,6 +34,24 @@ type Legacy struct {
 	// for that account. It runs again, also after a restart, until it
 	// returns nil.
 	Drop func(ctx context.Context, account string, what Ending) error
+}
+
+// OldSession is a session the app issued before it used the package. It
+// counts only when it was issued before the import, until it expires and
+// until the account's first epoch in the package.
+type OldSession struct {
+	Account string
+	// Key tells the session apart from every other one, such as a digest
+	// of its cookie.
+	Key string
+	// Issued is when the app issued or last renewed the cookie, SignedAt
+	// when the person signed in, which decides how fresh the session is.
+	Issued, SignedAt, Expires time.Time
+	// Via is ViaPassword, or ViaService with the id of a service from
+	// Config.Services for a session that service started, which then needs
+	// the service again a day after SignedAt.
+	Via     Via
+	Service string
 }
 
 // Imported is one account an app had before it used the package, as its
@@ -175,50 +190,71 @@ func (a *Auth) importAll(ctx context.Context, m *meta) ([]Doc, error) {
 	return docs, nil
 }
 
-// swap marks an old session that was swapped for a new one.
+const swapGrace = 2 * time.Minute
+
+// swap marks an old session that was swapped for the session of the
+// package with the id Session.
 type swap struct {
-	At time.Time `json:"at"`
+	At      time.Time `json:"at"`
+	Session string    `json:"session,omitempty"`
 }
 
 // byOldSession accepts the app's old session cookie for an imported account
-// and swaps it for a session of the package. It counts once, so signing out
-// of the new session cannot bring the old one back, and only for a session
-// issued before the import, within its old life, and until the account's
-// first epoch.
+// and swaps it for a session of the package. It swaps once, so signing out
+// of the new session cannot bring the old one back.
 func (a *Auth) byOldSession(w http.ResponseWriter, r *http.Request) (Visitor, bool) {
 	if a.cfg.Legacy.Session == nil || a.imported.IsZero() {
 		return Visitor{}, false
 	}
-	id, issued, good := a.cfg.Legacy.Session(r)
-	if !good || !issued.Before(a.imported) {
+	old, good := a.cfg.Legacy.Session(r)
+	now := a.now()
+	if !good || old.Key == "" || old.Issued.IsZero() || !old.Issued.Before(a.imported) || !now.Before(old.Expires) {
 		return Visitor{}, false
 	}
-	ends := issued.Add(a.cfg.Legacy.SessionLife)
-	if !a.now().Before(ends) {
-		return Visitor{}, false
+	if old.Via != ViaService {
+		old.Via, old.Service = ViaPassword, ""
+	}
+	if old.SignedAt.IsZero() {
+		old.SignedAt = old.Issued
 	}
 	ctx := r.Context()
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	acc, err := a.account(ctx, id)
+	swapped := shortID("old-session", old.Key)
+	if sw := new(swap); a.load(ctx, kindSwapped, swapped, sw) == nil {
+		if sw.Session == "" || now.Sub(sw.At) >= swapGrace {
+			return Visitor{}, false
+		}
+		v, _, _, err := a.session(ctx, sw.Session)
+		return v, err == nil
+	}
+	acc, err := a.account(ctx, old.Account)
 	if err != nil || acc.Blocked || acc.Epoch != 0 || !acc.Imported {
 		return Visitor{}, false
 	}
-	swapped := shortID("old-session", id, issued.UTC().Format(time.RFC3339Nano))
-	if a.load(ctx, kindSwapped, swapped, new(swap)) == nil {
-		return Visitor{}, false
+	s := sessionOf(acc, old.Via, old.Service)
+	s.Expires, s.SignedAt = old.Expires, old.SignedAt
+	if old.Via == ViaService {
+		s.Checked = old.SignedAt
 	}
-	v := a.visitorOf(acc, ViaPassword, "")
+	// A session of a sign-in service that needs the service again is still
+	// swapped, so the next request can renew it.
+	current := old.Via != ViaService || now.Sub(s.Checked) <= serviceLife
 	if w == nil {
-		return v, true
+		v := a.visitorOf(acc, old.Via, old.Service)
+		v.signedAt = old.SignedAt
+		return v, current
 	}
-	s := sessionOf(acc, ViaPassword, "")
-	s.Expires, s.SignedAt = ends, issued
-	docs := append(a.newSession(w, r, nil, s), a.doc(kindSwapped, swapped, swap{At: a.now()}))
+	docs := a.newSession(w, r, nil, s)
+	docs = append(docs, a.doc(kindSwapped, swapped, swap{At: now, Session: docs[0].ID}))
 	if err := a.cfg.Store.Apply(ctx, docs...); err != nil {
 		a.log.Warn("signin: swapping an old session", "err", err)
 		return Visitor{}, false
 	}
-	v.session, v.signedAt = docs[0].ID, issued
+	if !current {
+		return Visitor{}, false
+	}
+	v := a.visitorOf(acc, old.Via, old.Service)
+	v.session, v.signedAt = docs[0].ID, old.SignedAt
 	return v, true
 }
