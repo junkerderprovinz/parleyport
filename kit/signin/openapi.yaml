@@ -579,6 +579,7 @@ paths:
     post:
       operationId: addService
       summary: Add a sign-in service, off until its test sign-in
+      description: Issuer, client and secret are enough. The rest comes from the provider's preset, the endpoints from discovery.
       requestBody:
         required: true
         content:
@@ -904,8 +905,8 @@ components:
             required: [id, provider, name]
             properties:
               id: { type: string }
-              provider: { type: string }
-              name: { type: string }
+              provider: { type: string, description: "The preset it was set up as or recognised as, else custom." }
+              name: { type: string, description: The name it was set up with, empty when it has none. }
     Code:
       type: object
       required: [code]
@@ -991,14 +992,14 @@ components:
     ServiceInput:
       type: object
       properties:
-        provider: { type: string }
-        name: { type: string }
+        provider: { type: string, description: "A preset id. Absent or custom, the service is recognised from its discovery." }
+        name: { type: string, description: What the sign-in page calls it. Absent or empty, the app names it after its provider. }
         issuer: { type: string }
         clientId: { type: string }
         secret: { type: string }
-        scopes: { type: string }
-        nameClaim: { type: string }
-        groupsClaim: { type: string }
+        scopes: { type: string, description: Absent or empty takes the provider's. }
+        nameClaim: { type: string, description: Absent or empty takes the provider's. }
+        groupsClaim: { type: string, description: Absent or empty takes the provider's. }
         ca: { type: string, description: A PEM certificate to trust next to the system's. }
         on: { type: boolean }
         role: { type: string, description: "What a newcomer from the service gets, one of the roles, else roleUnknown. A change leaves existing accounts as they are. Absent on a new service is serviceRole of GET roles." }

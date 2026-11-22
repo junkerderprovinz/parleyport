@@ -161,17 +161,24 @@ func (a *Auth) dial(ctx context.Context, s *service) (*remote, error) {
 		return nil, err
 	}
 	var meta struct {
-		Algs []string `json:"id_token_signing_alg_values_supported"`
+		Algs  []string `json:"id_token_signing_alg_values_supported"`
+		Auth  string   `json:"authorization_endpoint"`
+		Token string   `json:"token_endpoint"`
 	}
 	if err := p.Claims(&meta); err != nil {
 		return nil, err
+	}
+	if s.Provider == "" || s.Provider == "custom" {
+		if got := recognise(meta.Auth, meta.Token); got != s.Recognised || s.RecognisedFor != s.Issuer {
+			a.remember(ctx, s.ID, s.Issuer, got)
+		}
 	}
 	algs := slices.DeleteFunc(meta.Algs, func(alg string) bool { return alg == "none" || strings.HasPrefix(alg, "HS") })
 	return &remote{
 		ctx: ctx, provider: p,
 		config: oauth2.Config{
 			ClientID: s.ClientID, ClientSecret: string(secret), Endpoint: p.Endpoint(),
-			RedirectURL: a.redirectURI(s), Scopes: strings.Fields(s.Scopes),
+			RedirectURL: a.redirectURI(s), Scopes: strings.Fields(a.scopesOf(s)),
 		},
 		verifier: p.Verifier(&oidc.Config{ClientID: s.ClientID, SupportedSigningAlgs: algs}),
 	}, nil
@@ -357,7 +364,8 @@ func (a *Auth) exchange(ctx context.Context, s *service, fl *flow, q url.Values)
 	if aud, _ := claims["aud"].([]any); len(aud) > 1 && claims["azp"] != s.ClientID {
 		return nil, errors.New("the ID token was issued to another party")
 	}
-	if claim(claims, s.GroupsClaim) == nil || claim(claims, s.NameClaim) == nil {
+	want := a.claimsOf(s)
+	if claim(claims, want.GroupsClaim) == nil || claim(claims, want.NameClaim) == nil {
 		if info, err := rem.provider.UserInfo(rem.ctx, oauth2.StaticTokenSource(tok)); err == nil && info.Subject == idt.Subject {
 			extra := map[string]any{}
 			if info.Claims(&extra) == nil {
@@ -369,7 +377,7 @@ func (a *Auth) exchange(ctx context.Context, s *service, fl *flow, q url.Values)
 			}
 		}
 	}
-	return &person{issuer: s.Issuer, subject: idt.Subject, name: nameFrom(claims, s.NameClaim), groups: groupsFrom(claims, s.GroupsClaim)}, nil
+	return &person{issuer: s.Issuer, subject: idt.Subject, name: nameFrom(claims, want.NameClaim), groups: groupsFrom(claims, want.GroupsClaim)}, nil
 }
 
 // claim finds a claim by its name, or by a dotted path into nested claims

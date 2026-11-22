@@ -58,6 +58,29 @@ type Provider struct {
 	userInfo *Person
 	// groupsInUserInfo leaves the groups out of the ID token.
 	groupsInUserInfo bool
+	// like names the preset whose endpoint paths discovery shows.
+	like string
+}
+
+// endpoints are where each kind of sign-in service has its authorization
+// and token endpoints, as their discovery documents name them.
+var endpoints = map[string][2]string{
+	"":          {"/authorize", "/token"},
+	"pocket-id": {"/authorize", "/api/oidc/token"},
+	"authentik": {"/application/o/authorize/", "/application/o/token/"},
+	"authelia":  {"/api/oidc/authorization", "/api/oidc/token"},
+	"keycloak":  {"/realms/home/protocol/openid-connect/auth", "/realms/home/protocol/openid-connect/token"},
+	"kanidm":    {"/ui/oauth2", "/oauth2/token"},
+	"zitadel":   {"/oauth/v2/authorize", "/oauth/v2/token"},
+}
+
+// Like makes the provider's discovery name its endpoints where the sign-in
+// service with the preset id has them, such as "keycloak". Empty is paths
+// no preset uses.
+func (p *Provider) Like(id string) {
+	p.mu.Lock()
+	p.like = id
+	p.mu.Unlock()
 }
 
 type grant struct {
@@ -77,8 +100,16 @@ func NewProvider(t testing.TB) *Provider {
 	p := &Provider{ClientID: "app", Secret: "client secret", key: key, codes: map[string]grant{}, tokens: map[string]Person{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /.well-known/openid-configuration", p.discovery)
-	mux.HandleFunc("GET /authorize", p.authorize)
-	mux.HandleFunc("POST /token", p.token)
+	seen := map[string]bool{}
+	for _, e := range endpoints {
+		if !seen[e[0]] {
+			mux.HandleFunc("GET "+e[0], p.authorize)
+		}
+		if !seen[e[1]] {
+			mux.HandleFunc("POST "+e[1], p.token)
+		}
+		seen[e[0]], seen[e[1]] = true, true
+	}
 	mux.HandleFunc("GET /userinfo", p.userinfo)
 	mux.HandleFunc("GET /jwks", p.jwks)
 	p.srv = httptest.NewTLSServer(mux)
@@ -145,10 +176,13 @@ func (p *Provider) GroupsOnlyInUserInfo(someone *Person) {
 }
 
 func (p *Provider) discovery(w http.ResponseWriter, _ *http.Request) {
+	p.mu.Lock()
+	e := endpoints[p.like]
+	p.mu.Unlock()
 	writeJSON(w, map[string]any{
 		"issuer":                                p.URL,
-		"authorization_endpoint":                p.URL + "/authorize",
-		"token_endpoint":                        p.URL + "/token",
+		"authorization_endpoint":                p.URL + e[0],
+		"token_endpoint":                        p.URL + e[1],
 		"userinfo_endpoint":                     p.URL + "/userinfo",
 		"jwks_uri":                              p.URL + "/jwks",
 		"response_types_supported":              []string{"code"},

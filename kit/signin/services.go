@@ -1,6 +1,7 @@
 package signin
 
 import (
+	"cmp"
 	"context"
 	"crypto/x509"
 	"encoding/json"
@@ -19,9 +20,11 @@ import (
 // in without a test sign-in, the contract cannot change or remove it, and
 // after a reset it waits until an admin turns it on again, also across
 // restarts. Provider is a preset whose scopes and claims fill in what is
-// empty. StartPath and CallbackPath, paths below Config.Base, are where the
-// service already knows the app, for an app that spoke to it before it
-// used the package; the app mounts Handler on them too.
+// empty, and when it is empty or custom the service is recognised from its
+// discovery. An empty Name stays empty, and the app names the service after
+// its provider. StartPath and CallbackPath, paths below Config.Base, are
+// where the service already knows the app, for an app that spoke to it
+// before it used the package; the app mounts Handler on them too.
 type ServiceSpec struct {
 	ID, Provider, Name             string
 	Issuer, ClientID, Secret, CA   string
@@ -51,6 +54,10 @@ type service struct {
 	Created     time.Time `json:"created"`
 	// Role is what a newcomer from the service gets.
 	Role string `json:"role,omitempty"`
+	// Recognised is the preset the discovery of RecognisedFor looked like,
+	// for a service whose provider nobody chose.
+	Recognised    string `json:"recognised,omitempty"`
+	RecognisedFor string `json:"recognisedFor,omitempty"`
 	// Pinned marks one of Config.Services.
 	Pinned       bool   `json:"pinned,omitempty"`
 	CallbackPath string `json:"callbackPath,omitempty"`
@@ -89,9 +96,116 @@ type serviceView struct {
 
 func (a *Auth) viewService(s *service) serviceView {
 	return serviceView{
-		ID: s.ID, Provider: s.Provider, Name: s.Name, Issuer: s.Issuer, ClientID: s.ClientID, SecretSet: len(s.Secret) > 0,
-		Scopes: s.Scopes, NameClaim: s.NameClaim, GroupsClaim: s.GroupsClaim, CA: s.CA != "", On: s.On, Paused: s.Paused,
+		ID: s.ID, Provider: a.providerOf(s), Name: s.Name, Issuer: s.Issuer, ClientID: s.ClientID, SecretSet: len(s.Secret) > 0,
+		Scopes: a.scopesOf(s), NameClaim: a.claimsOf(s).NameClaim, GroupsClaim: a.claimsOf(s).GroupsClaim, CA: s.CA != "", On: s.On, Paused: s.Paused,
 		Tested: s.tested(), TestedAt: s.Tested, Redirect: a.redirectURI(s), FromConfig: s.Pinned, Role: a.roleOf(s),
+	}
+}
+
+// providerOf is the preset s shows as: the one an admin or the app chose,
+// else the one its discovery looked like at its issuer of today, else
+// custom.
+func (a *Auth) providerOf(s *service) string {
+	switch {
+	case s.Provider != "" && s.Provider != "custom":
+		return s.Provider
+	case s.Recognised != "" && s.RecognisedFor == s.Issuer:
+		return s.Recognised
+	}
+	return "custom"
+}
+
+// claimsOf is s's preset with what an admin or the app gave for s in place
+// of the preset's own.
+func (a *Auth) claimsOf(s *service) Preset {
+	p, _ := preset(a.providerOf(s))
+	p.Scopes = cmp.Or(s.Scopes, p.Scopes)
+	p.NameClaim = cmp.Or(s.NameClaim, p.NameClaim)
+	p.GroupsClaim = cmp.Or(s.GroupsClaim, p.GroupsClaim)
+	return p
+}
+
+func (a *Auth) scopesOf(s *service) string {
+	scopes := a.claimsOf(s).Scopes
+	if !strings.Contains(" "+scopes+" ", " openid ") {
+		scopes = "openid " + scopes
+	}
+	return scopes
+}
+
+// recognitions tell the presets apart by where their discovery puts the
+// authorization and the token endpoint.
+var recognitions = []struct {
+	preset string
+	fits   func(auth, token string) bool
+}{
+	{"pocket-id", func(auth, token string) bool {
+		return strings.HasSuffix(auth, "/authorize") && strings.HasSuffix(token, "/api/oidc/token")
+	}},
+	{"authentik", func(auth, _ string) bool { return strings.HasSuffix(auth, "/application/o/authorize") }},
+	{"authelia", func(auth, _ string) bool { return strings.HasSuffix(auth, "/api/oidc/authorization") }},
+	{"keycloak", func(auth, _ string) bool {
+		return strings.Contains(auth, "/realms/") && strings.HasSuffix(auth, "/protocol/openid-connect/auth")
+	}},
+	{"kanidm", func(auth, token string) bool {
+		return strings.HasSuffix(auth, "/ui/oauth2") && strings.HasSuffix(token, "/oauth2/token")
+	}},
+	{"zitadel", func(auth, _ string) bool { return strings.HasSuffix(auth, "/oauth/v2/authorize") }},
+}
+
+// recognise names the preset whose endpoints auth and token are, or custom
+// when none fits or more than one does.
+func recognise(auth, token string) string {
+	path := func(raw string) string {
+		u, err := url.Parse(raw)
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSuffix(u.Path, "/")
+	}
+	auth, token = path(auth), path(token)
+	found := "custom"
+	for _, r := range recognitions {
+		if r.fits(auth, token) {
+			if found != "custom" {
+				return "custom"
+			}
+			found = r.preset
+		}
+	}
+	return found
+}
+
+// remember keeps the preset the service id looked like at issuer, unless
+// the service moved to another issuer meanwhile.
+func (a *Auth) remember(ctx context.Context, id, issuer, preset string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	s := new(service)
+	if a.load(ctx, kindService, id, s) != nil || s.Issuer != issuer {
+		return
+	}
+	s.Recognised, s.RecognisedFor = preset, issuer
+	if err := a.cfg.Store.Apply(ctx, a.doc(kindService, id, s)); err != nil {
+		a.log.Warn("signin: noting what a sign-in service is", "service", id, "err", err)
+	}
+}
+
+// recogniseServices reads the discovery of every service of Config.Services
+// whose preset is not known yet, so the sign-in page can show it from the
+// start.
+func (a *Auth) recogniseServices() {
+	ctx := context.Background()
+	all, err := a.services(ctx)
+	if err != nil {
+		return
+	}
+	for _, s := range all {
+		if s.Pinned && a.providerOf(s) == "custom" && s.RecognisedFor != s.Issuer {
+			if _, err := a.dial(ctx, s); err != nil {
+				a.log.Info("signin: reaching a sign-in service", "service", s.ID, "err", err)
+			}
+		}
 	}
 }
 
@@ -143,6 +257,7 @@ func (a *Auth) pin(ctx context.Context) error {
 				return fmt.Errorf("signin: the service %q is also one an admin added", s.ID)
 			}
 			s.Created, s.Paused, s.On = old.Created, old.Paused, !old.Paused
+			s.Recognised, s.RecognisedFor = old.Recognised, old.RecognisedFor
 		}
 		docs = append(docs, a.doc(kindService, s.ID, s))
 	}
@@ -165,7 +280,7 @@ func (a *Auth) pinned(spec ServiceSpec) (*service, error) {
 	bad := func(what string) (*service, error) {
 		return nil, fmt.Errorf("signin: the service %q has %s", spec.ID, what)
 	}
-	p, known := preset(spec.Provider)
+	_, known := preset(cmp.Or(spec.Provider, "custom"))
 	switch {
 	case !serviceIDRE.MatchString(spec.ID):
 		return bad("an id that is not letters, digits, - and _")
@@ -183,19 +298,10 @@ func (a *Auth) pinned(spec ServiceSpec) (*service, error) {
 			return bad("a path that is not one")
 		}
 	}
-	or := func(v, def string) string {
-		if v = strings.TrimSpace(v); v != "" {
-			return v
-		}
-		return def
-	}
 	s := &service{
-		ID: spec.ID, Provider: p.ID, Name: or(spec.Name, p.ID), Issuer: spec.Issuer, ClientID: spec.ClientID,
-		Scopes: or(spec.Scopes, p.Scopes), NameClaim: or(spec.NameClaim, p.NameClaim), GroupsClaim: or(spec.GroupsClaim, p.GroupsClaim),
+		ID: spec.ID, Provider: spec.Provider, Name: strings.TrimSpace(spec.Name), Issuer: spec.Issuer, ClientID: spec.ClientID,
+		Scopes: strings.TrimSpace(spec.Scopes), NameClaim: strings.TrimSpace(spec.NameClaim), GroupsClaim: strings.TrimSpace(spec.GroupsClaim),
 		CA: spec.CA, On: true, Created: a.now(), Pinned: true, CallbackPath: spec.CallbackPath,
-	}
-	if !strings.Contains(" "+s.Scopes+" ", " openid ") {
-		s.Scopes = "openid " + s.Scopes
 	}
 	sealed, err := a.sealFor("service-secret", s.ID, []byte(spec.Secret))
 	if err != nil {
@@ -253,11 +359,11 @@ func (a *Auth) postService(w http.ResponseWriter, r *http.Request, f *found) {
 	if !readJSON(w, r, smallBody, &in) {
 		return
 	}
-	if in.Provider == nil {
-		fail(w, http.StatusBadRequest, "serviceUnknown")
-		return
+	provider := "custom"
+	if in.Provider != nil {
+		provider = *in.Provider
 	}
-	p, known := preset(*in.Provider)
+	p, known := preset(provider)
 	if !known {
 		fail(w, http.StatusBadRequest, "serviceUnknown")
 		return
@@ -266,7 +372,7 @@ func (a *Auth) postService(w http.ResponseWriter, r *http.Request, f *found) {
 		fail(w, http.StatusBadRequest, "secretMissing")
 		return
 	}
-	s := &service{ID: newID(), Provider: p.ID, Name: p.ID, Scopes: p.Scopes, NameClaim: p.NameClaim, GroupsClaim: p.GroupsClaim, Role: a.serviceRole, Created: a.now()}
+	s := &service{ID: newID(), Provider: p.ID, Role: a.serviceRole, Created: a.now()}
 	a.saveService(w, r, f, s, in, true)
 }
 
@@ -334,12 +440,12 @@ func (a *Auth) saveService(w http.ResponseWriter, r *http.Request, f *found, s *
 		fail(w, http.StatusBadRequest, "issuerInvalid")
 		return
 	}
-	if s.ClientID == "" || s.Name == "" || s.NameClaim == "" {
+	if s.ClientID == "" {
 		fail(w, http.StatusBadRequest, "badRequest")
 		return
 	}
-	if !strings.Contains(" "+s.Scopes+" ", " openid ") {
-		s.Scopes = strings.TrimSpace("openid " + s.Scopes)
+	if s.Scopes != "" && !strings.Contains(" "+s.Scopes+" ", " openid ") {
+		s.Scopes = "openid " + s.Scopes
 	}
 	if s.CA != "" && !x509.NewCertPool().AppendCertsFromPEM([]byte(s.CA)) {
 		fail(w, http.StatusBadRequest, "caInvalid")
@@ -484,7 +590,7 @@ func (a *Auth) offeredServices(ctx context.Context) ([]map[string]string, error)
 	}
 	for _, s := range all {
 		if s.On && !a.waits(s) {
-			out = append(out, map[string]string{"id": s.ID, "provider": s.Provider, "name": s.Name})
+			out = append(out, map[string]string{"id": s.ID, "provider": a.providerOf(s), "name": s.Name})
 		}
 	}
 	return out, nil

@@ -301,6 +301,9 @@ func Open(cfg Config) (*Auth, error) {
 	a.handler = a.routes()
 	a.stop = make(chan struct{})
 	a.done.Go(a.endLoop)
+	if len(cfg.Services) > 0 {
+		a.done.Go(a.recogniseServices)
+	}
 	return a, nil
 }
 

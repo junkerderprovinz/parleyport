@@ -16,8 +16,10 @@
 //   - A sign-in service is a service that says who someone is, spoken to
 //     over OIDC: Pocket ID, authentik, Authelia, Keycloak, Kanidm, Zitadel or
 //     one of the app owner's own. Its presets share their ids with the
-//     catalog in the user interface. An app can also set one up itself, in
-//     Config.Services.
+//     catalog in the user interface, and a service set up without one is
+//     recognised as a preset from its discovery where that is certain. The
+//     package never names a service itself. An app can also set one up
+//     itself, in Config.Services.
 //   - A service group is a group the sign-in service reports for someone.
 //     It is kept on the account. Who may sign in at all is the service's
 //     decision. A newcomer it lets through gets the role an admin chose for
