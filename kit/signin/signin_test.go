@@ -228,11 +228,9 @@ func TestUnknownNamesStayOutOfTheLog(t *testing.T) {
 	}
 }
 
-func TestNewWaysInWaitForAPassword(t *testing.T) {
+func TestPasskeysWaitForAPassword(t *testing.T) {
 	a := newApp(t)
-	b := a.browser()
-	want(t, b.api("POST", "me/tokens", map[string]any{"name": "script", "scopes": []string{"read"}}), 409, "setPasswordFirst")
-	want(t, b.api("POST", "me/passkeys/options", map[string]any{}), 409, "setPasswordFirst")
+	want(t, a.browser().api("POST", "me/passkeys/options", map[string]any{}), 409, "setPasswordFirst")
 }
 
 func TestMintWantsAFreshSignIn(t *testing.T) {

@@ -29,14 +29,17 @@
 //     anywhere.
 //
 // A password is always optional, and every part of an app works without
-// one. Until a password is set nobody can sign in, so the app is open and
-// every visitor is admin. A password of any length is taken; one under
-// Config.MinPassword comes back with a hint the app may show. Sign-in services, passkeys and tokens wait for that
-// password, which keeps the owner able to get in when a service is down. An
-// app behind a service that guards it as a reverse proxy sets no password,
-// and that service alone protects it. An app that one of its own
-// Config.Services guards stays closed without a password through
-// Config.Closed, and only that service lets anyone in.
+// one. Until a password is set or a sign-in service is on, nobody can sign
+// in, so the app is open and every visitor is admin. A password of any
+// length is taken; one under Config.MinPassword comes back with a hint the
+// app may show. A sign-in service an admin adds while the app is open goes
+// on with its test sign-in, which binds the owner and closes the app, and
+// the reset through the log stays the way back in when the service is
+// down. Tokens made while the app is open end when it closes. Passkeys and
+// two-factor wait for a password. An app behind a service that guards it as
+// a reverse proxy sets no password, and that service alone protects it. An
+// app that one of its own Config.Services guards stays closed without a
+// password through Config.Closed, and only that service lets anyone in.
 //
 // An app with accounts of its own before the package imports them once, and
 // keeps its account table in step through Hooks.Changing and the account

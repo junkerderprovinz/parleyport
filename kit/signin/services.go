@@ -419,10 +419,6 @@ func (a *Auth) confirmPinned(w http.ResponseWriter, r *http.Request, f *found, s
 // server of its own, and any change to where the app signs in takes the
 // service off until a new test sign-in.
 func (a *Auth) saveService(w http.ResponseWriter, r *http.Request, f *found, s *service, in serviceInput, fresh bool) {
-	if a.noPassword.Load() {
-		fail(w, http.StatusConflict, "setPasswordFirst")
-		return
-	}
 	set := func(dst *string, src *string) {
 		if src != nil {
 			*dst = strings.TrimSpace(*src)
@@ -494,7 +490,10 @@ func (a *Auth) saveService(w http.ResponseWriter, r *http.Request, f *found, s *
 			}
 			docs = append(docs, ended...)
 		}
-		return a.cfg.Store.Apply(r.Context(), docs...)
+		if err := a.cfg.Store.Apply(r.Context(), docs...); err != nil {
+			return err
+		}
+		return a.refreshOpen(r.Context())
 	})
 	if errors.Is(err, ErrNotFresh) {
 		a.notFresh(w, r, f)
@@ -510,7 +509,7 @@ func (a *Auth) saveService(w http.ResponseWriter, r *http.Request, f *found, s *
 func (a *Auth) deleteService(w http.ResponseWriter, r *http.Request, f *found) {
 	id := r.PathValue("id")
 	a.mu.Lock()
-	if _, err := a.stillValid(r.Context(), f); err != nil {
+	if err := a.stillAllowed(r.Context(), f); err != nil {
 		a.mu.Unlock()
 		fail(w, http.StatusUnauthorized, "signInFirst")
 		return
@@ -528,6 +527,9 @@ func (a *Auth) deleteService(w http.ResponseWriter, r *http.Request, f *found) {
 	}
 	if err == nil {
 		err = a.cfg.Store.Apply(r.Context(), append(docs, gone(kindService, id))...)
+	}
+	if err == nil {
+		err = a.refreshOpen(r.Context())
 	}
 	a.mu.Unlock()
 	if err != nil {

@@ -51,6 +51,7 @@ type flow struct {
 	Return   string    `json:"return"`
 	Account  string    `json:"account,omitempty"`
 	Session  string    `json:"session,omitempty"`
+	Open     bool      `json:"open,omitempty"`
 	Epoch    int       `json:"epoch,omitempty"`
 	Expires  time.Time `json:"expires"`
 }
@@ -63,6 +64,9 @@ type ticket struct {
 	service string
 	purpose string
 	expires time.Time
+	// open marks a test sign-in started while the app was open, for its
+	// owner.
+	open bool
 }
 
 type tickets struct {
@@ -205,11 +209,12 @@ func (a *Auth) startService(w http.ResponseWriter, r *http.Request, id, ret stri
 	switch {
 	case q.Get("ticket") != "":
 		tk, good := a.tickets.take(a.macHex("ticket", q.Get("ticket")), a.now())
-		if !good || tk.service != s.ID || !f.ok || f.v.Account != tk.account {
+		open := f.ok && f.v.Via == ViaAnyone && tk.open
+		if !good || tk.service != s.ID || !f.ok || (!open && f.v.Account != tk.account) {
 			a.back(w, r, ret, "flowExpired")
 			return
 		}
-		fl.Purpose, fl.Account, fl.Session, fl.Epoch = tk.purpose, tk.account, f.v.session, f.v.epoch
+		fl.Purpose, fl.Account, fl.Session, fl.Epoch, fl.Open = tk.purpose, tk.account, f.v.session, f.v.epoch, open
 		opts = append(opts, oauth2.SetAuthURLParam("prompt", "login"))
 	case q.Get("renew") != "":
 		if f.renew != s.ID || f.cookie == "" {
@@ -219,7 +224,7 @@ func (a *Auth) startService(w http.ResponseWriter, r *http.Request, id, ret stri
 		fl.Purpose, fl.Session = forRenew, a.sessionID(f.cookie)
 		opts = append(opts, oauth2.SetAuthURLParam("prompt", "none"))
 	}
-	if a.waits(s) || (fl.Purpose != forTest && !s.On) {
+	if (a.waits(s) && !fl.Open) || (fl.Purpose != forTest && !s.On) {
 		a.back(w, r, ret, "serviceOff")
 		return
 	}
@@ -702,7 +707,8 @@ func (a *Auth) bindService(w http.ResponseWriter, r *http.Request, s *service, f
 	now := a.now()
 	a.mu.Lock()
 	acc, err := a.account(ctx, fl.Account)
-	if err != nil || acc.Blocked || a.waits(s) || !a.sameSession(ctx, r, fl, acc) {
+	stillOpen := fl.Open && a.Anyone()
+	if err != nil || acc.Blocked || (!stillOpen && (a.waits(s) || !a.sameSession(ctx, r, fl, acc))) {
 		a.mu.Unlock()
 		a.back(w, r, fl.Return, "signInFirst")
 		return
@@ -729,14 +735,45 @@ func (a *Auth) bindService(w http.ResponseWriter, r *http.Request, s *service, f
 		docs = append(docs, a.doc(kindService, s.ID, s))
 		code = "testOk"
 	}
+	if stillOpen && fl.Purpose == forTest {
+		closing, err := a.closeByService(w, r, s, acc)
+		if err != nil {
+			a.mu.Unlock()
+			a.internal(w, err)
+			return
+		}
+		docs = append(docs, closing...)
+	}
 	err = a.cfg.Store.Apply(ctx, docs...)
+	if err == nil {
+		err = a.refreshOpen(ctx)
+	}
 	a.mu.Unlock()
 	if err != nil {
 		a.internal(w, err)
 		return
 	}
+	a.runEndings(ctx)
 	a.note(ctx, r, Entry{Account: acc.ID, Name: acc.Name, Via: ViaService, Service: s.ID, Result: code})
 	a.back(w, r, fl.Return, code)
+}
+
+// closeByService is what closes an open app when its first sign-in service
+// passed the test with acc, its owner: what was made while it was open
+// ends, and the browser is signed in through the service. The caller
+// holds mu and applies the docs.
+func (a *Auth) closeByService(w http.ResponseWriter, r *http.Request, s *service, acc *account) ([]Doc, error) {
+	docs, err := a.openTokens(r.Context())
+	if err != nil {
+		return nil, err
+	}
+	now := a.now()
+	acc.Checked, acc.Seen = now, now
+	docs = append(docs, a.endingsOf(acc, EndFirstPassword)...)
+	docs = append(docs, a.doc(kindAccount, acc.ID, acc))
+	ss := sessionOf(acc, ViaService, s.ID)
+	ss.Checked = now
+	return append(docs, a.newSession(w, r, a.foundIn(r), ss)...), nil
 }
 
 // serviceOn reads s again under mu and reports whether it still lets people
@@ -749,14 +786,9 @@ func (a *Auth) serviceOn(ctx context.Context, s *service) bool {
 	return s.On
 }
 
-// waits reports whether s waits for a password before it lets anyone in.
-// One of Config.Services only waits while the app is open.
-func (a *Auth) waits(s *service) bool {
-	if s.Pinned {
-		return a.Anyone()
-	}
-	return a.noPassword.Load()
-}
+// waits reports whether s lets nobody in because the app is open. A
+// service an admin added closes the app once it is on.
+func (a *Auth) waits(*service) bool { return a.Anyone() }
 
 // sameSession reports whether the browser finishing a test or a link is
 // still in the session that started it, and nothing ended that session on
@@ -804,8 +836,22 @@ func (a *Auth) postServiceTicket(w http.ResponseWriter, r *http.Request, f *foun
 		fail(w, http.StatusConflict, "serviceOff")
 		return
 	}
+	tk := ticket{account: f.v.Account, service: s.ID, purpose: purpose, expires: a.now().Add(ticketLife)}
+	if f.v.Via == ViaAnyone {
+		a.mu.Lock()
+		acc, docs, err := a.openOwner(r.Context())
+		if err == nil && len(docs) > 0 {
+			err = a.cfg.Store.Apply(r.Context(), docs...)
+		}
+		a.mu.Unlock()
+		if err != nil {
+			a.answer(w, r, f, err)
+			return
+		}
+		tk.account, tk.open = acc.ID, true
+	}
 	raw := token.Random(24)
-	a.tickets.put(a.macHex("ticket", raw), ticket{account: f.v.Account, service: s.ID, purpose: purpose, expires: a.now().Add(ticketLife)}, a.now())
+	a.tickets.put(a.macHex("ticket", raw), tk, a.now())
 	q := url.Values{"ticket": {raw}, "return": {a.safeReturn(in.Return)}}
 	ok(w, map[string]string{"url": a.under(oidcPath) + s.ID + "?" + q.Encode()})
 }

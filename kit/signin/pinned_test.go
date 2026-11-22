@@ -63,16 +63,6 @@ func TestAServiceFromTheConfigIsOnWithoutATest(t *testing.T) {
 	}
 }
 
-func TestAClosedAppTakesNoOtherServiceWithoutAPassword(t *testing.T) {
-	p := signintest.NewProvider(t)
-	a := newApp(t, manyAccounts, closed, fromConfig(p, false))
-	p.Next(signintest.Person{Subject: "sub-anna", Name: "anna"})
-	b := a.browser()
-	b.serviceSignIn(p, "config")
-	other := signintest.NewProvider(t)
-	want(t, b.api("POST", "methods/oidc", map[string]any{"provider": "pocket-id", "issuer": other.URL, "clientId": "x", "secret": "y"}), 409, "setPasswordFirst")
-}
-
 func TestAServiceFromTheConfigKeepsItsOwnPaths(t *testing.T) {
 	p := signintest.NewProvider(t)
 	a := newApp(t, manyAccounts, closed, fromConfig(p, true))

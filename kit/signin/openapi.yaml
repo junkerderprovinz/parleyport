@@ -634,6 +634,10 @@ paths:
     post:
       operationId: testService
       summary: The address of the test sign-in, which binds the admin and turns the service on
+      description: |
+        While the app is open it binds the owner, made without a password when
+        there is none, and the service closes the app: tokens made while open
+        end and this browser comes back signed in through the service.
       requestBody:
         content:
           application/json:
@@ -948,6 +952,7 @@ components:
         created: { type: string, format: date-time }
         used: { type: string, format: date-time }
         expires: { type: string, format: date-time }
+        endsWhenClosed: { type: boolean, description: Made while the app was open. It ends with the first password or the first sign-in service. }
     Passkey:
       type: object
       required: [id, name, created, rpID, synced, here]

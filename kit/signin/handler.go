@@ -42,6 +42,7 @@ const (
 	admin                      // a visitor with the admin role
 	adminAccount               // an admin signed in as an account, so not while the app is open
 	adminOpen                  // an admin signed in as an account, or everyone while the app is open
+	memberOpen                 // an account signed in through a session, or everyone while the app is open
 )
 
 type route func(w http.ResponseWriter, r *http.Request, f *found)
@@ -137,7 +138,7 @@ func (a *Auth) serveAPI(w http.ResponseWriter, r *http.Request, pattern string, 
 				return
 			}
 		}
-		if need == adminOpen && f.v.Via == ViaDoor {
+		if (need == adminOpen || need == memberOpen) && f.v.Via == ViaDoor {
 			fail(w, http.StatusForbidden, "forbidden")
 			return
 		}
@@ -313,9 +314,9 @@ func (a *Auth) api() []apiRoute {
 		{"GET me/identities", member, a.getIdentities},
 		{"DELETE me/identities/{id}", member, a.deleteIdentity},
 		{"POST me/identities/{service}/link", member, a.postIdentityLink},
-		{"GET me/tokens", member, a.getTokens},
-		{"POST me/tokens", member, a.postToken},
-		{"DELETE me/tokens/{id}", member, a.deleteToken},
+		{"GET me/tokens", memberOpen, a.getTokens},
+		{"POST me/tokens", memberOpen, a.postToken},
+		{"DELETE me/tokens/{id}", memberOpen, a.deleteToken},
 		{"GET accounts", admin, a.getAccounts},
 		{"POST accounts", adminAccount, a.postAccount},
 		{"PATCH accounts/{id}", adminOpen, a.patchAccount},
@@ -323,11 +324,11 @@ func (a *Auth) api() []apiRoute {
 		{"GET roles", admin, a.getRoles},
 		{"GET methods/presets", admin, a.getPresets},
 		{"GET methods/oidc", admin, a.getServices},
-		{"POST methods/oidc", adminAccount, a.postService},
-		{"PATCH methods/oidc/{id}", adminAccount, a.patchService},
-		{"DELETE methods/oidc/{id}", adminAccount, a.deleteService},
-		{"POST methods/oidc/{id}/check", adminAccount, a.postServiceCheck},
-		{"POST methods/oidc/{id}/test", adminAccount, a.postServiceTest},
+		{"POST methods/oidc", adminOpen, a.postService},
+		{"PATCH methods/oidc/{id}", adminOpen, a.patchService},
+		{"DELETE methods/oidc/{id}", adminOpen, a.deleteService},
+		{"POST methods/oidc/{id}/check", adminOpen, a.postServiceCheck},
+		{"POST methods/oidc/{id}/test", adminOpen, a.postServiceTest},
 		{"GET settings", admin, a.getSettings},
 		{"PATCH settings", adminOpen, a.patchSettings},
 		{"GET log", admin, a.getLog},

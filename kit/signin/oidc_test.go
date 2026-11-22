@@ -95,11 +95,6 @@ func TestTheTestSignInTurnsTheServiceOnAndBindsTheOwner(t *testing.T) {
 	}
 }
 
-func TestServicesWaitForAPassword(t *testing.T) {
-	a := newApp(t)
-	want(t, a.browser().api("POST", "methods/oidc", map[string]any{"provider": "pocket-id", "issuer": "https://id.example", "clientId": "x", "secret": "y"}), 409, "setPasswordFirst")
-}
-
 func TestTheSecretNeverComesBack(t *testing.T) {
 	a := newApp(t)
 	owner := a.owner()

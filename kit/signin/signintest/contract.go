@@ -56,8 +56,17 @@ func check(h http.Handler, opt Options) []string {
 	c.matches("GET options", opts, 200, "Options")
 	var o struct{ Open bool }
 	_ = json.Unmarshal(opts.Body.Bytes(), &o)
+	var openToken string
 	if o.Open {
+		r := c.do("POST", "me/tokens", map[string]any{"name": "contract", "scopes": []string{"read"}})
+		c.matches("POST me/tokens on an open app", r, 200, "")
+		var made struct{ Value string }
+		_ = json.Unmarshal(r.Body.Bytes(), &made)
+		openToken = made.Value
 		c.matches("PUT me/password on an open app", c.do("PUT", "me/password", map[string]string{"next": opt.Password, "name": opt.Name}), 200, "")
+	}
+	if openToken != "" {
+		c.wantError("GET me with a token made while the app was open, after the first password", c.do("GET", "me", nil, "Authorization", "Bearer "+openToken), 401, "signInFirst")
 	}
 	c.wantError("an unknown route", c.do("GET", "no/such/route", nil), 404, "notFound")
 	c.wantError("POST login with a wrong password", c.do("POST", "login", map[string]string{"name": opt.Name, "password": opt.Password + " wrong"}), 401, "wrongPassword")

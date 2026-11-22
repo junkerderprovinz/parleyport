@@ -38,7 +38,7 @@ const (
 type Ending string
 
 const (
-	EndFirstPassword Ending = "firstPassword" // what was set up while the app was open
+	EndFirstPassword Ending = "firstPassword" // the app closed, so what was set up while it was open ends
 	EndPassword      Ending = "password"      // the password changed
 	EndEverywhere    Ending = "everywhere"    // signed out everywhere
 	EndReset         Ending = "reset"
@@ -211,7 +211,10 @@ type Auth struct {
 	// noPassword is whether no account has a password, which opens the app
 	// unless Config.Closed keeps it closed.
 	noPassword atomic.Bool
-	imported   time.Time
+	// byService is whether a sign-in service an admin added is on, which
+	// closes the app without a password.
+	byService atomic.Bool
+	imported  time.Time
 
 	argon    chan struct{}
 	dummy    string
@@ -323,7 +326,7 @@ func (a *Auth) Close() error {
 
 // Anyone reports whether nobody can sign in, so every visitor is admin.
 func (a *Auth) Anyone() bool {
-	return a.noPassword.Load() && (a.cfg.Closed == nil || !a.cfg.Closed())
+	return a.noPassword.Load() && !a.byService.Load() && (a.cfg.Closed == nil || !a.cfg.Closed())
 }
 
 // From returns the visitor Guard found for the request of ctx.
@@ -403,6 +406,17 @@ func (a *Auth) refreshOpen(ctx context.Context) error {
 		}
 	}
 	a.noPassword.Store(open)
+	all, err := a.services(ctx)
+	if err != nil {
+		return fmt.Errorf("signin: reading the store: %w", err)
+	}
+	on := false
+	for _, s := range all {
+		if s.On && !s.Pinned {
+			on = true
+		}
+	}
+	a.byService.Store(on)
 	return nil
 }
 

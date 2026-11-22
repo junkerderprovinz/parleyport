@@ -1,46 +1,13 @@
 package signin_test
 
 import (
-	"context"
-	"encoding/json"
 	"net/url"
 	"slices"
 	"strings"
 	"testing"
 
-	"github.com/junkerderprovinz/parleyport/kit/signin"
 	"github.com/junkerderprovinz/parleyport/kit/signin/signintest"
 )
-
-func TestAnAddedServiceLetsNobodyInWithoutAPassword(t *testing.T) {
-	config := signintest.NewProvider(t)
-	a := newApp(t, fromConfig(config, false))
-	owner := a.owner()
-	p, id := addService(t, a, owner, "pocket-id")
-	ownerID := owner.visitor().Account
-	raw, err := a.store.Get(context.Background(), "account", ownerID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var acc map[string]any
-	if err := json.Unmarshal(raw, &acc); err != nil {
-		t.Fatal(err)
-	}
-	delete(acc, "password")
-	raw, _ = json.Marshal(acc)
-	if err := a.store.Apply(context.Background(), signin.Doc{Kind: "account", ID: ownerID, Data: raw}); err != nil {
-		t.Fatal(err)
-	}
-	a.cfg = withOption(a.cfg, closed)
-	a.open()
-	if svcs := a.browser().api("GET", "options", nil).json(t)["services"].([]any); len(svcs) != 1 || svcs[0].(map[string]any)["id"] != "config" {
-		t.Fatalf("options offers %v without a password", svcs)
-	}
-	p.Next(ownerAtService)
-	if got := a.browser().serviceSignIn(p, id); got != "/home?signin=serviceOff" {
-		t.Fatalf("an added service without a password ended at %s", got)
-	}
-}
 
 func TestAServiceFromTheConfigLetsNobodyInWhileTheAppIsOpen(t *testing.T) {
 	p := signintest.NewProvider(t)

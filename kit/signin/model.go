@@ -107,6 +107,9 @@ type apiToken struct {
 	Used    time.Time `json:"used,omitzero"`
 	Digest  string    `json:"digest"`
 	Legacy  bool      `json:"legacy,omitempty"`
+	// Open marks a token made while the app was open, which ends when it
+	// closes.
+	Open bool `json:"open,omitempty"`
 }
 
 func (a *Auth) doc(kind, id string, v any) Doc {

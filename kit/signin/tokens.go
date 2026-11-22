@@ -2,6 +2,7 @@ package signin
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"slices"
 	"strings"
@@ -24,10 +25,12 @@ type Token struct {
 	Created time.Time `json:"created"`
 	Used    time.Time `json:"used,omitzero"`
 	Expires time.Time `json:"expires,omitzero"`
+	// EndsWhenClosed marks a token made while the app was open.
+	EndsWhenClosed bool `json:"endsWhenClosed,omitempty"`
 }
 
 func (a *Auth) getTokens(w http.ResponseWriter, r *http.Request, f *found) {
-	out, err := a.tokensOf(r.Context(), f.v.Account)
+	out, err := a.tokensOf(r.Context(), a.tokenAccount(r.Context(), f))
 	if err != nil {
 		a.internal(w, err)
 		return
@@ -44,7 +47,7 @@ func (a *Auth) tokensOf(ctx context.Context, account string) ([]Token, error) {
 	out := []Token{}
 	for _, id := range ids {
 		if t := all[id]; t.Account == account {
-			out = append(out, Token{ID: id, Name: t.Name, Scopes: t.Scopes, Created: t.Created, Used: t.Used, Expires: t.Expires})
+			out = append(out, Token{ID: id, Name: t.Name, Scopes: t.Scopes, Created: t.Created, Used: t.Used, Expires: t.Expires, EndsWhenClosed: t.Open})
 		}
 	}
 	slices.SortFunc(out, func(x, y Token) int { return x.Created.Compare(y.Created) })
@@ -94,7 +97,17 @@ func (a *Auth) postToken(w http.ResponseWriter, r *http.Request, f *found) {
 		return
 	}
 	t.Digest = a.macHex("token", tok.Secret)
-	err = a.Mint(r, func() error { return a.cfg.Store.Apply(r.Context(), a.doc(kindToken, tok.ID, t)) })
+	err = a.Mint(r, func() error {
+		var docs []Doc
+		if f.v.Via == ViaAnyone {
+			acc, more, err := a.openOwner(r.Context())
+			if err != nil {
+				return err
+			}
+			t.Account, t.Open, docs = acc.ID, true, more
+		}
+		return a.cfg.Store.Apply(r.Context(), append(docs, a.doc(kindToken, tok.ID, t))...)
+	})
 	if err == ErrNotFresh {
 		a.notFresh(w, r, f)
 		return
@@ -103,13 +116,13 @@ func (a *Auth) postToken(w http.ResponseWriter, r *http.Request, f *found) {
 		a.internal(w, err)
 		return
 	}
-	a.note(r.Context(), r, Entry{Account: f.v.Account, Name: f.v.Name, Via: ViaToken, Result: "tokenMade"})
-	ok(w, map[string]any{"token": Token{ID: tok.ID, Name: t.Name, Scopes: t.Scopes, Created: t.Created, Expires: t.Expires}, "value": tok.Value})
+	a.note(r.Context(), r, Entry{Account: t.Account, Name: f.v.Name, Via: ViaToken, Result: "tokenMade"})
+	ok(w, map[string]any{"token": Token{ID: tok.ID, Name: t.Name, Scopes: t.Scopes, Created: t.Created, Expires: t.Expires, EndsWhenClosed: t.Open}, "value": tok.Value})
 }
 
 func (a *Auth) deleteToken(w http.ResponseWriter, r *http.Request, f *found) {
 	a.mu.Lock()
-	err := a.removeToken(r.Context(), f.v.Account, r.PathValue("id"))
+	err := a.removeToken(r.Context(), a.tokenAccount(r.Context(), f), r.PathValue("id"))
 	a.mu.Unlock()
 	if err != nil {
 		a.answer(w, r, f, err)
@@ -117,6 +130,27 @@ func (a *Auth) deleteToken(w http.ResponseWriter, r *http.Request, f *found) {
 	}
 	a.runEndings(r.Context())
 	ok(w, nil)
+}
+
+// tokenAccount is the account whose tokens f's visitor manages: its own,
+// or while the app is open the owner's.
+func (a *Auth) tokenAccount(ctx context.Context, f *found) string {
+	if f.v.Via != ViaAnyone {
+		return f.v.Account
+	}
+	if acc, err := a.owner(ctx); err == nil {
+		return acc.ID
+	}
+	return ""
+}
+
+// openTokens returns deletes for the tokens made while the app was open,
+// which end when it closes. The caller holds mu.
+func (a *Auth) openTokens(ctx context.Context) ([]Doc, error) {
+	return a.wipe(ctx, kindToken, func(b []byte) bool {
+		var t apiToken
+		return json.Unmarshal(b, &t) == nil && t.Open
+	})
 }
 
 // removeToken deletes the token id of account. The caller holds mu.

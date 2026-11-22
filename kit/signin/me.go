@@ -181,7 +181,14 @@ func (a *Auth) firstPassword(w http.ResponseWriter, r *http.Request, f *found, n
 	}
 	acc.Password, acc.LegacyPassword = hash, ""
 	acc.Epoch++
-	docs := append(a.endingsOf(acc, EndFirstPassword), a.doc(kindAccount, acc.ID, acc))
+	docs, err := a.openTokens(ctx)
+	if err != nil {
+		a.mu.Unlock()
+		a.internal(w, err)
+		return
+	}
+	docs = append(docs, a.endingsOf(acc, EndFirstPassword)...)
+	docs = append(docs, a.doc(kindAccount, acc.ID, acc))
 	docs = append(docs, a.newSession(w, r, f, sessionOf(acc, ViaPassword, ""))...)
 	err = a.cfg.Store.Apply(ctx, docs...)
 	if err == nil {
@@ -212,6 +219,22 @@ func (a *Auth) newOwner(ctx context.Context, name string) (*account, error) {
 		return nil, err
 	}
 	return acc, a.changing(ctx, changeOf(ChangeCreate, acc))
+}
+
+// openOwner is the owner while the app is open, made without a password
+// when there is none yet, with the docs that write it. The caller holds mu.
+func (a *Auth) openOwner(ctx context.Context) (*account, []Doc, error) {
+	acc, err := a.owner(ctx)
+	if err == nil {
+		return acc, nil, nil
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return nil, nil, err
+	}
+	if acc, err = a.newOwner(ctx, a.roles[0]); err != nil {
+		return nil, nil, err
+	}
+	return acc, []Doc{a.doc(kindAccount, acc.ID, acc)}, nil
 }
 
 // deletePassword takes the owner's password away. With no password left
