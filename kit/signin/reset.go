@@ -115,7 +115,7 @@ func (a *Auth) postReset(w http.ResponseWriter, r *http.Request, f *found) {
 	}
 	a.runEndings(ctx)
 	a.note(ctx, r, Entry{Account: acc.ID, Name: acc.Name, Via: ViaPassword, Result: "reset"})
-	ok(w, map[string]any{"removed": removed, "visitor": a.visitorOf(acc, ViaPassword, "")})
+	ok(w, a.hint(in.Password, map[string]any{"removed": removed, "visitor": a.visitorOf(acc, ViaPassword, "")}))
 }
 
 // resetDocs is everything a reset changes. Whoever knew the old password may

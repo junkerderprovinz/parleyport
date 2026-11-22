@@ -128,6 +128,7 @@ paths:
                 required: [removed, visitor]
                 properties:
                   visitor: { $ref: "#/components/schemas/Visitor" }
+                  short: { $ref: "#/components/schemas/Short" }
                   removed:
                     type: object
                     required: [tokens, passkeys, twoFactor, services]
@@ -171,7 +172,7 @@ paths:
                 current: { type: string }
                 next: { type: string, maxLength: 1024 }
       responses:
-        "200": { $ref: "#/components/responses/Done" }
+        "200": { $ref: "#/components/responses/PasswordSet" }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
@@ -760,6 +761,16 @@ components:
             required: [account]
             properties:
               account: { $ref: "#/components/schemas/Account" }
+              short: { $ref: "#/components/schemas/Short" }
+    PasswordSet:
+      description: The password is set. The first one also signs in.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              visitor: { $ref: "#/components/schemas/Visitor" }
+              short: { $ref: "#/components/schemas/Short" }
     OneService:
       description: The sign-in service.
       content:
@@ -815,7 +826,7 @@ components:
             - passkeyUnknown
             - passwordLong
             - passwordSet
-            - passwordShort
+            - passwordMissing
 
             - resetRefused
             - roleUnknown
@@ -840,7 +851,6 @@ components:
             - wrongPassword
         retryAfter: { type: integer, description: Seconds, with throttled. }
         askPassword: { type: boolean, description: With signInAgain, whether the app may ask for the password through me/confirm instead of a new sign-in. }
-        min: { type: integer, description: The shortest password, with passwordShort. }
         scope: { type: string, description: The scope it does not know, with scopeUnknown. }
     RedirectCode:
       description: What comes back to the return path of a browser route as ?signin=<code>.
@@ -894,7 +904,7 @@ components:
       properties:
         open: { type: boolean, description: Nobody can sign in, so everyone is admin. }
         owner: { type: boolean, description: One local account, so the page asks for no name. }
-        minPassword: { type: integer }
+        minPassword: { type: integer, description: Below this many characters a new password is taken with a hint, never refused. }
         signedIn: { type: boolean }
         passkeys: { type: boolean, description: Ask for passkeys with conditional mediation. }
         renew: { type: string, description: The sign-in service whose session can be renewed without asking. }
@@ -975,6 +985,9 @@ components:
         password: { type: boolean }
         twoFactor: { type: boolean }
         groups: { type: array, items: { type: string } }
+    Short:
+      type: boolean
+      description: The password is shorter than minPassword of GET options. It is taken, and the app may say it is short.
     Roles:
       type: object
       required: [roles, serviceRole]

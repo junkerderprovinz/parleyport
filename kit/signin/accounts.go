@@ -190,7 +190,7 @@ func (a *Auth) postAccount(w http.ResponseWriter, r *http.Request, f *found) {
 		a.answer(w, r, f, err)
 		return
 	}
-	ok(w, map[string]any{"account": a.viewOf(acc)})
+	ok(w, a.hint(in.Password, map[string]any{"account": a.viewOf(acc)}))
 }
 
 // createAccount adds a local account with a password, as the admin of r.
@@ -285,14 +285,16 @@ func (a *Auth) changeAccount(r *http.Request, f *found, id string, in accountCha
 
 func (a *Auth) changeLocked(r *http.Request, f *found, id string, in accountChange) (*account, error) {
 	ctx := r.Context()
-	if _, err := a.stillValid(ctx, f); err != nil {
+	if err := a.stillAllowed(ctx, f); err != nil {
 		return nil, refuse(http.StatusUnauthorized, "signInFirst")
 	}
 	acc, err := a.account(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	if acc.Owner && (in.Role != nil || in.Blocked != nil || (in.Name != nil && f.v.Account != acc.ID)) {
+	// While the app is open everyone stands in for the owner.
+	self := f.v.Account == acc.ID || f.v.Via == ViaAnyone
+	if acc.Owner && (in.Role != nil || in.Blocked != nil || (in.Name != nil && !self)) {
 		return nil, refuse(http.StatusForbidden, "accountOwner")
 	}
 	var why Ending
@@ -361,7 +363,7 @@ func (a *Auth) removeAccount(r *http.Request, f *found, id string) error {
 
 func (a *Auth) removeLocked(r *http.Request, f *found, id string) error {
 	ctx := r.Context()
-	if _, err := a.stillValid(ctx, f); err != nil {
+	if err := a.stillAllowed(ctx, f); err != nil {
 		return refuse(http.StatusUnauthorized, "signInFirst")
 	}
 	acc, err := a.account(ctx, id)

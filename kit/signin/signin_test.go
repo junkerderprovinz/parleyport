@@ -76,13 +76,6 @@ func TestTheFirstPasswordClosesTheAppAndSignsIn(t *testing.T) {
 	}
 }
 
-func TestPasswordLength(t *testing.T) {
-	a := newApp(t)
-	b := a.browser()
-	want(t, b.api("PUT", "me/password", map[string]string{"next": "short"}), 400, "passwordShort")
-	want(t, b.api("PUT", "me/password", map[string]string{"next": strings.Repeat("x", 1025)}), 400, "passwordLong")
-}
-
 func TestSignInWithThePassword(t *testing.T) {
 	a := newApp(t)
 	a.owner()

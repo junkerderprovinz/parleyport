@@ -35,26 +35,32 @@ func (a *Auth) getMe(w http.ResponseWriter, r *http.Request, f *found) {
 
 // checkNew answers when pw cannot be a password and reports whether it can.
 func (a *Auth) checkNew(w http.ResponseWriter, pw string) bool {
-	var no *Refusal
-	switch err := a.newPassword(pw); {
-	case errors.As(err, &no) && no.Code == "passwordShort":
-		fail(w, no.Status, no.Code, "min", a.minPass)
-	case err != nil:
+	if err := a.newPassword(pw); err != nil {
 		a.answer(w, nil, nil, err)
-	default:
-		return true
+		return false
 	}
-	return false
+	return true
 }
 
+// newPassword refuses only what cannot be a password. One under
+// MinPassword is taken, with a hint in the answer.
 func (a *Auth) newPassword(pw string) error {
-	if len(pw) > maxPassword {
+	switch {
+	case pw == "":
+		return refuse(http.StatusBadRequest, "passwordMissing")
+	case len(pw) > maxPassword:
 		return refuse(http.StatusBadRequest, "passwordLong")
 	}
-	if utf8.RuneCountInString(pw) < a.minPass {
-		return refuse(http.StatusBadRequest, "passwordShort")
-	}
 	return nil
+}
+
+// hint adds short to out when pw is under MinPassword, for the app to say
+// so.
+func (a *Auth) hint(pw string, out map[string]any) map[string]any {
+	if utf8.RuneCountInString(pw) < a.minPass {
+		out["short"] = true
+	}
+	return out
 }
 
 func (a *Auth) putPassword(w http.ResponseWriter, r *http.Request, f *found) {
@@ -111,7 +117,7 @@ func (a *Auth) putPassword(w http.ResponseWriter, r *http.Request, f *found) {
 	}
 	a.runEndings(ctx)
 	a.note(ctx, r, Entry{Account: acc.ID, Name: acc.Name, Result: "passwordChanged"})
-	ok(w, nil)
+	ok(w, a.hint(in.Next, map[string]any{}))
 }
 
 // passwordAgain checks the password of the signed-in account a change asks
@@ -188,7 +194,7 @@ func (a *Auth) firstPassword(w http.ResponseWriter, r *http.Request, f *found, n
 	}
 	a.runEndings(ctx)
 	a.note(ctx, r, Entry{Account: acc.ID, Name: acc.Name, Via: ViaPassword, Result: "firstPassword"})
-	ok(w, map[string]any{"visitor": a.visitorOf(acc, ViaPassword, "")})
+	ok(w, a.hint(pw, map[string]any{"visitor": a.visitorOf(acc, ViaPassword, "")}))
 }
 
 // newOwner is the account the first password makes, under a name nobody

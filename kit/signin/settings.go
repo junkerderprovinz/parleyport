@@ -68,7 +68,7 @@ func (a *Auth) patchSettings(w http.ResponseWriter, r *http.Request, f *found) {
 	}
 	ctx := r.Context()
 	a.mu.Lock()
-	if _, err := a.stillValid(ctx, f); err != nil {
+	if err := a.stillAllowed(ctx, f); err != nil {
 		a.mu.Unlock()
 		fail(w, http.StatusUnauthorized, "signInFirst")
 		return

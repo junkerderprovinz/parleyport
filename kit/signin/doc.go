@@ -28,8 +28,10 @@
 //   - Passkey, two-factor, session and API token mean what they mean
 //     anywhere.
 //
-// Until a password is set nobody can sign in, so the app is open and every
-// visitor is admin. Sign-in services, passkeys and tokens wait for that
+// A password is always optional, and every part of an app works without
+// one. Until a password is set nobody can sign in, so the app is open and
+// every visitor is admin. A password of any length is taken; one under
+// Config.MinPassword comes back with a hint the app may show. Sign-in services, passkeys and tokens wait for that
 // password, which keeps the owner able to get in when a service is down. An
 // app behind a service that guards it as a reverse proxy sets no password,
 // and that service alone protects it. An app that one of its own
@@ -43,5 +45,5 @@
 // one of the app's ways in open.
 //
 // The package names no app and carries no text. Errors are codes such as
-// passwordShort, and the user interface turns them into sentences.
+// passwordLong, and the user interface turns them into sentences.
 package signin

@@ -23,15 +23,37 @@ func (a *Auth) admin(r *http.Request) (*found, error) {
 	return a.reader(r)
 }
 
+// passwordAdmin is admin for a change that gives an account a password.
+// While the app is open the first password is the owner's own.
+func (a *Auth) passwordAdmin(r *http.Request) (*found, error) {
+	f, err := a.admin(r)
+	if err == nil && f.v.Via == ViaAnyone {
+		return nil, refuse(http.StatusConflict, "setPasswordFirst")
+	}
+	return f, err
+}
+
+// stillAllowed is stillValid for an admin of the account routes, which is
+// everyone while the app is open. The caller holds mu.
+func (a *Auth) stillAllowed(ctx context.Context, f *found) error {
+	if f.v.Via == ViaAnyone {
+		if !a.Anyone() {
+			return errors.New("the app closed")
+		}
+		return nil
+	}
+	_, err := a.stillValid(ctx, f)
+	return err
+}
+
 // reader returns what Guard found for r when it is an admin, by a session
-// or an API token, who may look at other accounts.
+// or an API token, or everyone while the app is open, who may look at
+// other accounts.
 func (a *Auth) reader(r *http.Request) (*found, error) {
 	f := a.foundIn(r)
 	switch {
 	case !f.ok:
 		return nil, refuse(http.StatusUnauthorized, "signInFirst")
-	case f.v.Via == ViaAnyone:
-		return nil, refuse(http.StatusConflict, "setPasswordFirst")
 	case f.v.Via == ViaDoor || !f.v.AtLeast(a.roles[0]):
 		return nil, refuse(http.StatusForbidden, "forbidden")
 	}
@@ -126,7 +148,7 @@ func (a *Auth) CheckPassword(r *http.Request, bucket, name, pw string) (Visitor,
 // CreateAccount adds a local account with a password. It wants a fresh
 // sign-in of the admin, as a new lasting way in does.
 func (a *Auth) CreateAccount(r *http.Request, name, password, role string) (Account, error) {
-	if _, err := a.admin(r); err != nil {
+	if _, err := a.passwordAdmin(r); err != nil {
 		return Account{}, err
 	}
 	acc, err := a.createAccount(r, name, password, role)
@@ -176,7 +198,7 @@ func (a *Auth) RemoveAccount(r *http.Request, id string) error {
 // sessions as a password change does and leaves its tokens. It wants a
 // fresh sign-in of the admin.
 func (a *Auth) SetPassword(r *http.Request, id, password string) error {
-	f, err := a.admin(r)
+	f, err := a.passwordAdmin(r)
 	if err != nil {
 		return err
 	}
@@ -254,7 +276,7 @@ func (a *Auth) otherAccount(ctx context.Context, f *found, id string) (*account,
 func (a *Auth) locked(ctx context.Context, f *found, fn func() error) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if _, err := a.stillValid(ctx, f); err != nil {
+	if err := a.stillAllowed(ctx, f); err != nil {
 		return refuse(http.StatusUnauthorized, "signInFirst")
 	}
 	return fn()

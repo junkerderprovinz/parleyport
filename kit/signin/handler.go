@@ -41,6 +41,7 @@ const (
 	member                     // an account signed in through a session
 	admin                      // a visitor with the admin role
 	adminAccount               // an admin signed in as an account, so not while the app is open
+	adminOpen                  // an admin signed in as an account, or everyone while the app is open
 )
 
 type route func(w http.ResponseWriter, r *http.Request, f *found)
@@ -136,7 +137,11 @@ func (a *Auth) serveAPI(w http.ResponseWriter, r *http.Request, pattern string, 
 				return
 			}
 		}
-		if (need == admin || need == adminAccount) && !f.v.AtLeast(a.roles[0]) {
+		if need == adminOpen && f.v.Via == ViaDoor {
+			fail(w, http.StatusForbidden, "forbidden")
+			return
+		}
+		if (need == admin || need == adminAccount || need == adminOpen) && !f.v.AtLeast(a.roles[0]) {
 			fail(w, http.StatusForbidden, "forbidden")
 			return
 		}
@@ -313,8 +318,8 @@ func (a *Auth) api() []apiRoute {
 		{"DELETE me/tokens/{id}", member, a.deleteToken},
 		{"GET accounts", admin, a.getAccounts},
 		{"POST accounts", adminAccount, a.postAccount},
-		{"PATCH accounts/{id}", adminAccount, a.patchAccount},
-		{"DELETE accounts/{id}", adminAccount, a.deleteAccount},
+		{"PATCH accounts/{id}", adminOpen, a.patchAccount},
+		{"DELETE accounts/{id}", adminOpen, a.deleteAccount},
 		{"GET roles", admin, a.getRoles},
 		{"GET methods/presets", admin, a.getPresets},
 		{"GET methods/oidc", admin, a.getServices},
@@ -324,7 +329,7 @@ func (a *Auth) api() []apiRoute {
 		{"POST methods/oidc/{id}/check", adminAccount, a.postServiceCheck},
 		{"POST methods/oidc/{id}/test", adminAccount, a.postServiceTest},
 		{"GET settings", admin, a.getSettings},
-		{"PATCH settings", adminAccount, a.patchSettings},
+		{"PATCH settings", adminOpen, a.patchSettings},
 		{"GET log", admin, a.getLog},
 	}
 }

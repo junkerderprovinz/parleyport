@@ -50,7 +50,6 @@ func TestOnlyAnAdminSetsTheQuestion(t *testing.T) {
 	owner := a.owner()
 	addAccount(t, owner, "anna", "viewer")
 	want(t, a.signInAs("anna").api("PATCH", "settings", map[string]bool{"askPassword": false}), 403, "forbidden")
-	want(t, newApp(t).browser().api("PATCH", "settings", map[string]bool{"askPassword": false}), 409, "setPasswordFirst")
 }
 
 func TestAnAccountWithoutAPasswordIsNotAskedForOne(t *testing.T) {

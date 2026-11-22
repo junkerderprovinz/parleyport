@@ -102,7 +102,8 @@ type Config struct {
 	// one on a Unix socket. Proxies still name those further along
 	// X-Forwarded-For.
 	TrustedPeer func(*http.Request) bool
-	// MinPassword is the shortest password in characters. Zero is 12.
+	// MinPassword is the length in characters under which a new password
+	// comes with a hint. It never refuses one. Zero is 12.
 	MinPassword int
 	// NewID makes the id of a new account, for an app whose own tables
 	// want ids of their form. Nil is 12 random characters. An id that an

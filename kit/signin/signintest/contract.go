@@ -70,6 +70,7 @@ func check(h http.Handler, opt Options) []string {
 	}
 	c.matches("GET me", c.do("GET", "me", nil), 200, "Me")
 	c.matches("GET me/sessions", c.do("GET", "me/sessions", nil), 200, "")
+	c.wantError("PUT me/password with a one-letter password and a wrong current one", c.do("PUT", "me/password", map[string]string{"current": opt.Password + " wrong", "next": "x"}), 401, "wrongPassword")
 	if roles := c.do("GET", "roles", nil); roles.Code != http.StatusForbidden {
 		c.matches("GET roles", roles, 200, "Roles")
 	}
