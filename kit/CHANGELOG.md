@@ -13,7 +13,7 @@ An app without a password opens through the fortress like any other.
 
 ## 🐛 Fixed
 
-- **An app without a password opens through the fortress.** A member whose app asks for no sign-in of its own answered `ui_no_login` and stayed shut, so a password was the price of opening it from elsewhere. It now serves its interface like any other, and an app with a password still asks for it on the opened page. A member on an older kit still answers `ui_no_login`, and the opening side still shows that.
+- **An app without a password opens through the fortress.** A member whose app asks for no sign-in of its own answered `ui_no_login` and stayed shut, so you had to set a password before you could open it from elsewhere. It now serves its interface, and an app with a password still asks for it on the opened page. A member still on an older kit keeps answering `ui_no_login`, and the opening side still explains that.
 
 ## 1.0.5 - 2026-11-19
 
