@@ -2,6 +2,19 @@
 
 Every version of the kit, written by hand. The kit is versioned apart from the server, with tags of the form `kit/vX.Y.Z`. What changed in the relay itself is in the [server's release notes](https://github.com/junkerderprovinz/parleyport/releases).
 
+## 1.0.6 - 2026-11-22
+
+An app without a password opens through the fortress like any other.
+
+**Adopting apps:**
+
+- **Moving up:** `go get github.com/junkerderprovinz/parleyport/kit@v1.0.6`. `fortress.UI.SignIn` is no longer read, so an app may drop it, and code that sets it builds unchanged.
+- **Plugins:** take `cmd/fortress` from the ParleyPort release that carries kit 1.0.6.
+
+## 🐛 Fixed
+
+- **An app without a password opens through the fortress.** A member whose app asks for no sign-in of its own answered `ui_no_login` and stayed shut, so a password was the price of opening it from elsewhere. It now serves its interface like any other, and an app with a password still asks for it on the opened page. A member on an older kit still answers `ui_no_login`, and the opening side still shows that.
+
 ## 1.0.5 - 2026-11-19
 
 A member that closes while it checks a newcomer no longer shuts that newcomer out.

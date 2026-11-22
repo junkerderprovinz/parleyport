@@ -268,7 +268,7 @@ func (cfg Config) check() error {
 	case len(cfg.Actions) > maxNames || len(cfg.Uses) > maxNames:
 		return errors.New("fortress: too many actions")
 	case cfg.UI != nil && !cfg.UI.complete():
-		return errors.New("fortress: an interface needs a handler, SignIn and Opened")
+		return errors.New("fortress: an interface needs a handler and Opened")
 	}
 	seen := map[string]bool{}
 	for _, a := range cfg.Actions {

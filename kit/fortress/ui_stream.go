@@ -295,11 +295,6 @@ func (f *Fortress) serveStream(w http.ResponseWriter, r *http.Request, caller st
 		f.dropCaller(caller)
 		return
 	}
-	if !f.ui.SignIn() {
-		f.dropCaller(caller)
-		writeError(w, http.StatusForbidden, "ui_no_login")
-		return
-	}
 	raw, err := io.ReadAll(r.Body)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request")

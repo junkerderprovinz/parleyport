@@ -30,12 +30,12 @@ const OpenAction = "ui.open"
 // per opening member and sign-in there, and never reach the browser.
 type UI struct {
 	// Handler serves the interface as a browser reaches it, with the app's
-	// own sign-in in front. Opened tells its requests apart, so that it can
-	// keep doors such as a password reset closed to them.
+	// own sign-in in front when the app has one. Opened tells its requests
+	// apart, so that it can keep doors such as a password reset closed to
+	// them.
 	Handler http.Handler
-	// SignIn reports whether the app asks for its own sign-in now. While it
-	// does not, the fortress opens nothing, since every phrase holder could
-	// then use the app.
+	// SignIn is not read: the interface opens whether or not the app asks
+	// for its own sign-in, and an app may leave it out.
 	SignIn func() bool
 	// Opened runs when a member starts a new session here, for the app's
 	// activity log, so that every opening shows up afterwards.
@@ -43,7 +43,7 @@ type UI struct {
 }
 
 func (u *UI) complete() bool {
-	return u.Handler != nil && u.SignIn != nil && u.Opened != nil
+	return u.Handler != nil && u.Opened != nil
 }
 
 const (
@@ -208,10 +208,6 @@ func (f *Fortress) checkUI(w http.ResponseWriter, r *http.Request, caller string
 		f.dropCaller(caller)
 		return
 	}
-	if !f.ui.SignIn() {
-		writeError(w, http.StatusForbidden, "ui_no_login")
-		return
-	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -230,11 +226,6 @@ func (f *Fortress) serveUI(w http.ResponseWriter, r *http.Request, caller string
 	from, ok := f.allowed(w, r, caller, OpenAction)
 	if !ok {
 		f.dropCaller(caller)
-		return
-	}
-	if !f.ui.SignIn() {
-		f.dropCaller(caller)
-		writeError(w, http.StatusForbidden, "ui_no_login")
 		return
 	}
 	raw, err := io.ReadAll(r.Body)
