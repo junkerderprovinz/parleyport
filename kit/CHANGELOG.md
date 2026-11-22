@@ -26,6 +26,19 @@ One sign-in for every app of the kit, in the new package `signin`.
 - **A service that sends an empty groups claim is told apart from one that sends none.** `Hooks.Admit` and `Hooks.SignedIn` get an empty list for someone who left every group and nil for a missing claim, on sign-in and renewal alike.
 - **It works below a base path and behind a Unix socket.** `Config.Base` keeps cookies and every way back under the app's path, and `Config.TrustedPeer` names a proxy without an address.
 
+## 1.0.6 - 2026-11-22
+
+An app without a password opens through the fortress like any other.
+
+**Adopting apps:**
+
+- **Moving up:** `go get github.com/junkerderprovinz/parleyport/kit@v1.0.6`. `fortress.UI.SignIn` is no longer read, so an app may drop it, and code that sets it builds unchanged.
+- **Plugins:** take `cmd/fortress` from the ParleyPort release that carries kit 1.0.6.
+
+## 🐛 Fixed
+
+- **An app without a password opens through the fortress.** A member whose app asks for no sign-in of its own answered `ui_no_login` and stayed shut, so you had to set a password before you could open it from elsewhere. It now serves its interface, and an app with a password still asks for it on the opened page. A member still on an older kit keeps answering `ui_no_login`, and the opening side still explains that.
+
 ## 1.0.5 - 2026-11-19
 
 A member that closes while it checks a newcomer no longer shuts that newcomer out.

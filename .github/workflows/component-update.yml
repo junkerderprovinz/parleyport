@@ -1,0 +1,16 @@
+name: Component update
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  issue:
+    permissions:
+      issues: write
+      pull-requests: read
+    uses: junkerderprovinz/junkerderprovinz/.github/workflows/component-update.yml@9b47b5906ffba390d9d09650ddabb5ce5a975551 # main

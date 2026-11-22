@@ -47,15 +47,15 @@ const (
 	maxAge = 24 * time.Hour
 )
 
-// Visit is a signed-in user of this app opening member's web interface.
+// Visit is a user of this app opening a member's web interface.
 type Visit struct {
 	// Member is the member's ID.
 	Member string
-	// Session names the user's sign-in here, which only a password session
-	// may give: the opened app keeps that sign-in's session apart from any
-	// other. It never leaves this instance.
+	// Session names the user's session here, signed in or, in an app
+	// without a password, a visitor's own: the opened app keeps each
+	// session apart from any other. It never leaves this instance.
 	Session string
-	// Valid reports whether that sign-in still stands; the tab closes once
+	// Valid reports whether that session still stands; the tab closes once
 	// it does not.
 	Valid func() bool
 	// Back is the page of this app the bar's close button leads to.
@@ -153,8 +153,8 @@ func (ts *tickets) dropMember(member string) {
 // returns the path of a new tab on it, under OpenPath. It fails with
 // group.ErrNoSuchMember, group.ErrUnreachable, ErrNoSuchAction for a member
 // without an interface, ErrPermissionOff (ErrNotUsed when Config.Uses lacks
-// OpenAction) or a *Refusal, such as "ui_no_login" for a member that asks
-// for no sign-in of its own.
+// OpenAction) or a *Refusal, such as "busy" for a member that serves too
+// many pages at once.
 func (f *Fortress) Open(ctx context.Context, v Visit) (string, error) {
 	if v.Member == "" || v.Session == "" || v.Valid == nil {
 		return "", errors.New("fortress: a visit needs a member, a session and Valid")
@@ -439,6 +439,8 @@ func refusedCode(status int, body []byte) (string, int) {
 	case "too_large", "answerTooLarge":
 		return "too_large", http.StatusRequestEntityTooLarge
 	case "ui_no_login":
+		// A member on an older kit still answers this for an app without a
+		// password.
 		return "ui_no_login", http.StatusForbidden
 	case "busy", "jars_full":
 		return "busy", http.StatusServiceUnavailable

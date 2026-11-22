@@ -298,23 +298,36 @@ func TestTheSignInOfTheOpenedAppStaysWithIt(t *testing.T) {
 	}
 }
 
-func TestAnAppWithoutItsOwnSignInOpensNothing(t *testing.T) {
+func TestAnAppWithoutAPasswordOpensLikeAnyOther(t *testing.T) {
 	a, b, app := opening(t, false)
-	if _, err := a.f.Open(ctx(t), visit(a, b)); refusalCode(err) != "ui_no_login" {
-		t.Fatalf("Open = %v, want ui_no_login", err)
-	}
-	app.setPassword(true)
 	path, err := a.f.Open(ctx(t), visit(a, b))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("an app without a password did not open: %v", err)
 	}
 	br := browse(t, a)
 	if res := br.get(path + "/"); res.StatusCode != http.StatusOK {
-		t.Fatalf("with a password: %d", res.StatusCode)
+		t.Fatalf("without a password: %d", res.StatusCode)
+	}
+	app.setPassword(true)
+	if res := br.get(path + "/"); res.StatusCode != http.StatusOK {
+		t.Fatalf("after a password was set: %d", res.StatusCode)
 	}
 	app.setPassword(false)
-	if res := br.get(path + "/"); res.StatusCode == http.StatusOK {
-		t.Fatal("an open tunnel kept working after the password was removed")
+	if res := br.get(path + "/"); res.StatusCode != http.StatusOK {
+		t.Fatalf("after the password was removed again: %d", res.StatusCode)
+	}
+}
+
+func TestAnInterfaceNeedsNoSignInReport(t *testing.T) {
+	app := &webApp{}
+	ui := app.ui()
+	ui.SignIn = nil
+	url := relayServer(t)
+	a := open(t, "alpha", "alpha-1", setup{relay: url, uses: []string{OpenAction}, noPair: true})
+	b := open(t, "bravo", "bravo-1", setup{relay: url, ui: ui, noPair: true})
+	meet(t, a, b)
+	if _, err := a.f.Open(ctx(t), visit(a, b)); err != nil {
+		t.Fatalf("an interface without SignIn did not open: %v", err)
 	}
 }
 
