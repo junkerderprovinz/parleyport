@@ -54,3 +54,33 @@ func TestWordsSayTheAppSentSomethingForAnUnknownCode(t *testing.T) {
 		t.Errorf("bad_answer: %q", got)
 	}
 }
+
+// passwordWords are each language's word for a password, as the sentences
+// write it.
+var passwordWords = map[string]string{
+	"ar": "كلمة مرور", "bg": "парола", "ca": "contrasenya", "cs": "heslo", "da": "adgangskode",
+	"de": "Passwort", "el": "κωδικό", "en": "password", "es": "contraseña", "et": "parool",
+	"eu": "pasahitz", "fa": "رمز", "fi": "salasana", "fr": "mot de passe", "gl": "contrasinal",
+	"he": "סיסמה", "hi": "पासवर्ड", "hr": "lozink", "hu": "jelsz", "id": "kata sandi",
+	"is": "lykilorð", "it": "password", "ja": "パスワード", "ko": "비밀번호", "lt": "slaptažod",
+	"lv": "parol", "ms": "kata laluan", "nl": "wachtwoord", "no": "passord", "pl": "hasł",
+	"pt": "palavra-passe", "ro": "parol", "ru": "парол", "sk": "heslo", "sl": "geslo",
+	"sr": "лозинк", "sv": "lösenord", "th": "รหัสผ่าน", "tr": "parola", "uk": "пароль",
+	"vi": "mật khẩu", "zh": "密码",
+}
+
+// Only a member on an older kit still refuses, where a password would not
+// help.
+func TestAnOlderMembersRefusalAsksForAnUpdate(t *testing.T) {
+	if got := sentences["en"]["ui_no_login"]; got != "This app opens from elsewhere only once it is updated." {
+		t.Errorf("en ui_no_login: %q", got)
+	}
+	if len(passwordWords) != len(sentences) {
+		t.Errorf("%d password words for %d languages", len(passwordWords), len(sentences))
+	}
+	for lang, word := range passwordWords {
+		if s := sentences[lang]["ui_no_login"]; strings.Contains(strings.ToLower(s), strings.ToLower(word)) {
+			t.Errorf("%s ui_no_login still asks for a password: %q", lang, s)
+		}
+	}
+}
