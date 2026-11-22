@@ -72,7 +72,7 @@ var passwordWords = map[string]string{
 // Only a member on an older kit still refuses, where a password would not
 // help.
 func TestAnOlderMembersRefusalAsksForAnUpdate(t *testing.T) {
-	if got := sentences["en"]["ui_no_login"]; got != "This app opens from elsewhere only once it is updated." {
+	if got := sentences["en"]["ui_no_login"]; got != "This app needs an update before you can open it from here." {
 		t.Errorf("en ui_no_login: %q", got)
 	}
 	if len(passwordWords) != len(sentences) {

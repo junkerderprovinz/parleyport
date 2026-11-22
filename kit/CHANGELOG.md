@@ -37,7 +37,7 @@ The refusal of a member on an older kit asks for an update.
 
 ## 🐛 Fixed
 
-- **A page that a member on an older kit refuses says the app needs an update.** Since 1.0.6 only such a member still answers `ui_no_login`, and the page told people to set a password there, which would not help. In every language it now says the app opens from elsewhere once it is updated.
+- **A page that a member on an older kit refuses says the app needs an update.** Since 1.0.6 only such a member still answers `ui_no_login`, and the page told people to set a password there, which would not help. In every language it now says, as GlimStone does, that the app needs an update before you can open it from here.
 
 ## 1.0.6 - 2026-11-22
 
