@@ -102,9 +102,11 @@ func (a *Auth) CheckPassword(r *http.Request, bucket, name, pw string) (Visitor,
 	if addr != "" {
 		addr = bucket + "|" + addr
 	}
-	nameKey := bucket + "|name:" + strings.ToLower(strings.TrimSpace(name))
+	// Wrong guesses for one name count together with the sign-in page's,
+	// so another way to send a password brings no fresh guesses.
+	nameKey := "name:" + strings.ToLower(strings.TrimSpace(name))
 	if a.cfg.Owner {
-		nameKey = bucket + "|name:owner"
+		nameKey = "name:owner"
 	}
 	if wait := max(a.limits.wait(perAddress, addr, now), a.limits.wait(perName, nameKey, now)); wait > 0 {
 		return Visitor{}, &Refusal{Status: http.StatusTooManyRequests, Code: "throttled", Retry: wait}

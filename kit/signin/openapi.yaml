@@ -614,6 +614,10 @@ paths:
     delete:
       operationId: removeService
       summary: Remove a sign-in service
+      description: |
+        When it is the last thing that keeps an app without passwords closed,
+        only the owner removes it or turns it off, fresh from a sign-in, else
+        lastWayIn.
       responses:
         "200": { $ref: "#/components/responses/Done" }
         "404": { $ref: "#/components/responses/Error" }
@@ -831,6 +835,7 @@ components:
             - passwordLong
             - passwordSet
             - passwordMissing
+            - serviceChanged
 
             - resetRefused
             - roleUnknown
@@ -870,6 +875,7 @@ components:
         - noAccount
         - notAdmitted
         - renewNeeded
+        - serviceChanged
         - serviceOff
         - serviceRefused
         - serviceUnknown
@@ -930,6 +936,7 @@ components:
       type: object
       properties:
         return: { type: string, description: A path on the app to come back to. }
+        role: { type: string, description: "For a test sign-in, the role for newcomers the form showed. Another one on the service gives serviceChanged, now or when the browser comes back." }
     Session:
       type: object
       required: [id, via, created, seen, current]

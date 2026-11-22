@@ -438,22 +438,6 @@ func TestCheckPasswordLetsInOnlyWhatThePasswordAloneWould(t *testing.T) {
 	refusal(t, err, "wrongPassword")
 }
 
-func TestCheckPasswordWaitsInBucketsOfItsOwn(t *testing.T) {
-	a := newApp(t, manyAccounts)
-	owner := a.owner()
-	addAccount(t, owner, "anna", "viewer")
-	r := a.browser().requestTo("/dav")
-	for range 6 {
-		_, _ = a.auth.CheckPassword(r, "dav", "anna", "wrong password")
-	}
-	_, err := a.auth.CheckPassword(r, "dav", "anna", "password of anna")
-	refusal(t, err, "throttled")
-	a.signInAs("anna")
-	if _, err := a.auth.CheckPassword(r, "other", "anna", "password of anna"); err != nil {
-		t.Fatalf("another bucket waits too: %v", err)
-	}
-}
-
 func TestCheckPasswordWritesAnOldPasswordAnew(t *testing.T) {
 	old := &oldApp{}
 	a := newApp(t, old.option(oldOwner()))

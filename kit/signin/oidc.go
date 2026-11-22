@@ -52,6 +52,7 @@ type flow struct {
 	Account  string    `json:"account,omitempty"`
 	Session  string    `json:"session,omitempty"`
 	Open     bool      `json:"open,omitempty"`
+	Role     string    `json:"role,omitempty"`
 	Epoch    int       `json:"epoch,omitempty"`
 	Expires  time.Time `json:"expires"`
 }
@@ -67,6 +68,8 @@ type ticket struct {
 	// open marks a test sign-in started while the app was open, for its
 	// owner.
 	open bool
+	// role is the role newcomers get that the test sign-in was started for.
+	role string
 }
 
 type tickets struct {
@@ -214,7 +217,7 @@ func (a *Auth) startService(w http.ResponseWriter, r *http.Request, id, ret stri
 			a.back(w, r, ret, "flowExpired")
 			return
 		}
-		fl.Purpose, fl.Account, fl.Session, fl.Epoch, fl.Open = tk.purpose, tk.account, f.v.session, f.v.epoch, open
+		fl.Purpose, fl.Account, fl.Session, fl.Epoch, fl.Open, fl.Role = tk.purpose, tk.account, f.v.session, f.v.epoch, open, tk.role
 		opts = append(opts, oauth2.SetAuthURLParam("prompt", "login"))
 	case q.Get("renew") != "":
 		if f.renew != s.ID || f.cookie == "" {
@@ -718,6 +721,11 @@ func (a *Auth) bindService(w http.ResponseWriter, r *http.Request, s *service, f
 		a.back(w, r, fl.Return, "serviceOff")
 		return
 	}
+	if fl.Purpose == forTest && fl.Role != a.roleOf(s) {
+		a.mu.Unlock()
+		a.back(w, r, fl.Return, "serviceChanged")
+		return
+	}
 	id := identityID(identityService, who.issuer, who.subject)
 	idn := new(identity)
 	if err := a.load(ctx, kindIdentity, id, idn); err == nil && idn.Account != acc.ID {
@@ -815,6 +823,8 @@ func (a *Auth) endSession(ctx context.Context, id string) {
 func (a *Auth) postServiceTicket(w http.ResponseWriter, r *http.Request, f *found, purpose, id string) {
 	var in struct {
 		Return string `json:"return"`
+		// Role is the role for newcomers the admin's form showed.
+		Role string `json:"role"`
 	}
 	if !readJSON(w, r, smallBody, &in) {
 		return
@@ -832,11 +842,15 @@ func (a *Auth) postServiceTicket(w http.ResponseWriter, r *http.Request, f *foun
 		fail(w, http.StatusConflict, "fromConfig")
 		return
 	}
+	if purpose == forTest && in.Role != "" && in.Role != a.roleOf(s) {
+		fail(w, http.StatusConflict, "serviceChanged")
+		return
+	}
 	if purpose == forLink && !s.On {
 		fail(w, http.StatusConflict, "serviceOff")
 		return
 	}
-	tk := ticket{account: f.v.Account, service: s.ID, purpose: purpose, expires: a.now().Add(ticketLife)}
+	tk := ticket{account: f.v.Account, service: s.ID, purpose: purpose, expires: a.now().Add(ticketLife), role: a.roleOf(s)}
 	if f.v.Via == ViaAnyone {
 		a.mu.Lock()
 		acc, docs, err := a.openOwner(r.Context())

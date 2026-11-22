@@ -186,7 +186,9 @@ func (a *Auth) byToken(ctx context.Context, value string) (Visitor, bool) {
 		return Visitor{}, false
 	}
 	t := new(apiToken)
-	if err := a.load(ctx, kindToken, id, t); err != nil || !equal(t.Digest, digest) {
+	// A token made while the app was open never counts once it closed, by
+	// whatever way it closed.
+	if err := a.load(ctx, kindToken, id, t); err != nil || !equal(t.Digest, digest) || t.Open {
 		return Visitor{}, false
 	}
 	now := a.now()

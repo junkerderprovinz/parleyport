@@ -417,7 +417,17 @@ func (a *Auth) refreshOpen(ctx context.Context) error {
 		}
 	}
 	a.byService.Store(on)
-	return nil
+	if a.Anyone() {
+		return nil
+	}
+	stale, err := a.openTokens(ctx)
+	if err != nil || len(stale) == 0 {
+		return err
+	}
+	if owner, err := a.owner(ctx); err == nil {
+		stale = append(stale, a.ending(owner.ID, EndFirstPassword, false))
+	}
+	return a.cfg.Store.Apply(ctx, stale...)
 }
 
 func defaultPrefix(domain string) string {

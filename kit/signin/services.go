@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -484,6 +483,9 @@ func (a *Auth) saveService(w http.ResponseWriter, r *http.Request, f *found, s *
 	err := a.Mint(r, func() error {
 		docs := []Doc{a.doc(kindService, s.ID, s)}
 		if wasOn && !s.On {
+			if err := a.notLastWay(r.Context(), f, s.ID, true); err != nil {
+				return err
+			}
 			ended, err := a.serviceSessions(r.Context(), s.ID)
 			if err != nil {
 				return err
@@ -495,48 +497,100 @@ func (a *Auth) saveService(w http.ResponseWriter, r *http.Request, f *found, s *
 		}
 		return a.refreshOpen(r.Context())
 	})
-	if errors.Is(err, ErrNotFresh) {
-		a.notFresh(w, r, f)
-		return
-	}
 	if err != nil {
-		a.internal(w, err)
+		a.answer(w, r, f, err)
 		return
 	}
+	a.runEndings(r.Context())
 	ok(w, map[string]any{"service": a.viewService(s)})
 }
 
 func (a *Auth) deleteService(w http.ResponseWriter, r *http.Request, f *found) {
 	id := r.PathValue("id")
+	ctx := r.Context()
 	a.mu.Lock()
-	if err := a.stillAllowed(r.Context(), f); err != nil {
-		a.mu.Unlock()
-		fail(w, http.StatusUnauthorized, "signInFirst")
-		return
-	}
-	s := new(service)
-	err := a.load(r.Context(), kindService, id, s)
-	if err == nil && s.Pinned {
-		a.mu.Unlock()
-		fail(w, http.StatusConflict, "fromConfig")
-		return
-	}
-	var docs []Doc
-	if err == nil {
-		docs, err = a.serviceSessions(r.Context(), id)
-	}
-	if err == nil {
-		err = a.cfg.Store.Apply(r.Context(), append(docs, gone(kindService, id))...)
-	}
-	if err == nil {
-		err = a.refreshOpen(r.Context())
-	}
+	last, err := a.lastWay(ctx, id)
 	a.mu.Unlock()
+	switch {
+	case err != nil:
+	case last && !a.isOwner(ctx, f):
+		err = refuse(http.StatusConflict, "lastWayIn")
+	case last:
+		err = a.Mint(r, func() error { return a.removeService(ctx, f, id, true) })
+	default:
+		err = a.locked(ctx, f, func() error { return a.removeService(ctx, f, id, false) })
+	}
 	if err != nil {
-		a.missing(w, err)
+		a.answer(w, r, f, err)
 		return
 	}
+	a.runEndings(ctx)
 	ok(w, nil)
+}
+
+// removeService deletes the service id and its sessions, as f, who minted
+// the removal when fresh says so. The caller holds mu.
+func (a *Auth) removeService(ctx context.Context, f *found, id string, fresh bool) error {
+	s := new(service)
+	if err := a.load(ctx, kindService, id, s); err != nil {
+		return err
+	}
+	if s.Pinned {
+		return refuse(http.StatusConflict, "fromConfig")
+	}
+	if err := a.notLastWay(ctx, f, id, fresh); err != nil {
+		return err
+	}
+	docs, err := a.serviceSessions(ctx, id)
+	if err != nil {
+		return err
+	}
+	if err := a.cfg.Store.Apply(ctx, append(docs, gone(kindService, id))...); err != nil {
+		return err
+	}
+	return a.refreshOpen(ctx)
+}
+
+// lastWay reports whether the service id is the last thing that keeps the
+// app closed, so turning it off would open it to everyone. The caller
+// holds mu.
+func (a *Auth) lastWay(ctx context.Context, id string) (bool, error) {
+	if !a.noPassword.Load() || (a.cfg.Closed != nil && a.cfg.Closed()) {
+		return false, nil
+	}
+	all, err := a.services(ctx)
+	if err != nil {
+		return false, err
+	}
+	last := false
+	for _, s := range all {
+		switch {
+		case !s.On || s.Pinned:
+		case s.ID != id:
+			return false, nil
+		default:
+			last = true
+		}
+	}
+	return last, nil
+}
+
+// notLastWay refuses to take the last way in away, which only the owner
+// may do, fresh from a sign-in. The caller holds mu.
+func (a *Auth) notLastWay(ctx context.Context, f *found, id string, fresh bool) error {
+	last, err := a.lastWay(ctx, id)
+	if err != nil || !last {
+		return err
+	}
+	if !fresh || !a.isOwner(ctx, f) {
+		return refuse(http.StatusConflict, "lastWayIn")
+	}
+	return nil
+}
+
+func (a *Auth) isOwner(ctx context.Context, f *found) bool {
+	acc, err := a.account(ctx, f.v.Account)
+	return err == nil && acc.Owner
 }
 
 func validIssuer(issuer string) bool {
