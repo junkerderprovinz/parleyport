@@ -2,7 +2,7 @@
 
 Every version of the kit, written by hand. The kit is versioned apart from the server, with tags of the form `kit/vX.Y.Z`. What changed in the relay itself is in the [server's release notes](https://github.com/junkerderprovinz/parleyport/releases).
 
-## Unreleased
+## 1.1.0 - 2026-11-23
 
 One sign-in for every app of the kit, in the new package `signin`. A password stays optional.
 
