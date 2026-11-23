@@ -93,8 +93,8 @@ func TestAFrameStopsWhenTheLinkStalls(t *testing.T) {
 		conn.mu.Lock()
 		down := conn.down
 		conn.mu.Unlock()
-		if err == nil || !down {
-			t.Errorf("a stalled link: %v, connection closed %v", err, down)
+		if !errors.Is(err, errStalled) || !down {
+			t.Errorf("a stalled link ended the write with %v, connection closed %v, want a stall and a closed connection", err, down)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("a stalled link held the write")

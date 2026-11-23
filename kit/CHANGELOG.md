@@ -2,6 +2,19 @@
 
 Every version of the kit, written by hand. The kit is versioned apart from the server, with tags of the form `kit/vX.Y.Z`. What changed in the relay itself is in the [server's release notes](https://github.com/junkerderprovinz/parleyport/releases).
 
+## Unreleased
+
+The relay server in `relay` says in its log why a connection ended, as ParleyPort's own server did.
+
+**Adopting apps:**
+
+- **Moving up:** nothing changes for an app. `Server.Leave` keeps its signature.
+- **Plugins:** nothing to do.
+
+## ⚡ Improved
+
+- **The relay's log says why a connection ended.** A newer connection with the same ID, a device that hung up, a stalled line, a full queue, a refused hello and a key the relay stopped serving each get a line of their own. The relay key shows up only as a short fingerprint, and the instance ID is cut short.
+
 ## 1.1.0 - 2026-11-23
 
 One sign-in for every app of the kit, in the new package `signin`. A password stays optional.

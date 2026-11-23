@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"errors"
 	"io"
 	"sync/atomic"
 	"time"
@@ -19,6 +20,9 @@ type messageWriter interface {
 	CloseNow() error
 }
 
+// errStalled is what sendFrame returns when one chunk outlasted stall.
+var errStalled = errors.New("the link stopped taking the frame")
+
 // sendFrame writes frame to conn in chunks and gives up once one chunk takes
 // longer than stall. A deadline for the whole frame would cut a large answer
 // off on a slow link or a busy machine, and the connection with it, while the
@@ -26,16 +30,23 @@ type messageWriter interface {
 // halfway can never be finished and keeps the connection's writer to itself,
 // so every later frame would wait for it; the connection goes instead, and
 // the client dials again.
-func sendFrame(ctx context.Context, conn messageWriter, frame []byte, stall time.Duration) error {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+func sendFrame(ctx context.Context, conn messageWriter, frame []byte, stall time.Duration) (err error) {
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	stalled := func() { cancel(errStalled) }
+	// The writer reports only that its context ended, not why.
+	defer func() {
+		if err != nil && errors.Is(context.Cause(ctx), errStalled) {
+			err = errStalled
+		}
+	}()
 	w, err := conn.Writer(ctx, websocket.MessageText)
 	if err != nil {
 		return err
 	}
 	for len(frame) > 0 {
 		n := min(len(frame), chunkBytes)
-		timer := time.AfterFunc(stall, cancel)
+		timer := time.AfterFunc(stall, stalled)
 		_, err := w.Write(frame[:n])
 		timer.Stop()
 		if err != nil {
@@ -44,7 +55,7 @@ func sendFrame(ctx context.Context, conn messageWriter, frame []byte, stall time
 		}
 		frame = frame[n:]
 	}
-	timer := time.AfterFunc(stall, cancel)
+	timer := time.AfterFunc(stall, stalled)
 	defer timer.Stop()
 	if err := w.Close(); err != nil {
 		_ = conn.CloseNow()
