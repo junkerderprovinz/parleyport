@@ -12,13 +12,14 @@
  * and on near-black alike.
  *
  * Text becomes SVG paths through opentype.js, so the SVG needs no font and
- * renders the same in resvg and a browser. Bree Serif for the name and Lato for
- * the claim, as in the other Bree Serif repos.
+ * renders the same in resvg and a browser. Bree Serif Light for the name and
+ * Bree Light for the claim.
  *
- * Deps (global): opentype.js, @resvg/resvg-js. Fonts are fetched to the OS temp dir.
+ * Deps (global): opentype.js, @resvg/resvg-js, and the house fonts as TTF in
+ * HOUSE_FONTS (default %LOCALAPPDATA%\halleluja-fonts).
  * Run: node .github/assets/gen-banner.mjs
  */
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
@@ -54,22 +55,10 @@ function readViewBox(logoFile) {
   return { vbW: parseFloat(m[1]), vbH: parseFloat(m[2]) };
 }
 
-const fontPath = join(tmpdir(), "ParleyPort-BreeSerif-Regular.ttf");
-if (!existsSync(fontPath)) {
-  const url = "https://github.com/google/fonts/raw/main/ofl/breeserif/BreeSerif-Regular.ttf";
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`font fetch ${res.status}`);
-  writeFileSync(fontPath, Buffer.from(await res.arrayBuffer()));
-}
-const font = opentype.parse(readFileSync(fontPath));
-
-const claimFontPath = join(tmpdir(), "ParleyPort-Lato-Regular.ttf");
-if (!existsSync(claimFontPath)) {
-  const r = await fetch("https://github.com/google/fonts/raw/main/ofl/lato/Lato-Regular.ttf");
-  if (!r.ok) throw new Error(`claim font fetch ${r.status}`);
-  writeFileSync(claimFontPath, Buffer.from(await r.arrayBuffer()));
-}
-const claimFont = opentype.parse(readFileSync(claimFontPath));
+// The house typeface is licensed, so it is read from a local folder and never committed.
+const fonts = process.env.HOUSE_FONTS ?? join(process.env.LOCALAPPDATA ?? tmpdir(), "halleluja-fonts");
+const font = opentype.parse(readFileSync(join(fonts, "bree-serif-light.ttf")).buffer);
+const claimFont = opentype.parse(readFileSync(join(fonts, "bree-light.ttf")).buffer);
 
 // Text layout (logo + name + claim, group centred horizontally).
 const nameW = font.getAdvanceWidth(NAME, nameSize);
