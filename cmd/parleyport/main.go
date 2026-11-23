@@ -55,7 +55,7 @@ import (
 	"golang.org/x/crypto/acme/autocert"
 
 	"github.com/junkerderprovinz/parleyport/internal/buildinfo"
-	"github.com/junkerderprovinz/parleyport/internal/relay"
+	"github.com/junkerderprovinz/parleyport/kit/relay"
 )
 
 // landingPage answers a browser that opens the relay's address.
@@ -96,12 +96,10 @@ func main() {
 	// on one host.
 	addr := setting("ADDR", ":8760")
 
-	r := relay.New()
 	trusted, err := trustedProxies(setting("TRUSTED_PROXIES", ""))
 	if err != nil {
 		log.Fatalf("PARLEYPORT_TRUSTED_PROXIES: %v", err)
 	}
-	r.TrustedProxies = func() []netip.Prefix { return trusted }
 
 	// PARLEYPORT_DOMAIN is a comma-separated list because the relay address is
 	// compiled into released builds, so after a move the old name still needs
@@ -111,11 +109,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("PARLEYPORT_PUBLIC_URL: %v", err)
 	}
-	if len(names) > 0 {
-		r.Names = func(*http.Request) []string { return names }
-	} else {
+	if len(names) == 0 {
 		log.Printf("neither PARLEYPORT_PUBLIC_URL nor PARLEYPORT_DOMAIN is set, so a hello is checked against the Host header it arrives with")
 	}
+	r := newRelay(names, trusted)
 	// The request path sweeps too, but only while traffic arrives. The timer
 	// keeps the 61 minute retention the privacy notes promise on a
 	// quiet relay.
@@ -193,10 +190,18 @@ func main() {
 	cancel()
 }
 
-// parseArgs reads the command line and reports whether it only asked for the
-// version, which it has then printed. The relay is configured through the
-// environment, so any other flag or argument is refused rather than ignored
-// on the way to opening a public listener.
+// newRelay is the relay server for a relay that goes by names, or by the Host
+// header of each connection when there are none, behind the proxies in
+// trusted.
+func newRelay(names []string, trusted []netip.Prefix) *relay.Server {
+	r := relay.New()
+	r.TrustedProxies = func() []netip.Prefix { return trusted }
+	if len(names) > 0 {
+		r.Names = func(*http.Request) []string { return names }
+	}
+	return r
+}
+
 // newMux routes the health check, the relay and the page at the root. Any
 // other path stays a 404.
 func newMux(relay http.Handler) *http.ServeMux {
@@ -214,6 +219,10 @@ func newMux(relay http.Handler) *http.ServeMux {
 	return mux
 }
 
+// parseArgs reads the command line and reports whether it only asked for the
+// version, which it has then printed. The relay is configured through the
+// environment, so any other flag or argument is refused rather than ignored
+// on the way to opening a public listener.
 func parseArgs(args []string, stdout, stderr io.Writer) (versionOnly bool, err error) {
 	fs := flag.NewFlagSet("parleyport", flag.ContinueOnError)
 	fs.SetOutput(stderr)
