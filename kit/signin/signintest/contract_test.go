@@ -48,6 +48,34 @@ func TestRunChecksAnAppBelowABasePath(t *testing.T) {
 	Run(t, auth.Guard(mux), Options{Password: "a good long password", Base: "/files/"})
 }
 
+func TestThePackageKeepsAPinnedPassword(t *testing.T) {
+	seal, err := signin.NewSealer(bytes.Repeat([]byte{3}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, err := signin.HashPinned("a pinned password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth, err := signin.Open(signin.Config{Domain: "alpha", Store: memstore.New(), Seal: seal, Owner: true, PinnedPassword: signin.PinnedPassword{Hash: hash}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = auth.Close() })
+	mux := http.NewServeMux()
+	mux.Handle(signin.APIPrefix, auth.Handler())
+	Run(t, auth.Guard(mux), Options{Password: "a pinned password", Pinned: true})
+}
+
+func TestRunNoticesAPasswordThatIsNotPinned(t *testing.T) {
+	issues := strings.Join(check(newApp(t, true), Options{Password: "a good long password", Pinned: true}), "\n")
+	for _, want := range []string{"does not say the password is pinned", "PUT me/password with a pinned password", "POST reset-code with a pinned password"} {
+		if !strings.Contains(issues, want) {
+			t.Errorf("Run did not notice %q in:\n%s", want, issues)
+		}
+	}
+}
+
 func TestRunNoticesAnAppThatBreaksTheContract(t *testing.T) {
 	app := newApp(t, true)
 	broken := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

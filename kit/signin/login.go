@@ -29,6 +29,7 @@ func (a *Auth) getOptions(w http.ResponseWriter, r *http.Request, f *found) {
 		"minPassword": a.minPass,
 		"signedIn":    f.ok && f.v.Via != ViaAnyone,
 		"passkeys":    false,
+		"pinned":      a.cfg.PinnedPassword.Hash != "",
 	}
 	services, err := a.offeredServices(r.Context())
 	if err != nil {
@@ -278,8 +279,8 @@ func (a *Auth) typedName(ctx context.Context, name string) string {
 	return "#" + a.macHex("logname", strings.ToLower(name))[:12]
 }
 
-// checkPassword checks pw against acc's hash, or its old one through
-// Legacy.Password.
+// checkPassword checks pw against the pinned password, acc's hash, or its
+// old one through Legacy.Password.
 func (a *Auth) checkPassword(ctx context.Context, acc *account, pw string) (bool, error) {
 	if len(pw) > maxPassword {
 		return false, nil
@@ -290,6 +291,10 @@ func (a *Auth) checkPassword(ctx context.Context, acc *account, pw string) (bool
 	}
 	defer release()
 	switch {
+	case acc.pinned && a.cfg.PinnedPassword.Check != nil:
+		return a.cfg.PinnedPassword.Check(a.cfg.PinnedPassword.Hash, pw), nil
+	case acc.pinned:
+		return password.Check(a.cfg.PinnedPassword.Hash, []byte(pw))
 	case acc.Password != "":
 		return password.Check(acc.Password, a.passwordInput(pw))
 	case acc.LegacyPassword != "" && a.cfg.Legacy.Password != nil:
@@ -330,6 +335,9 @@ func (a *Auth) hashing(ctx context.Context) (func(), error) {
 // one, as long as the hash it was checked against is still the one stored.
 // Otherwise a sign-in that crossed a reset could bring the old password back.
 func (a *Auth) rehash(ctx context.Context, was *account, pw string) {
+	if was.pinned {
+		return
+	}
 	h, err := a.hashPassword(pw)
 	if err != nil {
 		a.log.Warn("signin: hashing a password anew", "err", err)

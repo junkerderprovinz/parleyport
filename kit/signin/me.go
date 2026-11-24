@@ -20,6 +20,7 @@ func (a *Auth) getMe(w http.ResponseWriter, r *http.Request, f *found) {
 		RecoveryLeft int  `json:"recoveryLeft"`
 		Fresh        bool `json:"fresh"`
 		AskPassword  bool `json:"askPassword"`
+		Pinned       bool `json:"pinned"`
 	}{Visitor: f.v, Fresh: a.fresh(f), AskPassword: a.asks(r.Context(), f)}
 	if f.v.Account != "" {
 		acc, err := a.account(r.Context(), f.v.Account)
@@ -27,7 +28,7 @@ func (a *Auth) getMe(w http.ResponseWriter, r *http.Request, f *found) {
 			a.internal(w, err)
 			return
 		}
-		out.Owner, out.Password, out.TwoFactor = acc.Owner, acc.hasPassword(), acc.twoFactor()
+		out.Owner, out.Password, out.TwoFactor, out.Pinned = acc.Owner, acc.hasPassword(), acc.twoFactor(), acc.pinned
 		out.RecoveryLeft = len(acc.Recovery) + len(acc.LegacyRecovery)
 	}
 	ok(w, out)
@@ -88,6 +89,10 @@ func (a *Auth) putPassword(w http.ResponseWriter, r *http.Request, f *found) {
 	}
 	if !acc.hasPassword() {
 		fail(w, http.StatusForbidden, "notLocal")
+		return
+	}
+	if acc.pinned {
+		fail(w, http.StatusConflict, "pinned")
 		return
 	}
 	if !a.passwordAgain(w, r, acc, in.Current) {
@@ -254,6 +259,10 @@ func (a *Auth) deletePassword(w http.ResponseWriter, r *http.Request, f *found) 
 	}
 	if !acc.Owner || !acc.hasPassword() {
 		fail(w, http.StatusForbidden, "notOwner")
+		return
+	}
+	if acc.pinned {
+		fail(w, http.StatusConflict, "pinned")
 		return
 	}
 	if !a.passwordAgain(w, r, acc, in.Current) {

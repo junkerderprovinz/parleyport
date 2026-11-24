@@ -40,6 +40,9 @@
 // a reverse proxy sets no password, and that service alone protects it. An
 // app that one of its own Config.Services guards stays closed without a
 // password through Config.Closed, and only that service lets anyone in.
+// An operator who sets the owner's password from outside, such as from an
+// environment variable, hands it in as Config.PinnedPassword. It closes the
+// app, the page offers no reset, and changing or removing it answers pinned.
 //
 // An app with accounts of its own before the package imports them once, and
 // keeps its account table in step through Hooks.Changing and the account

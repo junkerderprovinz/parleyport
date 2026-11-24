@@ -25,6 +25,9 @@ type Options struct {
 	Name string
 	// Base is the path the app serves the package under, its Config.Base.
 	Base string
+	// Pinned says Password is the app's Config.PinnedPassword, which Run
+	// then expects every change, removal and reset to refuse.
+	Pinned bool
 }
 
 // Run checks h, the app's whole handler with the guard in front, against
@@ -79,7 +82,11 @@ func check(h http.Handler, opt Options) []string {
 	}
 	c.matches("GET me", c.do("GET", "me", nil), 200, "Me")
 	c.matches("GET me/sessions", c.do("GET", "me/sessions", nil), 200, "")
-	c.wantError("PUT me/password with a one-letter password and a wrong current one", c.do("PUT", "me/password", map[string]string{"current": opt.Password + " wrong", "next": "x"}), 401, "wrongPassword")
+	if opt.Pinned {
+		c.pinned()
+	} else {
+		c.wantError("PUT me/password with a one-letter password and a wrong current one", c.do("PUT", "me/password", map[string]string{"current": opt.Password + " wrong", "next": "x"}), 401, "wrongPassword")
+	}
 	if roles := c.do("GET", "roles", nil); roles.Code != http.StatusForbidden {
 		c.matches("GET roles", roles, 200, "Roles")
 	}
@@ -89,6 +96,24 @@ func check(h http.Handler, opt Options) []string {
 	c.matches("POST logout", c.do("POST", "logout", map[string]string{}), 200, "")
 	c.wantError("GET me after the sign-out", c.do("GET", "me", nil), 401, "signInFirst")
 	return c.issues
+}
+
+// pinned checks that the pinned password stays as it is and that the page
+// is told not to offer a reset.
+func (c *checker) pinned() {
+	var o struct{ Pinned bool }
+	_ = json.Unmarshal(c.do("GET", "options", nil).Body.Bytes(), &o)
+	if !o.Pinned {
+		c.addf("GET options does not say the password is pinned")
+	}
+	pw := c.opt.Password
+	c.wantError("PUT me/password with a pinned password", c.do("PUT", "me/password", map[string]string{"current": pw, "next": pw + " changed"}), 409, "pinned")
+	c.wantError("DELETE me/password with a pinned password", c.do("DELETE", "me/password", map[string]string{"current": pw}), 409, "pinned")
+	signedIn := c.cookie
+	c.cookie = nil
+	c.wantError("POST reset-code with a pinned password", c.do("POST", "reset-code", map[string]string{}), 409, "pinned")
+	c.wantError("POST reset with a pinned password", c.do("POST", "reset", map[string]string{"code": "0000-0000-0000", "password": pw + " changed"}), 409, "pinned")
+	c.cookie = signedIn
 }
 
 func (c *checker) do(method, path string, body any, header ...string) *httptest.ResponseRecorder {

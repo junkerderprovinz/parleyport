@@ -113,6 +113,10 @@ type Config struct {
 	// Services are sign-in services the app sets up itself, such as from its
 	// configuration file.
 	Services []ServiceSpec
+	// PinnedPassword is the owner's password when the app's operator sets it
+	// from outside, such as from an environment variable. Only an app with
+	// Owner takes one.
+	PinnedPassword PinnedPassword
 	// Closed, while it reports true, keeps the app closed when no account
 	// has a password, for an app that one of Services guards. Only those
 	// services then let anyone in.
@@ -129,6 +133,28 @@ type Config struct {
 	Logger *slog.Logger
 	// Now is the clock, for tests. Nil is time.Now.
 	Now func() time.Time
+}
+
+// PinnedPassword is a password set outside the app. While Hash is set it is
+// the owner's only password: the one set in the app rests, and changing,
+// removing or resetting it answers pinned. A new Hash ends the owner's
+// sessions on the next Open.
+type PinnedPassword struct {
+	// Hash is the password as HashPinned writes it, or in the app's own
+	// form when Check is set.
+	Hash string
+	// Check reports whether secret is the password hash stands for. Nil
+	// reads a hash from HashPinned.
+	Check func(hash, secret string) bool
+}
+
+// HashPinned hashes secret for PinnedPassword.Hash without a Check of the
+// app's own, for a command that prints the value an operator sets.
+func HashPinned(secret string) (string, error) {
+	if secret == "" || len(secret) > maxPassword {
+		return "", errors.New("signin: a pinned password needs 1 to 1024 bytes")
+	}
+	return password.Hash([]byte(secret))
 }
 
 // Hooks are where the app takes part in sign-in.
@@ -286,6 +312,9 @@ func Open(cfg Config) (*Auth, error) {
 	if err := distinct("scope", a.scopes); err != nil {
 		return nil, err
 	}
+	if cfg.PinnedPassword.Hash != "" && !cfg.Owner {
+		return nil, errors.New("signin: a pinned password needs an app with Owner")
+	}
 	dummy, err := password.Hash(a.passwordInput("not a password"))
 	if err != nil {
 		return nil, err
@@ -389,7 +418,44 @@ func (a *Auth) start(ctx context.Context) error {
 	if err := a.pin(ctx); err != nil {
 		return err
 	}
+	if err := a.pinPassword(ctx, &m); err != nil {
+		return err
+	}
 	return a.refreshOpen(ctx)
+}
+
+// pinPassword ends the owner's sessions when the pinned password is another
+// than at the last start, since a new one is how an operator locks out
+// whoever knew the old. A pinned password closes an app without an owner by
+// making one. The caller holds mu.
+func (a *Auth) pinPassword(ctx context.Context, m *meta) error {
+	mark := ""
+	if a.cfg.PinnedPassword.Hash != "" {
+		mark = a.macHex("pinned", a.cfg.PinnedPassword.Hash)
+	}
+	if equal(m.Pinned, mark) {
+		return nil
+	}
+	m.Pinned = mark
+	docs := []Doc{a.doc(kindMeta, metaID, *m)}
+	acc, err := a.owner(ctx)
+	switch {
+	case err == nil:
+		acc.Epoch++
+		docs = append(docs, a.endingsOf(acc, EndPassword)...)
+		docs = append(docs, a.doc(kindAccount, acc.ID, acc))
+	case !errors.Is(err, ErrNotFound):
+		return fmt.Errorf("signin: reading the store: %w", err)
+	case mark != "":
+		if acc, err = a.newOwner(ctx, a.roles[0]); err != nil {
+			return err
+		}
+		docs = append(docs, a.doc(kindAccount, acc.ID, acc))
+	}
+	if err := a.cfg.Store.Apply(ctx, docs...); err != nil {
+		return fmt.Errorf("signin: %w", err)
+	}
+	return nil
 }
 
 // refreshOpen works out from the store whether anyone can sign in. The

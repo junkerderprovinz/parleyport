@@ -40,6 +40,8 @@ type meta struct {
 	// another key stops Open instead of turning every password, session and
 	// token into a stranger's.
 	KeyCheck string `json:"keyCheck,omitempty"`
+	// Pinned is a MAC of Config.PinnedPassword's hash at the last start.
+	Pinned string `json:"pinned,omitempty"`
 }
 
 type account struct {
@@ -76,9 +78,14 @@ type account struct {
 	// Imported marks an account whose old fields the app still keeps, for
 	// Legacy.Drop after its first epoch.
 	Imported bool `json:"imported,omitempty"`
+
+	// pinned is set on the owner while Config.PinnedPassword is.
+	pinned bool
 }
 
-func (acc *account) hasPassword() bool { return acc.Password != "" || acc.LegacyPassword != "" }
+func (acc *account) hasPassword() bool {
+	return acc.pinned || acc.Password != "" || acc.LegacyPassword != ""
+}
 
 func (acc *account) twoFactor() bool { return len(acc.TOTP) > 0 }
 
@@ -158,7 +165,7 @@ func (a *Auth) accounts(ctx context.Context) ([]*account, error) {
 	}
 	out := make([]*account, 0, len(ids))
 	for _, id := range ids {
-		out = append(out, m[id])
+		out = append(out, a.marked(m[id]))
 	}
 	return out, nil
 }
@@ -168,7 +175,12 @@ func (a *Auth) account(ctx context.Context, id string) (*account, error) {
 	if err := a.load(ctx, kindAccount, id, acc); err != nil {
 		return nil, err
 	}
-	return acc, nil
+	return a.marked(acc), nil
+}
+
+func (a *Auth) marked(acc *account) *account {
+	acc.pinned = acc.Owner && a.cfg.PinnedPassword.Hash != ""
+	return acc
 }
 
 // byName finds the account with name, ignoring case.

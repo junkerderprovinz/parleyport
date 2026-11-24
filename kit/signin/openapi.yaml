@@ -139,6 +139,7 @@ paths:
                       services: { type: integer }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
         "429": { $ref: "#/components/responses/Throttled" }
   /me:
     get:
@@ -835,6 +836,7 @@ components:
             - passwordLong
             - passwordSet
             - passwordMissing
+            - pinned
             - serviceChanged
 
             - resetRefused
@@ -908,6 +910,7 @@ components:
             recoveryLeft: { type: integer }
             fresh: { type: boolean, description: Signed in moments ago, as new lasting ways in want. }
             askPassword: { type: boolean, description: The app may ask for the password through me/confirm when a change wants a fresh sign-in. }
+            pinned: { type: boolean, description: "The password is set outside the app, so changing or removing it answers pinned." }
     Options:
       type: object
       required: [open, owner, minPassword, signedIn, passkeys, services]
@@ -917,6 +920,7 @@ components:
         minPassword: { type: integer, description: Below this many characters a new password is taken with a hint, never refused. }
         signedIn: { type: boolean }
         passkeys: { type: boolean, description: Ask for passkeys with conditional mediation. }
+        pinned: { type: boolean, description: "The owner's password is set outside the app. The page offers no reset, which answers pinned." }
         renew: { type: string, description: The sign-in service whose session can be renewed without asking. }
         services:
           type: array

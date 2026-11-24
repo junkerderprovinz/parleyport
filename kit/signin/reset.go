@@ -29,6 +29,10 @@ func (a *Auth) postResetCode(w http.ResponseWriter, _ *http.Request, _ *found) {
 		fail(w, http.StatusConflict, "setPasswordFirst")
 		return
 	}
+	if a.cfg.PinnedPassword.Hash != "" {
+		fail(w, http.StatusConflict, "pinned")
+		return
+	}
 	now := a.now()
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -55,6 +59,10 @@ func (a *Auth) postReset(w http.ResponseWriter, r *http.Request, f *found) {
 		Name     string `json:"name"`
 	}
 	if !readJSON(w, r, smallBody, &in) || !a.checkNew(w, in.Password) {
+		return
+	}
+	if a.cfg.PinnedPassword.Hash != "" {
+		fail(w, http.StatusConflict, "pinned")
 		return
 	}
 	ctx := r.Context()
