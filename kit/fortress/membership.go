@@ -67,7 +67,10 @@ type keptKeys struct {
 // next to it. Neither the secret nor a key of any app's pairing is kept, so
 // whoever takes dir is this one member at most, until somebody removes it.
 // The files are readable by their owner alone; on a FAT stick the mount
-// decides.
+// decides. An app that joins into a fresh directory and swaps it in
+// afterwards copies fortress.json and state.json there first, or the
+// fortress meets every member anew and, after a removal, takes them all
+// for newcomers.
 func Join(dir string, secret []byte, m Membership) error {
 	set := Domain.Keys(secret)
 	seed := ""

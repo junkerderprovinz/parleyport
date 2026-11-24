@@ -274,7 +274,7 @@ func TestACallbackWithoutTheFlowCookieIsRefused(t *testing.T) {
 func TestTheWayBackStaysOnTheApp(t *testing.T) {
 	a := newApp(t)
 	p, id := addService(t, a, a.owner(), "pocket-id")
-	for _, ret := range []string{"https://evil.example/x", "//evil.example/x", "/\\evil.example", "javascript:alert(1)"} {
+	for _, ret := range []string{"https://evil.example/x", "//evil.example/x", "/\\evil.example", "/\t/evil.example", "javascript:alert(1)"} {
 		p.Next(ownerAtService)
 		if got := a.browser().via(p, "/signin/oidc/"+id+"?return="+url.QueryEscape(ret)); got != "/" {
 			t.Errorf("return %q ended at %s", ret, got)

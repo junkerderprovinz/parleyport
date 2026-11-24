@@ -82,7 +82,7 @@ func (a *Auth) routes() http.Handler {
 		if _, ok := r.Context().Value(ctxKey{}).(*found); !ok {
 			r = r.WithContext(context.WithValue(r.Context(), ctxKey{}, a.find(w, r)))
 		}
-		if rest, under := strings.CutPrefix(r.URL.Path, strings.TrimSuffix(a.base, "/")); a.base != "/" && under && strings.HasPrefix(rest, "/") {
+		if rest, under := strings.CutPrefix(r.URL.Path, strings.TrimSuffix(a.base(), "/")); under && strings.HasPrefix(rest, "/") {
 			r2 := new(http.Request)
 			*r2 = *r
 			u := *r.URL
@@ -95,7 +95,30 @@ func (a *Auth) routes() http.Handler {
 }
 
 // under is path on the app, below Base.
-func (a *Auth) under(path string) string { return a.base + strings.TrimPrefix(path, "/") }
+func (a *Auth) under(path string) string { return a.base() + strings.TrimPrefix(path, "/") }
+
+// base is the path browsers find the package under: Config.Base, or else
+// the path of Config.Public, which can change while the app runs.
+func (a *Auth) base() string {
+	if a.fixedBase != "" {
+		return a.fixedBase
+	}
+	if u := a.public(); u != nil {
+		if b, ok := basePath(u.Path); ok {
+			return b
+		}
+	}
+	return "/"
+}
+
+// basePath is p with one slash on each end, and false when p is no path.
+func basePath(p string) (string, bool) {
+	b := "/" + strings.Trim(p, "/") + "/"
+	if b == "//" {
+		return "/", true
+	}
+	return b, !strings.ContainsAny(b, "?#") && !strings.Contains(b, "//")
+}
 
 // cookiePath is where a cookie for path goes. A session is for the whole
 // site, which the __Host- name needs.
