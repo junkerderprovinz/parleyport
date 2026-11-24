@@ -14,6 +14,10 @@ ARG COMMIT=
 RUN CGO_ENABLED=0 go build \
       -ldflags="-s -w -X github.com/junkerderprovinz/parleyport/internal/buildinfo.Version=${VERSION} -X github.com/junkerderprovinz/parleyport/internal/buildinfo.Commit=${COMMIT}" \
       -o /out/parleyport ./cmd/parleyport
+# The relay takes 443 as 99:100, which Docker allows any user and an LXC such as
+# Proxmox does not. COPY --from below keeps the capability.
+RUN apk add --no-cache libcap-setcap \
+ && setcap cap_net_bind_service=+ep /out/parleyport
 
 FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
 # 99:100 is nobody:users on Unraid, the owner of everything under appdata, so
