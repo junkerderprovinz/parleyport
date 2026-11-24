@@ -143,23 +143,21 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         with:
-          go-version-file: kit/go.mod
-          cache-dependency-path: kit/go.sum
+          go-version-file: go.mod
 
       - name: Build cmd/fortress and cmd/notify for amd64 and arm64
-        working-directory: kit
         run: |
           set -eu
-          mkdir -p ../dist
+          mkdir -p dist
           for cmd in fortress notify; do
             for arch in amd64 arm64; do
               CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags="-s -w" \
-                -o "../dist/${cmd}-linux-${arch}" "./cmd/${cmd}"
+                -o "dist/${cmd}-linux-${arch}" "./kit/cmd/${cmd}"
             done
-            file "../dist/${cmd}-linux-amd64" | grep -q "x86-64"
-            file "../dist/${cmd}-linux-arm64" | grep -q "aarch64"
+            file "dist/${cmd}-linux-amd64" | grep -q "x86-64"
+            file "dist/${cmd}-linux-arm64" | grep -q "aarch64"
           done
-          cd ../dist
+          cd dist
           sha256sum fortress-linux-* notify-linux-* > helpers-sha256sums.txt
           cat helpers-sha256sums.txt
 

@@ -1,23 +1,6 @@
 # Changelog
 
-Every version of the kit, written by hand. The kit is versioned apart from the server, with tags of the form `kit/vX.Y.Z`. What changed in the relay itself is in the [server's release notes](https://github.com/junkerderprovinz/parleyport/releases).
-
-## Unreleased
-
-The relay server in `relay` says in its log why a connection ended, as ParleyPort's own server did.
-
-**Adopting apps:**
-
-- **Moving up:** nothing changes for an app. `Server.Leave` keeps its signature. An app with `signin` should move up for the go-jose fix below.
-- **Plugins:** nothing to do.
-
-## ⚡ Improved
-
-- **The relay's log says why a connection ended.** A newer connection with the same ID, a device that hung up, a stalled line, a full queue, a refused hello and a key the relay stopped serving each get a line of their own. The relay key shows up only as a short fingerprint, and the instance ID is cut short.
-
-## 🐛 Fixed
-
-- **go-jose 4.1.9 for the sign-in services.** The OIDC verification in `signin` reads keys and tokens from the sign-in service with go-jose, and versions before 4.1.6 could be made to panic or to spend a long time on a crafted key set.
+The kit's versions from the time it was a Go module of its own, with tags of the form `kit/vX.Y.Z`. Since ParleyPort 1.3.4 the kit is part of the ParleyPort module and shares its version, and what changes for apps is in the [release notes](https://github.com/junkerderprovinz/parleyport/releases). An app moves over by replacing `require github.com/junkerderprovinz/parleyport/kit` with `require github.com/junkerderprovinz/parleyport v1.3.4` or newer. The import paths stay the same.
 
 ## 1.1.0 - 2026-11-23
 

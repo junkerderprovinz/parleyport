@@ -137,13 +137,13 @@ Then, on every instance of the group, open **Settings, Pairing, Relay, Own relay
 
 <p><a id="6-for-app-authors" href="#6-for-app-authors"><picture><source media="(prefers-color-scheme: dark)" srcset=".github/assets/sections/6-for-app-authors-dark.svg"><img src=".github/assets/sections/6-for-app-authors.svg" alt="6. For app authors" width="100%"></picture></a></p>
 
-The other half of ParleyPort is the kit, the client side of the protocol as a Go module of its own. An app that pairs its instances imports it and gets the twelve words, the member keys, the relay client, the group that finds its members on the network or over the relay, and the fortress that puts all of a household's apps under one phrase.
+The other half of ParleyPort is the kit, the client side of the protocol in the folder `kit`. An app that pairs its instances imports it and gets the twelve words, the member keys, the relay client, the group that finds its members on the network or over the relay, and the fortress that puts all of a household's apps under one phrase.
 
 ```sh
-go get github.com/junkerderprovinz/parleyport/kit@latest
+go get github.com/junkerderprovinz/parleyport@latest
 ```
 
-The kit has a version line of its own. The server's tags are `vX.Y.Z`, the kit's are `kit/vX.Y.Z`, so an app moves to a new kit without waiting for a new relay. [kit/README.md](kit/README.md) lists the packages, and [kit/CHANGELOG.md](kit/CHANGELOG.md) says what each version brought.
+The kit shares ParleyPort's version, so an app imports `github.com/junkerderprovinz/parleyport/kit/...` and requires `github.com/junkerderprovinz/parleyport` at the release it wants. [kit/README.md](kit/README.md) lists the packages, and the [release notes](https://github.com/junkerderprovinz/parleyport/releases) say what each version brought for apps.
 
 A plugin without Go code takes part through the two helpers attached to every release, built for linux/amd64 and arm64. `fortress` joins a fortress, lists the members, reads their status, asks one of them for an action and takes one out. `notify` sends a message to the channels in a file and shows and saves those channels with every secret masked. Check what you download against `helpers-sha256sums.txt`:
 

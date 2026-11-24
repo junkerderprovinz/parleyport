@@ -51,21 +51,14 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@latest
           "$(go env GOPATH)/bin/govulncheck" ./...
 
-      - name: kit vet and test
-        working-directory: kit
-        run: |
-          go vet ./...
-          go test -race -count=1 ./...
-
       # The same build release.yml attaches to every release.
       - name: cmd/fortress and cmd/notify build for linux/amd64 and arm64
-        working-directory: kit
         run: |
           set -eu
           for cmd in fortress notify; do
             for arch in amd64 arm64; do
               CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags="-s -w" \
-                -o "/tmp/${cmd}-linux-${arch}" "./cmd/${cmd}"
+                -o "/tmp/${cmd}-linux-${arch}" "./kit/cmd/${cmd}"
             done
             file "/tmp/${cmd}-linux-arm64" | grep -q "aarch64"
           done
@@ -99,24 +92,19 @@ jobs:
           exit 1
 
   lint:
-    name: golangci-lint (${{ matrix.module }})
+    name: golangci-lint
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        module: [".", "kit"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         with:
-          go-version-file: ${{ matrix.module }}/go.mod
+          go-version-file: go.mod
 
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.15.0
-          working-directory: ${{ matrix.module }}
 
   image:
     name: build and boot the image (amd64, no push)
