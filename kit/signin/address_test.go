@@ -150,6 +150,59 @@ func TestABasePathKeepsCookiesAndRedirectsUnderIt(t *testing.T) {
 	}
 }
 
+// behindStrippingProxy puts the app at path of its public address behind a
+// proxy that takes path off before the app sees the request, so the app
+// learns path only from Config.Public.
+func behindStrippingProxy(a *app, path string) {
+	public := a.cfg.Public
+	a.cfg.Public = func() *url.URL {
+		u := *public()
+		u.Path = path
+		return &u
+	}
+	a.open()
+	a.srv.Config.Handler = http.StripPrefix(strings.TrimSuffix(path, "/"), a.srv.Config.Handler)
+	a.base = path
+}
+
+func TestASignInServiceComesBackUnderThePathOfThePublicAddress(t *testing.T) {
+	a := newApp(t)
+	behindStrippingProxy(a, "/sub/")
+	admin := a.owner()
+	p, id := addServiceAt(t, admin, "/sub/settings")
+	list := admin.api("GET", "methods/oidc", nil)
+	if !strings.Contains(string(list.Body), `"redirect":"`+a.cfg.Public().String()+`signin/oidc/callback"`) {
+		t.Fatalf("the redirect is not under the public path: %s", list.Body)
+	}
+	p.Next(ownerAtService)
+	if got := a.browser().via(p, "/sub/signin/oidc/"+id+"?return=/sub/home"); got != "/sub/home" {
+		t.Fatalf("a way back under the public path ended at %s", got)
+	}
+	p.Next(ownerAtService)
+	if got := a.browser().via(p, "/sub/signin/oidc/"+id+"?return=/elsewhere"); got != "/sub/" {
+		t.Fatalf("a way back off the public path ended at %s", got)
+	}
+}
+
+func TestTheBaseWinsOverThePathOfThePublicAddress(t *testing.T) {
+	a := newApp(t, withBase("/files/"))
+	public := a.cfg.Public
+	a.cfg.Public = func() *url.URL {
+		u := *public()
+		u.Path = "/elsewhere/"
+		return &u
+	}
+	a.open()
+	admin := a.owner()
+	addServiceAt(t, admin, "/files/settings")
+	list := admin.api("GET", "methods/oidc", nil)
+	host := a.cfg.Public()
+	host.Path = ""
+	if !strings.Contains(string(list.Body), `"redirect":"`+host.String()+`/files/signin/oidc/callback"`) {
+		t.Fatalf("the redirect does not follow the base: %s", list.Body)
+	}
+}
+
 // addServiceAt adds a sign-in service and passes its test sign-in, coming
 // back to ret.
 func addServiceAt(t *testing.T, owner *browser, ret string) (*signintest.Provider, string) {

@@ -12,7 +12,6 @@ import (
 	"regexp"
 	"runtime"
 	"slices"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -88,10 +87,12 @@ type Config struct {
 	TokenPrefix string
 	// Public is where people reach the app, by scheme and host. Passkeys
 	// and sign-in services need it, and it never comes from the request's
-	// Host.
+	// Host. Its path is where browsers find the package while Base is
+	// empty, for an app behind a proxy that takes that path off.
 	Public func() *url.URL
 	// Base is the path the app serves the package under, such as /files/
-	// behind a proxy that shares one host between apps. Empty is /.
+	// behind a proxy that shares one host between apps. Empty is the path
+	// of Public, or else /.
 	Base string
 	// Proxies are the proxies whose X-Forwarded-For and X-Forwarded-Proto
 	// count for the client address and for https. No header from a proxy
@@ -223,7 +224,7 @@ func (v Visitor) AtLeast(role string) bool {
 type Auth struct {
 	cfg         Config
 	d           string
-	base        string
+	fixedBase   string
 	serviceRole string
 	roles       []string
 	scopes      []string
@@ -289,12 +290,11 @@ func Open(cfg Config) (*Auth, error) {
 	if a.cfg.Name == "" {
 		a.cfg.Name = a.d
 	}
-	a.base = "/" + strings.Trim(a.cfg.Base, "/") + "/"
-	if a.base == "//" {
-		a.base = "/"
-	}
-	if strings.ContainsAny(a.base, "?#") || strings.Contains(a.base, "//") {
-		return nil, fmt.Errorf("signin: base %q is not a path", a.cfg.Base)
+	if a.cfg.Base != "" {
+		var ok bool
+		if a.fixedBase, ok = basePath(a.cfg.Base); !ok {
+			return nil, fmt.Errorf("signin: base %q is not a path", a.cfg.Base)
+		}
 	}
 	if a.cfg.TokenPrefix == "" {
 		a.cfg.TokenPrefix = defaultPrefix(a.d)

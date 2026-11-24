@@ -105,11 +105,11 @@ func (t *tickets) take(key string, now time.Time) (ticket, bool) {
 // never an address of its own or one a browser reads as one.
 func (a *Auth) safeReturn(s string) string {
 	if !strings.HasPrefix(s, "/") || strings.HasPrefix(s, "//") || strings.ContainsAny(s, "\\\r\n") {
-		return a.base
+		return a.base()
 	}
 	u, err := url.Parse(s)
-	if err != nil || u.Scheme != "" || u.Host != "" || !strings.HasPrefix(u.Path+"/", a.base) {
-		return a.base
+	if err != nil || u.Scheme != "" || u.Host != "" || !strings.HasPrefix(u.Path+"/", a.base()) {
+		return a.base()
 	}
 	return u.RequestURI()
 }
@@ -301,7 +301,7 @@ func (a *Auth) callback(w http.ResponseWriter, r *http.Request, path string) {
 	q := r.URL.Query()
 	fl, good := a.openFlow(w, r, path)
 	if !good || !equal(q.Get("state"), fl.State) {
-		a.back(w, r, a.base, "flowExpired")
+		a.back(w, r, a.base(), "flowExpired")
 		return
 	}
 	s := new(service)
