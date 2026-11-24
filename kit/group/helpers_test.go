@@ -112,6 +112,7 @@ type setup struct {
 	vouch       func(id string, key ed25519.PublicKey) bool
 	vouchedOnly bool
 	mayJoin     func(ctx context.Context, id string) bool
+	onNewPhrase func(NewPhrase) error
 	// noListener opens the instance the way a desktop app runs: it calls
 	// others directly but takes no direct calls itself.
 	noListener bool
@@ -181,6 +182,7 @@ func openGroup(t *testing.T, n *node, s setup) *Group {
 		Vouch:               s.vouch,
 		VouchedOnly:         s.vouchedOnly,
 		MayJoin:             s.mayJoin,
+		OnNewPhrase:         s.onNewPhrase,
 	}, appRoutes())
 	if err != nil {
 		t.Fatalf("open %s: %v", n.name, err)

@@ -765,6 +765,10 @@ func (g *Group) internal(caller Caller, call relay.ProxyCall) (int, []byte) {
 	case call.Path == rosterPath && call.Method == http.MethodGet && instance:
 		b, _ := json.Marshal(g.roster())
 		return http.StatusOK, b
+	case call.Path == phraseKeyPath && call.Method == http.MethodPost && g.takesPhrase(caller):
+		return g.offerPhraseKey(caller.ID)
+	case call.Path == newPhrasePath && call.Method == http.MethodPost && g.takesPhrase(caller):
+		return g.takePhrase(caller.ID, call.Body)
 	case strings.HasPrefix(call.Path, streamPrefix):
 		return http.StatusMisdirectedRequest, relay.RefusalBody("streamDirectOnly", "a stream goes only directly on the local network, never through the relay")
 	case strings.HasPrefix(call.Path, uploadPrefix):

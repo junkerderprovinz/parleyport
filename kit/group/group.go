@@ -16,6 +16,10 @@
 // app kept in a format of its own, or a decision an instance on that format
 // passes on.
 //
+// A group moves to a new phrase with HandNewPhrase, which hands it to each
+// instance sealed for that instance alone, and Previous, which carries who
+// was approved or taken out over to it.
+//
 // A fortress opens a second Group under its own domain with the same phrase,
 // next to the app's own. Previous carries an app's pairing over to that
 // phrase, and OnRemove keeps a removal in step between the two.
@@ -171,6 +175,12 @@ type Config struct {
 	// met before; false refuses the newcomer as a stranger. nil takes everyone
 	// the phrase lets in.
 	MayJoin func(ctx context.Context, id string) bool
+	// OnNewPhrase keeps the new phrase an approved instance hands this one
+	// with HandNewPhrase, once whoever it names as taken out is out here and
+	// the group takes nobody new on this phrase. The app then opens the group
+	// on it, with the secret it holds now as Previous. It may get the same
+	// phrase twice. nil takes none, and so does a group opened on keys alone.
+	OnNewPhrase func(NewPhrase) error
 }
 
 // State is where a member stands with this instance.
@@ -261,6 +271,9 @@ type Group struct {
 	byPhrase    bool
 	vouchedOnly bool
 	mayJoin     func(context.Context, string) bool
+	onNewPhrase func(NewPhrase) error
+	domain      keys.Domain
+	secret      []byte
 	kinds       []member.Kind
 	ports       []string
 	maxAnswer   int
@@ -288,6 +301,7 @@ type Group struct {
 	addrs    map[string]*remoteAddr
 	failed   map[string]time.Time
 	awaiting map[string]time.Time
+	offered  map[string]offer
 	// closedSince is when the group stopped taking newcomers, zero while it
 	// takes them.
 	closedSince time.Time
@@ -375,6 +389,9 @@ func Open(cfg Config, serve http.Handler) (*Group, error) {
 		byPhrase:    cfg.JoinByPhrase,
 		vouchedOnly: cfg.VouchedOnly,
 		mayJoin:     cfg.MayJoin,
+		onNewPhrase: cfg.OnNewPhrase,
+		domain:      cfg.Domain,
+		secret:      bytes.Clone(cfg.Secret),
 		kinds:       slices.Clone(cfg.Kinds),
 		ports:       portNames(cfg.Ports),
 		maxAnswer:   cmp.Or(cfg.MaxAnswerBytes, maxAnswerBytes),
@@ -393,6 +410,7 @@ func Open(cfg Config, serve http.Handler) (*Group, error) {
 		addrs:       map[string]*remoteAddr{},
 		failed:      map[string]time.Time{},
 		awaiting:    map[string]time.Time{},
+		offered:     map[string]offer{},
 		strangerTo:  map[string]bool{},
 		heard:       map[string]bool{},
 		greeted:     map[string]time.Time{},
