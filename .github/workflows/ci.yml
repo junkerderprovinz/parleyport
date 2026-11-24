@@ -5,7 +5,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: ["**", "!renovate/**"]
     paths-ignore:
       - "**.md"
       - "LICENSE"
