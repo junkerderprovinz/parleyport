@@ -144,3 +144,34 @@ jobs:
           docker logs pp || true
           docker rm -f pp >/dev/null
           exit 1
+
+      # Proxmox runs the image as an LXC, where ports below 1024 stay privileged.
+      # A certificate already in autocert's cache keeps ACME out of the test.
+      - name: "Boot smoke: TLS on 443 with privileged low ports"
+        run: |
+          set -euo pipefail
+          certs="$(mktemp -d)"
+          openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 90 \
+            -subj /CN=relay.example.test -addext subjectAltName=DNS:relay.example.test \
+            -keyout "$certs/key.pem" -out "$certs/cert.pem" 2>/dev/null
+          cat "$certs/key.pem" "$certs/cert.pem" > "$certs/relay.example.test"
+          chmod 755 "$certs"
+          chmod 644 "$certs/relay.example.test"
+          docker run -d --name pp-tls --sysctl net.ipv4.ip_unprivileged_port_start=1024 \
+            -e PARLEYPORT_DOMAIN=relay.example.test -v "$certs:/var/lib/parleyport/certs" \
+            -p 8443:443 parleyport:ci
+          for i in $(seq 1 30); do
+            if body="$(curl -fsSk --resolve relay.example.test:8443:127.0.0.1 https://relay.example.test:8443/health)"; then
+              echo "health over TLS after ${i}s: $body"
+              docker rm -f pp-tls >/dev/null
+              exit 0
+            fi
+            if [ -z "$(docker ps -q --filter name=pp-tls)" ]; then
+              echo "the container exited:"
+              break
+            fi
+            sleep 1
+          done
+          docker logs pp-tls || true
+          docker rm -f pp-tls >/dev/null
+          exit 1
