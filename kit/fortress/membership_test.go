@@ -160,6 +160,9 @@ func TestAMembershipFollowsANewPhraseInItsDirectory(t *testing.T) {
 	}
 	f := openDir()
 	waitFor(t, "the plugin to see both", func() bool { return len(f.Members()) == 2 })
+	// Only a member alpha approved before the change can follow it, and the
+	// plugin takes the new keys only from a member it approved.
+	meet(t, a, &node{name: "cellar", app: "watcher", id: f.self, f: f})
 	if moved, err := Follow(ctx(t), dir, f); moved || err != nil {
 		t.Errorf("Follow before any change = %t %v", moved, err)
 	}
