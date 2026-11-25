@@ -24,6 +24,11 @@ const (
 	directRetry = addrTTL
 	// awaitWindow is how long an answer saying "waits for approval" stands.
 	awaitWindow = 2 * time.Minute
+	// reconnectSettle is how long a call keeps trying a member that is off
+	// the relay for the moment it or this instance takes to reconnect, and
+	// reconnectRetry how far apart the tries are.
+	reconnectSettle = 3 * time.Second
+	reconnectRetry  = 100 * time.Millisecond
 )
 
 // remoteAddr is a member's direct address as far as this instance knows it:
@@ -47,10 +52,39 @@ type remoteAddr struct {
 // that the answer came from a member not approved here: then it is a
 // *relay.UntrustedAnswer, which the caller may read only for what cannot
 // hurt it, such as that this instance waits for approval there.
+//
+// A member that just left the relay, or that this instance cannot see
+// because its own connection just came or went, is tried again for a few
+// seconds, since a reconnect takes it away for a moment. An answer, however
+// bad, is never tried again.
 func (g *Group) Call(ctx context.Context, id, method, path string, body []byte) (int, []byte, error) {
 	if len(body) > MaxCallBytes {
 		return 0, nil, ErrTooLarge
 	}
+	until := time.Now().Add(reconnectSettle)
+	for {
+		status, out, err := g.callOnce(ctx, id, method, path, body)
+		if err == nil || !g.mayReturn(id, err) || time.Now().After(until) {
+			return status, out, err
+		}
+		select {
+		case <-ctx.Done():
+			return status, out, err
+		case <-time.After(reconnectRetry):
+		}
+	}
+}
+
+// mayReturn reports whether err says that id was between two connections
+// rather than gone.
+func (g *Group) mayReturn(id string, err error) bool {
+	if errors.Is(err, relay.ErrAway) {
+		return true
+	}
+	return errors.Is(err, ErrUnreachable) && g.client != nil && g.client.MayReturn(id, reconnectSettle)
+}
+
+func (g *Group) callOnce(ctx context.Context, id, method, path string, body []byte) (int, []byte, error) {
 	urls, relayed := g.routesTo(id)
 	if len(urls) == 0 && !relayed {
 		return 0, nil, ErrUnreachable
