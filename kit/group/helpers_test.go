@@ -90,6 +90,8 @@ type node struct {
 	srv     *httptest.Server
 	store   *memStore
 	removed atomic.Int32
+	// current is the group that answers at srv.
+	current atomic.Pointer[Group]
 }
 
 type setup struct {
@@ -126,9 +128,8 @@ func open(t *testing.T, name string, s setup) *node {
 	if n.store == nil {
 		n.store = &memStore{}
 	}
-	var current atomic.Pointer[Group]
 	n.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if g := current.Load(); g != nil && r.URL.Path == DirectPath {
+		if g := n.current.Load(); g != nil && r.URL.Path == DirectPath {
 			g.DirectHandler().ServeHTTP(w, r)
 			return
 		}
@@ -136,7 +137,7 @@ func open(t *testing.T, name string, s setup) *node {
 	}))
 	t.Cleanup(n.srv.Close)
 	n.g = openGroup(t, n, s)
-	current.Store(n.g)
+	n.current.Store(n.g)
 	return n
 }
 

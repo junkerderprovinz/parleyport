@@ -6,34 +6,53 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/junkerderprovinz/parleyport/kit/lan"
 )
 
 // A member that is opened again, as an app does to change its pairing, is
-// off the relay for a moment. A call made in that moment reaches it once it
-// is back.
+// off the relay for a moment and answers at its address like an instance in
+// no group. A call made in that moment reaches it once it is back.
 func TestACallReachesAMemberThatIsOpenedAgain(t *testing.T) {
-	url := relayServer(t)
-	a := open(t, "alpha", setup{relay: url})
-	b := open(t, "bravo", setup{relay: url, noListener: true})
-	waitFor(t, "alpha to see bravo", func() bool { m, _ := memberOf(a.g, b.id); return m.Relay })
-	meet(t, a, b)
+	for _, tc := range []struct {
+		name   string
+		direct bool
+	}{
+		{"on the relay", false},
+		{"at its address too", true},
+	} {
+		direct := tc.direct
+		t.Run(tc.name, func(t *testing.T) {
+			url := relayServer(t)
+			la := lan.New(lan.Config{})
+			t.Cleanup(func() { _ = la.Close() })
+			a := open(t, "alpha", setup{relay: url, lan: la})
+			b := open(t, "bravo", setup{relay: url, noListener: !direct})
+			waitFor(t, "alpha to see bravo", func() bool { m, _ := memberOf(a.g, b.id); return m.Relay })
+			if direct {
+				la.Observe(tagged(a.g, lan.Peer{ID: b.id, Name: "bravo", URL: b.srv.URL}))
+			}
+			meet(t, a, b)
 
-	_ = b.g.Close()
-	waitFor(t, "alpha to see bravo leave", func() bool { m, _ := memberOf(a.g, b.id); return !m.Relay })
-	type answer struct {
-		status int
-		err    error
-	}
-	got := make(chan answer, 1)
-	go func() {
-		status, _, err := call(t, a, b, http.MethodGet, "/api/whoami", nil)
-		got <- answer{status, err}
-	}()
-	time.Sleep(500 * time.Millisecond)
-	b.g = openGroup(t, b, setup{relay: url, noListener: true})
+			_ = b.g.Close()
+			waitFor(t, "alpha to see bravo leave", func() bool { m, _ := memberOf(a.g, b.id); return !m.Relay })
+			type answer struct {
+				status int
+				err    error
+			}
+			got := make(chan answer, 1)
+			go func() {
+				status, _, err := call(t, a, b, http.MethodGet, "/api/whoami", nil)
+				got <- answer{status, err}
+			}()
+			time.Sleep(500 * time.Millisecond)
+			b.g = openGroup(t, b, setup{relay: url, noListener: !direct})
+			b.current.Store(b.g)
 
-	if r := <-got; r.err != nil || r.status != http.StatusOK {
-		t.Errorf("alpha's call while bravo was away = %d %v, want 200 once bravo is back", r.status, r.err)
+			if r := <-got; r.err != nil || r.status != http.StatusOK {
+				t.Errorf("alpha's call while bravo was away = %d %v, want 200 once bravo is back", r.status, r.err)
+			}
+		})
 	}
 }
 

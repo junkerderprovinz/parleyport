@@ -688,11 +688,17 @@ func directRefusal(base string, status int) error {
 	switch status {
 	case http.StatusServiceUnavailable:
 		return fmt.Errorf("%w directly at %s: it is busy", ErrUnreachable, base)
-	case http.StatusForbidden, http.StatusNotFound:
+	case http.StatusForbidden:
 		return fmt.Errorf("%w: %s refused the direct call with HTTP %d", ErrStranger, base, status)
+	case http.StatusNotFound:
+		return fmt.Errorf("%w: %s refused the direct call with HTTP %d: %w", ErrStranger, base, status, errNoGroup)
 	}
 	return &StatusError{Address: base, Status: status}
 }
+
+// errNoGroup marks a direct call that found no open group at the address,
+// as an app's is for a moment while it opens its group again.
+var errNoGroup = errors.New("no open group answers there")
 
 // exchange makes one direct call and opens the answer, without asking yet
 // whose key signed it.

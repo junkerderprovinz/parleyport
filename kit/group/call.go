@@ -81,7 +81,8 @@ func (g *Group) mayReturn(id string, err error) bool {
 	if errors.Is(err, relay.ErrAway) {
 		return true
 	}
-	return errors.Is(err, ErrUnreachable) && g.client != nil && g.client.MayReturn(id, reconnectSettle)
+	gone := errors.Is(err, ErrUnreachable) || errors.Is(err, errNoGroup)
+	return gone && g.client != nil && g.client.MayReturn(id, reconnectSettle)
 }
 
 func (g *Group) callOnce(ctx context.Context, id, method, path string, body []byte) (int, []byte, error) {
