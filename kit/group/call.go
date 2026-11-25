@@ -49,7 +49,9 @@ type remoteAddr struct {
 // A member on this network is asked directly first, then at an address a
 // sweep or the member itself named, then over the relay. The routes are
 // tried one after another rather than raced, since a call can change
-// something and must not arrive twice. An error means no answer came, or
+// something and must not arrive twice. For the same reason a call that went
+// out in full at an address and got no answer there takes no other route
+// unless it is GET or HEAD. An error means no answer came, or
 // that the answer came from a member not approved here: then it is a
 // *relay.UntrustedAnswer, which the caller may read only for what cannot
 // hurt it, such as that this instance waits for approval there.
@@ -122,6 +124,10 @@ func (g *Group) callOnce(ctx context.Context, id, method, path string, body []by
 		res, err := g.callDirect(dctx, u, id, call)
 		if err != nil {
 			g.directFailed(ctx, u)
+			var sent sentError
+			if errors.As(err, &sent) && !repeatable(method) {
+				return 0, nil, err
+			}
 			directErr = err
 			continue
 		}

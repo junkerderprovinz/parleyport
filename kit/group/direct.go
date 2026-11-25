@@ -15,10 +15,12 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/junkerderprovinz/parleyport/kit/keys"
@@ -700,6 +702,13 @@ func directRefusal(base string, status int) error {
 // as an app's is for a moment while it opens its group again.
 var errNoGroup = errors.New("no open group answers there")
 
+// sentError is a direct call that failed after it went out in full, so the
+// member may have served it. One cut off earlier cannot have been, since the
+// call is sealed and opens only whole.
+type sentError struct{ error }
+
+func (e sentError) Unwrap() error { return e.error }
+
 // exchange makes one direct call and opens the answer, without asking yet
 // whose key signed it.
 func (g *Group) exchange(ctx context.Context, base, target string, call relay.ProxyCall) (relay.ProxyResult, []byte, string, error) {
@@ -707,9 +716,20 @@ func (g *Group) exchange(ctx context.Context, base, target string, call relay.Pr
 	if err != nil {
 		return relay.ProxyResult{}, nil, "", err
 	}
+	var wrote atomic.Bool
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
+		WroteRequest: func(i httptrace.WroteRequestInfo) { wrote.Store(i.Err == nil) },
+	}))
+	lost := func(err error) error {
+		err = fmt.Errorf("%w directly at %s: %w", ErrUnreachable, base, err)
+		if wrote.Load() {
+			return sentError{err}
+		}
+		return err
+	}
 	resp, err := g.hc.Do(req)
 	if err != nil {
-		return relay.ProxyResult{}, nil, "", fmt.Errorf("%w directly at %s: %w", ErrUnreachable, base, err)
+		return relay.ProxyResult{}, nil, "", lost(err)
 	}
 	defer resp.Body.Close() //nolint:errcheck // nothing to do about a failed close of a read body
 	// The answer comes sealed, with two rounds of base64 around it, which
@@ -717,7 +737,7 @@ func (g *Group) exchange(ctx context.Context, base, target string, call relay.Pr
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, int64(2*g.maxAnswer+64<<10)))
 	switch {
 	case err != nil:
-		return relay.ProxyResult{}, nil, "", fmt.Errorf("%w directly at %s: %w", ErrUnreachable, base, err)
+		return relay.ProxyResult{}, nil, "", lost(err)
 	case resp.StatusCode != http.StatusOK:
 		return relay.ProxyResult{}, nil, "", directRefusal(base, resp.StatusCode)
 	}

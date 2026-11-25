@@ -6,7 +6,9 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/junkerderprovinz/parleyport/kit/keys"
@@ -154,6 +156,52 @@ func TestACallFallsBackToTheRelay(t *testing.T) {
 	}
 	if m, _ := memberOf(a.g, b.id); m.Direct || !m.Relay {
 		t.Errorf("alpha lists %+v after the direct call failed, want bravo on the relay only", m)
+	}
+}
+
+// An address that takes a call in full and loses the answer may have had it
+// served there. Only a call that changes nothing goes over the relay after
+// that.
+func TestACallLostAfterItWentOutDirectlyFallsBackOnlyIfItChangesNothing(t *testing.T) {
+	for _, tc := range []struct {
+		method string
+		want   int32
+	}{
+		{http.MethodPost, 1},
+		{http.MethodGet, 2},
+	} {
+		t.Run(tc.method, func(t *testing.T) {
+			var served atomic.Int32
+			app := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				served.Add(1)
+				w.WriteHeader(http.StatusNoContent)
+			})
+			url := relayServer(t)
+			la := lan.New(lan.Config{})
+			t.Cleanup(func() { _ = la.Close() })
+			a := open(t, "alpha", setup{relay: url, lan: la})
+			b := open(t, "bravo", setup{relay: url, app: app})
+			waitFor(t, "alpha to see bravo on the relay", func() bool { _, ok := memberOf(a.g, b.id); return ok })
+			meet(t, a, b)
+
+			lossy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				b.current.Load().DirectHandler().ServeHTTP(httptest.NewRecorder(), r)
+				panic(http.ErrAbortHandler)
+			}))
+			t.Cleanup(lossy.Close)
+			la.Observe(tagged(a.g, lan.Peer{ID: b.id, Name: "bravo", URL: lossy.URL}))
+
+			status, _, err := call(t, a, b, tc.method, "/api/job", nil)
+			if got := served.Load(); got != tc.want {
+				t.Errorf("bravo served the %s %d times, want %d", tc.method, got, tc.want)
+			}
+			switch {
+			case tc.want == 1 && !errors.Is(err, ErrUnreachable):
+				t.Errorf("call = %d %v, want ErrUnreachable", status, err)
+			case tc.want == 2 && (err != nil || status != http.StatusNoContent):
+				t.Errorf("call = %d %v, want 204 over the relay", status, err)
+			}
+		})
 	}
 }
 
