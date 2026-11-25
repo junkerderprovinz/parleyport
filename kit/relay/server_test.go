@@ -1,10 +1,13 @@
 package relay
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -364,6 +367,78 @@ func TestAnInstanceAloneOnItsKeyStaysReachableAfterReplacingItsSocket(t *testing
 		if got := next(t, second, "the call never reached the instance"); got.Type != TypeProxyRequest {
 			t.Fatalf("the instance got a %q frame, want the proxy-request", got.Type)
 		}
+	}
+}
+
+// heldLog holds up the first writer of a line containing want until release
+// is closed, which pauses a goroutine at the point where it logs.
+type heldLog struct {
+	want    string
+	reached chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func holdLogAt(t *testing.T, want string) *heldLog {
+	t.Helper()
+	h := &heldLog{want: want, reached: make(chan struct{}), release: make(chan struct{})}
+	prev := log.Writer()
+	log.SetOutput(h)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	return h
+}
+
+func (h *heldLog) Write(p []byte) (int, error) {
+	if bytes.Contains(p, []byte(h.want)) {
+		h.once.Do(func() {
+			close(h.reached)
+			<-h.release
+		})
+	}
+	return len(p), nil
+}
+
+// An instance whose socket closed and that is back on a new one before the
+// relay finished letting the old one go stays online for its siblings.
+func TestAnInstanceBackBeforeItsOldSocketIsGoneStaysOnline(t *testing.T) {
+	s := New()
+	sib := join(t, s, "key-1", "watcher")
+	old := join(t, s, "key-1", "alpha")
+	next(t, sib, "no arrival announce")
+	next(t, old, "no sibling announce")
+
+	held := holdLogAt(t, "closed: it left")
+	left := make(chan struct{})
+	go func() {
+		s.Leave(old)
+		close(left)
+	}()
+	<-held.reached
+	join(t, s, "key-1", "alpha")
+	close(held.release)
+	<-left
+
+	online := false
+	for quiet := false; !quiet; {
+		select {
+		case raw := <-sib.writes:
+			env, err := Decode(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var p Presence
+			switch {
+			case env.Type == TypeAnnounce:
+				online = announceOf(t, env, "sibling announce").InstanceID == "alpha"
+			case env.Type == TypePresence && env.Into(&p) == nil && p.InstanceID == "alpha":
+				online = p.Online
+			}
+		case <-time.After(200 * time.Millisecond):
+			quiet = true
+		}
+	}
+	if !online {
+		t.Error("the sibling heard alpha come back and then go, while alpha is connected")
 	}
 }
 

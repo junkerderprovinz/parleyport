@@ -293,9 +293,10 @@ func (s *Server) Join(key string, c Conn, a Announce, proven bool) error {
 		s.mu.Unlock()
 		return errGroupFull
 	}
-	var failures []pendingFailure
+	var full []*client
 	if replaced != nil {
-		_, failures = s.removeLocked(replaced.conn)
+		_, failures := s.removeLocked(replaced.conn)
+		full = s.failPendingLocked(full, failures, "the instance that would have answered this reconnected before it replied; retry")
 	}
 	// Looked up again because removing the only connection on the key drops
 	// its group, and a newcomer added to that map would be invisible.
@@ -305,25 +306,24 @@ func (s *Server) Join(key string, c Conn, a Announce, proven bool) error {
 	}
 	s.clients[c] = cl
 	group[c] = cl
+	for _, sib := range siblings {
+		full = offer(full, cl, frameOf(TypeAnnounce, sib.announce))
+	}
+	arrival := frameOf(TypeAnnounce, a)
+	for _, sib := range siblings {
+		full = offer(full, sib, arrival)
+	}
 	s.mu.Unlock()
 
 	if replaced != nil {
 		log.Printf("relay: %s closed: replaced by a newer connection with the same id", who(key, a.InstanceID))
 		replaced.stop()
 	}
-	s.failPending(failures, "the instance that would have answered this reconnected before it replied; retry")
 	for _, gone := range stale {
 		s.leave(gone, "its key is kept to another instance than when it joined")
 	}
 	go s.writeLoop(cl)
-
-	for _, sib := range siblings {
-		s.enqueue(cl, frameOf(TypeAnnounce, sib.announce))
-	}
-	arrival := frameOf(TypeAnnounce, a)
-	for _, sib := range siblings {
-		s.enqueue(sib, arrival)
-	}
+	s.dropFull(full)
 	return nil
 }
 
@@ -345,25 +345,21 @@ func (s *Server) Leave(c Conn) { s.leave(c, "it left") }
 func (s *Server) leave(c Conn, why string) {
 	s.mu.Lock()
 	cl, failures := s.removeLocked(c)
-	var siblings []*client
-	if cl != nil {
-		for _, sib := range s.keys[cl.key] {
-			if sib.meets(cl) {
-				siblings = append(siblings, sib)
-			}
+	if cl == nil {
+		s.mu.Unlock()
+		return
+	}
+	full := s.failPendingLocked(nil, failures, "the instance that would have answered this disconnected before it replied")
+	gone := frameOf(TypePresence, Presence{InstanceID: cl.announce.InstanceID})
+	for _, sib := range s.keys[cl.key] {
+		if sib.meets(cl) {
+			full = offer(full, sib, gone)
 		}
 	}
 	s.mu.Unlock()
-	if cl == nil {
-		return
-	}
 	log.Printf("relay: %s closed: %s", who(cl.key, cl.announce.InstanceID), why)
 	cl.stop()
-	s.failPending(failures, "the instance that would have answered this disconnected before it replied")
-	gone := frameOf(TypePresence, Presence{InstanceID: cl.announce.InstanceID})
-	for _, sib := range siblings {
-		s.enqueue(sib, gone)
-	}
+	s.dropFull(full)
 }
 
 // Route handles one frame a client sent up its socket. Only the proxy frames
@@ -512,22 +508,19 @@ func (s *Server) removeLocked(c Conn) (*client, []pendingFailure) {
 	return cl, failures
 }
 
-// failPending answers each orphaned request with an error response to the
-// connection that asked. It runs after the lock is released, since enqueue
-// takes it again.
-func (s *Server) failPending(failures []pendingFailure, reason string) {
+// failPendingLocked answers each orphaned request with an error response to
+// the connection that asked, ahead of the announce or presence that follows,
+// and adds the connections without room for it to full. The caller holds mu.
+func (s *Server) failPendingLocked(full []*client, failures []pendingFailure, reason string) []*client {
 	for _, f := range failures {
-		s.mu.Lock()
-		from := s.clients[f.from]
-		s.mu.Unlock()
-		if from == nil {
-			continue
+		if from := s.clients[f.from]; from != nil {
+			full = offer(full, from, frameOf(TypeProxyResponse, ProxyResponse{
+				RequestID: f.requestID,
+				Error:     reason,
+			}))
 		}
-		s.enqueue(from, frameOf(TypeProxyResponse, ProxyResponse{
-			RequestID: f.requestID,
-			Error:     reason,
-		}))
 	}
+	return full
 }
 
 // sweepPendingLocked drops one key's requests that were never answered. The
@@ -559,9 +552,26 @@ func inFlightFromLocked(keyPending map[string]pending, from Conn) int {
 // safe because maxPendingPerSender keeps a sender from flooding a healthy
 // target's queue; the rest of the traffic is bounded by the group size.
 func (s *Server) enqueue(cl *client, frame []byte) {
+	s.dropFull(offer(nil, cl, frame))
+}
+
+// offer queues frame for cl, or adds cl to full when its queue has no room.
+// Join and leave offer under mu, so every sibling hears of an instance going
+// and coming back in the order the registry saw it, and the old socket of an
+// instance that reconnected at once cannot mark the new one offline.
+func offer(full []*client, cl *client, frame []byte) []*client {
 	select {
 	case cl.send <- frame:
+		return full
 	default:
+		return append(full, cl)
+	}
+}
+
+// dropFull drops the connections whose queue had no room left. It takes
+// s.mu, so the caller must not hold it.
+func (s *Server) dropFull(full []*client) {
+	for _, cl := range full {
 		s.leave(cl.conn, fmt.Sprintf("its queue of %d frames was full", queueDepth))
 	}
 }
