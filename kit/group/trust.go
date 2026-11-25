@@ -617,6 +617,7 @@ func (g *Group) Remove(id string) error {
 // drop it at once, and the others hear it from their rosters. Close waits
 // until it went out. The app forgets the membership after it.
 func (g *Group) Leave() {
+	g.left.Store(true)
 	at := time.Now().Unix()
 	sig := g.identity.Sign(g.leaveMessage(g.self, at))
 	g.passOn(decision{Op: opLeave, ID: g.self, At: at, Sig: sig}, g.instancesOnline(""))
@@ -800,7 +801,7 @@ func (g *Group) decide(d decision, from string, now time.Time) {
 }
 
 func (g *Group) heardRemoved() {
-	if g.onRemoved != nil {
+	if g.onRemoved != nil && !g.left.Load() {
 		g.removed.Do(func() { go g.onRemoved() })
 	}
 }

@@ -30,6 +30,26 @@ func TestAMemberThatLeavesIsDroppedAtOnceAndCountsAsNoRemoval(t *testing.T) {
 	}
 }
 
+// The members turn away an instance that left as one taken out, and it still
+// has calls of its own going out until it closes.
+func TestAMemberThatLeftTakesNoRefusalAfterwardsForARemoval(t *testing.T) {
+	n := onRelay(t, "alpha", "bravo")
+	a, b := n[0], n[1]
+	meet(t, a, b)
+
+	b.g.Leave()
+	waitFor(t, "alpha to drop bravo", func() bool { _, listed := memberOf(a.g, b.id); return !listed })
+	if status, body, _ := call(t, b, a, http.MethodGet, rosterPath, nil); status != http.StatusGone {
+		t.Fatalf("alpha answered bravo %d %s, want it turned away", status, body)
+	}
+	if err := b.g.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if b.removed.Load() > 0 {
+		t.Error("bravo heard it was removed after it left")
+	}
+}
+
 func TestAMemberAwayWhileAnotherLeftDropsItOnItsReturn(t *testing.T) {
 	url := relayServer(t)
 	a := open(t, "alpha", setup{relay: url})

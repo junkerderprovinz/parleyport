@@ -40,6 +40,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/junkerderprovinz/parleyport/kit/keys"
@@ -293,6 +294,9 @@ type Group struct {
 	kick     chan struct{}
 	stirred  chan struct{}
 	removed  sync.Once
+	// left is set once this instance left the group. The members turn it
+	// away as one taken out from then on, and that refusal is no removal.
+	left atomic.Bool
 
 	mu       sync.Mutex
 	st       state
