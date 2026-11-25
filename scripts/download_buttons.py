@@ -11,6 +11,7 @@ BUTTONS = {
     "unraid": "https://ca.unraid.net/apps/parleyport-1ucelx3086hypv",
     "mos": "https://mos-official.net/apps.html?search=ParleyPort",
     "compose": "https://raw.githubusercontent.com/junkerderprovinz/parleyport/main/compose.yaml",
+    "proxmox": "#proxmox-ve",
     # A release's "Source code (zip)" is the whole repository at that tag, and
     # GitHub gives the newest one no fixed address, so this leads to the release
     # that lists it.
