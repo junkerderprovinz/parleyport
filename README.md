@@ -182,6 +182,8 @@ In Container Station, open **Applications** and click **Create**. Paste [compose
 
 In the Docker app of UGOS Pro, open **Project** and click **Create**. Pick a folder for ParleyPort and paste [compose.yaml](compose.yaml).
 
+ParleyPort runs as a fixed user and cannot write to folders you create yourself. Add `user: "1026:100"` to the service in the file, with your own user's IDs: `id` over SSH shows them, and the first user on a Synology is usually 1026 in group 100.
+
 <sub>The Synology logo is a trademark of Synology Inc. and the QNAP logo a trademark of QNAP Systems, Inc., both registered in Taiwan and other regions.</sub>
 
 <br>
