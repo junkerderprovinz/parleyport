@@ -3,9 +3,12 @@ package relay
 import (
 	"bytes"
 	"context"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -359,6 +362,60 @@ func TestCallInFlightFailsWhenTheConnectionDies(t *testing.T) {
 		}
 	case <-time.After(wsTimeout):
 		t.Fatal("the call is still waiting; a dead connection must fail it at once")
+	}
+}
+
+// A call given up while its frame is still going out leaves the connection
+// to the other calls, which share it.
+func TestACallGivenUpWhileItIsSentKeepsTheConnection(t *testing.T) {
+	reading, release := make(chan struct{}), make(chan struct{})
+	var dials atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer func() { _ = c.CloseNow() }()
+		if dials.Add(1) > 1 {
+			<-release
+			return
+		}
+		c.SetReadLimit(-1)
+		challenge := frameOf(TypeChallenge, Challenge{Nonce: make([]byte, challengeSize)})
+		if err := c.Write(r.Context(), websocket.MessageText, challenge); err != nil {
+			return
+		}
+		if _, _, err := c.Read(r.Context()); err != nil {
+			return
+		}
+		// The relay takes the start of the call and then stops reading, so
+		// the rest of it waits in the client's write.
+		_, msg, err := c.Reader(r.Context())
+		if err != nil {
+			return
+		}
+		if _, err := io.CopyN(io.Discard, msg, 1<<20); err != nil {
+			return
+		}
+		close(reading)
+		<-release
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) })
+	alpha := startClient(t, strings.TrimPrefix(srv.URL, "http://"), "shared-relay-test-key-0123456789ab", alphaID, nil)
+	waitFor(t, "alpha to connect", alpha.Connected)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { _, _, _ = alpha.Proxy(ctx, bravoID, http.MethodPost, "/api/files", make([]byte, 32<<20)) }()
+	select {
+	case <-reading:
+	case <-time.After(wsTimeout):
+		t.Fatal("the call never reached the relay")
+	}
+	cancel()
+	time.Sleep(300 * time.Millisecond)
+	if !alpha.Connected() || dials.Load() > 1 {
+		t.Error("giving up one call dropped the connection every call goes through")
 	}
 }
 

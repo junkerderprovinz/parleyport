@@ -334,7 +334,10 @@ func (c *Client) Proxy(ctx context.Context, target, method, path string, body []
 		return nil, http.StatusInternalServerError, err
 	}
 	frame := frameOf(TypeProxyRequest, ProxyRequest{RequestID: id, Target: target, Sealed: sealed, Framing: framingParts})
-	if err := sendFrame(ctx, conn, frame, writeTimeout); err != nil {
+	// The frame goes out even when the caller gives up: a write cut off
+	// halfway closes the socket that every other call shares, and sendFrame
+	// stops on a link that takes nothing anyway.
+	if err := sendFrame(context.WithoutCancel(ctx), conn, frame, writeTimeout); err != nil {
 		return nil, http.StatusBadGateway, fmt.Errorf("relay: %w", err)
 	}
 
