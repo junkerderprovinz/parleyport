@@ -64,9 +64,12 @@ func reopenPlugin(t *testing.T, n *node, dir string) *Fortress {
 
 // movedAway has a and b change the phrase while s, a plugin, follows it
 // through a on its next run and then answers on the new one alone, with a
-// and b gone.
+// and b gone. Only a member that a approved before the change can follow it,
+// and the plugin answers on the old keys only the members it approved, so the
+// two meet first.
 func movedAway(t *testing.T, url string, a, b, s *node, dir string) {
 	t.Helper()
+	meet(t, a, s)
 	changePhrase(t, url, a, b)
 	closeAll(t, s)
 	s.f = reopenPlugin(t, s, dir)
@@ -158,9 +161,6 @@ func TestAPluginStopsAnsweringTheOldKeysWhenTheThirtyDaysEndWhileItRuns(t *testi
 	for _, n := range []*node{a, b, s} {
 		waitFor(t, n.name+" to see everybody", func() bool { return len(n.f.Members()) == 2 })
 	}
-	// Only a member alpha approved before the change can follow it, and the
-	// plugin answers on the old keys only the members it approved.
-	meet(t, a, s)
 	movedAway(t, url, a, b, s, dir)
 	c := asker(t, url, a)
 	waitFor(t, "the plugin to answer on its old keys", func() bool {
