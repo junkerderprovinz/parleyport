@@ -118,6 +118,8 @@ type setup struct {
 	// noListener opens the instance the way a desktop app runs: it calls
 	// others directly but takes no direct calls itself.
 	noListener bool
+	// app answers the calls that reach the app, appRoutes when it is nil.
+	app http.Handler
 }
 
 // open starts an instance called name. Its app answers GET /api/whoami with
@@ -159,6 +161,10 @@ func openGroup(t *testing.T, n *node, s setup) *Group {
 	if s.noListener {
 		direct = ""
 	}
+	app := s.app
+	if app == nil {
+		app = appRoutes()
+	}
 	g, err := Open(Config{
 		Domain:              testDomain,
 		Secret:              secret,
@@ -184,7 +190,7 @@ func openGroup(t *testing.T, n *node, s setup) *Group {
 		VouchedOnly:         s.vouchedOnly,
 		MayJoin:             s.mayJoin,
 		OnNewPhrase:         s.onNewPhrase,
-	}, appRoutes())
+	}, app)
 	if err != nil {
 		t.Fatalf("open %s: %v", n.name, err)
 	}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -55,8 +56,9 @@ type remoteAddr struct {
 //
 // A member that just left the relay, or that this instance cannot see
 // because its own connection just came or went, is tried again for a few
-// seconds, since a reconnect takes it away for a moment. An answer, however
-// bad, is never tried again.
+// seconds, since a reconnect takes it away for a moment. A call that may
+// have reached the member is made again only as GET or HEAD, which change
+// nothing, and an answer, however bad, is never tried again.
 func (g *Group) Call(ctx context.Context, id, method, path string, body []byte) (int, []byte, error) {
 	if len(body) > MaxCallBytes {
 		return 0, nil, ErrTooLarge
@@ -64,7 +66,7 @@ func (g *Group) Call(ctx context.Context, id, method, path string, body []byte) 
 	until := time.Now().Add(reconnectSettle)
 	for {
 		status, out, err := g.callOnce(ctx, id, method, path, body)
-		if err == nil || !g.mayReturn(id, err) || time.Now().After(until) {
+		if err == nil || !g.mayRepeat(id, method, err) || time.Now().After(until) {
 			return status, out, err
 		}
 		select {
@@ -75,20 +77,39 @@ func (g *Group) Call(ctx context.Context, id, method, path string, body []byte) 
 	}
 }
 
-// mayReturn reports whether err says that id was between two connections
-// rather than gone.
-func (g *Group) mayReturn(id string, err error) bool {
-	if errors.Is(err, relay.ErrAway) {
+// mayRepeat reports whether a call that failed with err may be made again:
+// id was between two connections, and the call either never reached it or
+// changes nothing there.
+func (g *Group) mayRepeat(id, method string, err error) bool {
+	returning := g.client != nil && g.client.MayReturn(id, reconnectSettle)
+	switch {
+	case errors.Is(err, relay.ErrAway):
 		return true
+	case errors.Is(err, errNoRoute), errors.Is(err, errNoGroup):
+		return returning
+	case errors.Is(err, relay.ErrCutOff):
+		return repeatable(method)
+	case errors.Is(err, ErrUnreachable):
+		return returning && repeatable(method)
 	}
-	gone := errors.Is(err, ErrUnreachable) || errors.Is(err, errNoGroup)
-	return gone && g.client != nil && g.client.MayReturn(id, reconnectSettle)
+	return false
 }
+
+// repeatable reports whether a call with method may reach a member twice
+// without harm, as HTTP has it. Every call that changes something goes as
+// POST.
+func repeatable(method string) bool {
+	return method == http.MethodGet || method == http.MethodHead
+}
+
+// errNoRoute is ErrUnreachable for a call that found no way to the member
+// and so never went out.
+var errNoRoute = fmt.Errorf("%w", ErrUnreachable)
 
 func (g *Group) callOnce(ctx context.Context, id, method, path string, body []byte) (int, []byte, error) {
 	urls, relayed := g.routesTo(id)
 	if len(urls) == 0 && !relayed {
-		return 0, nil, ErrUnreachable
+		return 0, nil, errNoRoute
 	}
 	call := relay.ProxyCall{Method: method, Path: path, Body: body}
 	dctx, cancel := directContext(ctx, relayed)

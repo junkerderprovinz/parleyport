@@ -359,8 +359,10 @@ func (c *Client) Proxy(ctx context.Context, target, method, path string, body []
 	// response is never taken as a result.
 	switch resp.Error {
 	case "":
-	case reasonReconnected, reasonDisconnected, reasonDropped, notConnected(target):
-		return nil, http.StatusBadGateway, awayError(resp.Error)
+	case notConnected(target):
+		return nil, http.StatusBadGateway, connError{resp.Error, ErrAway}
+	case reasonReconnected, reasonDisconnected, reasonDropped:
+		return nil, http.StatusBadGateway, connError{resp.Error, ErrCutOff}
 	default:
 		return nil, http.StatusBadGateway, errors.New("relay: " + resp.Error)
 	}
@@ -378,8 +380,13 @@ func (c *Client) Proxy(ctx context.Context, target, method, path string, body []
 }
 
 // ErrAway is the error of a call that found this instance or its target off
-// the relay, as either is for a moment while it reconnects.
+// the relay, as either is for a moment while it reconnects. The call never
+// reached the target.
 var ErrAway = errors.New("relay: not connected")
+
+// ErrCutOff is the error of a call that went out and got no answer because
+// a connection on the way went. The target may have served it.
+var ErrCutOff = errors.New("relay: cut off before the answer came")
 
 // The reasons a call fails for want of a connection, which the relay and the
 // client write into a response's Error.
@@ -393,11 +400,14 @@ func notConnected(target string) string {
 	return "no instance " + target + " is connected with this relay key"
 }
 
-// awayError keeps the relay's wording of an ErrAway.
-type awayError string
+// connError is an ErrAway or ErrCutOff in the relay's own words.
+type connError struct {
+	reason string
+	kind   error
+}
 
-func (e awayError) Error() string      { return "relay: " + string(e) }
-func (awayError) Is(target error) bool { return target == ErrAway }
+func (e connError) Error() string        { return "relay: " + e.reason }
+func (e connError) Is(target error) bool { return target == e.kind }
 
 // leftMemory is how long the client remembers that a sibling dropped out.
 const leftMemory = time.Minute

@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/junkerderprovinz/parleyport/kit/lan"
+	"github.com/junkerderprovinz/parleyport/kit/relay"
 )
 
 // A member that is opened again, as an app does to change its pairing, is
@@ -95,5 +97,46 @@ func TestACallReachesAMemberThatChangedItsAnnounce(t *testing.T) {
 		if err != nil || status != http.StatusOK {
 			t.Errorf("alpha's call right after bravo became %s = %d %v, want 200", name, status, err)
 		}
+	}
+}
+
+// A member that reconnects while it serves a call never sends the answer.
+// The call may have done its work there, so only a call that changes
+// nothing is made again.
+func TestACallCutOffAfterItReachedTheMemberIsMadeAgainOnlyIfItChangesNothing(t *testing.T) {
+	for _, tc := range []struct {
+		method string
+		want   int32
+	}{
+		{http.MethodPost, 1},
+		{http.MethodGet, 2},
+	} {
+		t.Run(tc.method, func(t *testing.T) {
+			var served atomic.Int32
+			var bravo atomic.Pointer[Group]
+			app := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if served.Add(1) == 1 {
+					bravo.Load().SetSelf(Self{Name: "bravo", Deployment: "container"})
+				}
+				w.WriteHeader(http.StatusNoContent)
+			})
+			url := relayServer(t)
+			a := open(t, "alpha", setup{relay: url})
+			b := open(t, "bravo", setup{relay: url, noListener: true, app: app})
+			bravo.Store(b.g)
+			waitFor(t, "alpha to see bravo", func() bool { m, _ := memberOf(a.g, b.id); return m.Relay })
+			meet(t, a, b)
+
+			status, _, err := call(t, a, b, tc.method, "/api/job", nil)
+			if got := served.Load(); got != tc.want {
+				t.Errorf("bravo served the %s %d times, want %d", tc.method, got, tc.want)
+			}
+			switch {
+			case tc.want == 1 && !errors.Is(err, relay.ErrCutOff):
+				t.Errorf("call = %d %v, want relay.ErrCutOff", status, err)
+			case tc.want == 2 && (err != nil || status != http.StatusNoContent):
+				t.Errorf("call = %d %v, want 204", status, err)
+			}
+		})
 	}
 }
