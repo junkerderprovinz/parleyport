@@ -160,7 +160,7 @@ From the image, Proxmox 9.1 and newer turn the container image into a container 
 bash <(curl -fsSL https://raw.githubusercontent.com/junkerderprovinz/proxmox-apps/main/image.sh) install parleyport
 ```
 
-To update, run the same line with `update` in place of `install`. It replaces the container and keeps the folders and the address. With `PARLEYPORT_DOMAIN` set, HTTPS on port 443 works from the next release of ParleyPort.
+To update, run the same line with `update` in place of `install`. It replaces the container and keeps the folders and the address.
 
 Docker works just as well, nothing is wrong with it. Create a container with Docker using the Community Scripts and start the compose file in it, as under [Other Docker hosts](#other-docker-hosts):
 
