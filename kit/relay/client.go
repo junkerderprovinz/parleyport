@@ -118,6 +118,9 @@ type Client struct {
 	self     Announce
 	conn     *websocket.Conn
 	siblings map[string]Announce
+	// redial skips the backoff once, after SetSelf closed the connection
+	// on purpose.
+	redial bool
 	// older holds the announces on the key that open under the frame key
 	// but carry an id no member of this protocol goes by.
 	older   map[string]Announce
@@ -246,6 +249,7 @@ func (c *Client) SetSelf(self Announce) {
 	self.InstanceID = c.id
 	c.self = self
 	conn := c.conn
+	c.redial = conn != nil
 	c.mu.Unlock()
 	if conn != nil {
 		_ = conn.CloseNow()
@@ -389,6 +393,13 @@ func (c *Client) run() {
 		}
 		began := time.Now()
 		c.session()
+		c.mu.Lock()
+		redial := c.redial
+		c.redial = false
+		c.mu.Unlock()
+		if redial {
+			continue
+		}
 		if time.Since(began) >= stableSession {
 			wait = c.minBackoff
 		}

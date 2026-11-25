@@ -67,6 +67,34 @@ func TestARenamedClientIsSeenUnderItsNewName(t *testing.T) {
 	})
 }
 
+func TestARenamedClientIsBackWithoutWaitingOutTheBackoff(t *testing.T) {
+	addr, _ := relayOn(t, "127.0.0.1:0")
+	alpha, err := NewClient(ClientOptions{
+		URL:      "http://" + addr,
+		Key:      "shared-relay-test-key-0123456789ab",
+		FrameKey: testFrameKey,
+		Signing:  testSigning,
+		Self:     Announce{InstanceID: alphaID, Name: alphaID, Deployment: "desktop"},
+		Identity: identities[alphaID],
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	alpha.minBackoff, alpha.maxBackoff = time.Minute, time.Minute
+	alpha.Start()
+	t.Cleanup(func() { _ = alpha.Close() })
+	bravo := startClient(t, addr, "shared-relay-test-key-0123456789ab", bravoID, nil)
+	waitFor(t, "bravo to see alpha", func() bool { return len(bravo.Siblings()) == 1 })
+
+	for _, name := range []string{"Cellar", "Attic"} {
+		alpha.SetSelf(Announce{Name: name, Deployment: "desktop"})
+		waitFor(t, "bravo to see alpha as "+name, func() bool {
+			sibs := bravo.Siblings()
+			return len(sibs) == 1 && sibs[0].Name == name
+		})
+	}
+}
+
 func TestClientProxiesToASibling(t *testing.T) {
 	addr, _ := relayOn(t, "127.0.0.1:0")
 	alpha := startClient(t, addr, "shared-relay-test-key-0123456789ab", alphaID, nil)
