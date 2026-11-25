@@ -167,8 +167,6 @@ func (f *Fortress) Open(ctx context.Context, v Visit) (string, error) {
 		return "", ErrNoSuchAction
 	case !slices.Contains(f.about.Uses, OpenAction):
 		return "", ErrNotUsed
-	case !m.Online():
-		return "", group.ErrUnreachable
 	}
 	status, body, err := f.group.Call(ctx, v.Member, http.MethodPost, uiCheckPath, nil)
 	if err != nil {

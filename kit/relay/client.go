@@ -118,6 +118,13 @@ type Client struct {
 	self     Announce
 	conn     *websocket.Conn
 	siblings map[string]Announce
+	// left is when each sibling last dropped out of siblings, and turned
+	// when this client's own connection last came or went.
+	left   map[string]time.Time
+	turned time.Time
+	// redial skips the backoff once, after SetSelf closed the connection
+	// on purpose.
+	redial bool
 	// older holds the announces on the key that open under the frame key
 	// but carry an id no member of this protocol goes by.
 	older   map[string]Announce
@@ -186,6 +193,7 @@ func NewClient(opts ClientOptions) (*Client, error) {
 		minBackoff:  minBackoff,
 		maxBackoff:  maxBackoff,
 		siblings:    map[string]Announce{},
+		left:        map[string]time.Time{},
 		older:       map[string]Announce{},
 		pending:     map[string]*waiting{},
 		serving:     serving,
@@ -208,6 +216,7 @@ func (c *Client) Start() {
 		default:
 		}
 		c.started = true
+		c.turned = time.Now()
 		go c.run()
 	})
 }
@@ -246,6 +255,7 @@ func (c *Client) SetSelf(self Announce) {
 	self.InstanceID = c.id
 	c.self = self
 	conn := c.conn
+	c.redial = conn != nil
 	c.mu.Unlock()
 	if conn != nil {
 		_ = conn.CloseNow()
@@ -321,7 +331,7 @@ func (c *Client) Proxy(ctx context.Context, target, method, path string, body []
 	}
 	c.mu.Unlock()
 	if conn == nil {
-		return nil, http.StatusBadGateway, errors.New("relay: not connected")
+		return nil, http.StatusBadGateway, ErrAway
 	}
 	defer func() {
 		c.mu.Lock()
@@ -347,7 +357,13 @@ func (c *Client) Proxy(ctx context.Context, target, method, path string, body []
 	}
 	// Error is the one field a hostile relay can write, so an unsealed
 	// response is never taken as a result.
-	if resp.Error != "" {
+	switch resp.Error {
+	case "":
+	case notConnected(target):
+		return nil, http.StatusBadGateway, connError{resp.Error, ErrAway}
+	case reasonReconnected, reasonDisconnected, reasonDropped:
+		return nil, http.StatusBadGateway, connError{resp.Error, ErrCutOff}
+	default:
 		return nil, http.StatusBadGateway, errors.New("relay: " + resp.Error)
 	}
 	result, err := OpenResult(c.frameKey, id, resp.Sealed)
@@ -361,6 +377,62 @@ func (c *Client) Proxy(ctx context.Context, target, method, path string, body []
 		return nil, http.StatusBadGateway, &UntrustedAnswer{Target: target, Status: result.Status, Body: result.Body}
 	}
 	return result.Body, result.Status, nil
+}
+
+// ErrAway is the error of a call that found this instance or its target off
+// the relay, as either is for a moment while it reconnects. The call never
+// reached the target.
+var ErrAway = errors.New("relay: not connected")
+
+// ErrCutOff is the error of a call that went out and got no answer because
+// a connection on the way went. The target may have served it.
+var ErrCutOff = errors.New("relay: cut off before the answer came")
+
+// The reasons a call fails for want of a connection, which the relay and the
+// client write into a response's Error.
+const (
+	reasonReconnected  = "the instance that would have answered this reconnected before it replied; retry"
+	reasonDisconnected = "the instance that would have answered this disconnected before it replied"
+	reasonDropped      = "the relay connection dropped before the answer arrived"
+)
+
+func notConnected(target string) string {
+	return "no instance " + target + " is connected with this relay key"
+}
+
+// connError is an ErrAway or ErrCutOff in the relay's own words.
+type connError struct {
+	reason string
+	kind   error
+}
+
+func (e connError) Error() string        { return "relay: " + e.reason }
+func (e connError) Is(target error) bool { return target == e.kind }
+
+// leftMemory is how long the client remembers that a sibling dropped out.
+const leftMemory = time.Minute
+
+// MayReturn reports whether a call that missed id may reach it in a moment:
+// id is listed, or it dropped out of the siblings, or this client's own
+// connection came or went, less than within ago.
+func (c *Client) MayReturn(id string, within time.Duration) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, listed := c.siblings[id]
+	since := time.Since(c.turned)
+	if at, ok := c.left[id]; ok {
+		since = min(since, time.Since(at))
+	}
+	return listed || since < within
+}
+
+func (c *Client) leftLocked(id string, now time.Time) {
+	for other, at := range c.left {
+		if now.Sub(at) > leftMemory {
+			delete(c.left, other)
+		}
+	}
+	c.left[id] = now
 }
 
 // UntrustedAnswer is the error for an answer target signed with the key its id
@@ -389,6 +461,13 @@ func (c *Client) run() {
 		}
 		began := time.Now()
 		c.session()
+		c.mu.Lock()
+		redial := c.redial
+		c.redial = false
+		c.mu.Unlock()
+		if redial {
+			continue
+		}
 		if time.Since(began) >= stableSession {
 			wait = c.minBackoff
 		}
@@ -550,6 +629,7 @@ func (c *Client) handle(ctx context.Context, conn *websocket.Conn, frame []byte)
 			return
 		}
 		c.siblings[a.InstanceID] = a
+		delete(c.left, a.InstanceID)
 		c.mu.Unlock()
 		c.changed()
 	case TypePresence:
@@ -558,6 +638,9 @@ func (c *Client) handle(ctx context.Context, conn *websocket.Conn, frame []byte)
 			return
 		}
 		c.mu.Lock()
+		if _, ok := c.siblings[p.InstanceID]; ok {
+			c.leftLocked(p.InstanceID, time.Now())
+		}
 		delete(c.siblings, p.InstanceID)
 		delete(c.older, p.InstanceID)
 		c.mu.Unlock()
@@ -658,6 +741,7 @@ func (c *Client) deliver(resp ProxyResponse) {
 func (c *Client) connected(conn *websocket.Conn) {
 	c.mu.Lock()
 	c.conn = conn
+	c.turned = time.Now()
 	c.mu.Unlock()
 	c.changed()
 }
@@ -667,6 +751,10 @@ func (c *Client) connected(conn *websocket.Conn) {
 func (c *Client) disconnected() {
 	c.mu.Lock()
 	c.conn = nil
+	c.turned = time.Now()
+	for id := range c.siblings {
+		c.leftLocked(id, c.turned)
+	}
 	c.siblings = map[string]Announce{}
 	c.older = map[string]Announce{}
 	calls := make([]*waiting, 0, len(c.pending))
@@ -677,7 +765,7 @@ func (c *Client) disconnected() {
 	c.mu.Unlock()
 	for _, w := range calls {
 		w.answer <- ProxyResponse{
-			Error: "the relay connection dropped before the answer arrived",
+			Error: reasonDropped,
 		}
 	}
 	c.changed()

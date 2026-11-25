@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/junkerderprovinz/parleyport/kit/group"
 )
@@ -375,13 +376,68 @@ func TestAMemberWithoutAnInterfaceHasNothingToOpen(t *testing.T) {
 }
 
 func TestAMemberThatIsAwayIsNotOpened(t *testing.T) {
-	a, b, _ := opening(t, true)
+	url := relayServer(t)
+	a := open(t, "alpha", "alpha-1", setup{relay: url, uses: []string{OpenAction}, noPair: true})
+	b := open(t, "bravo", "bravo-1", setup{relay: url, ui: (&webApp{}).ui(), noPair: true, noListener: true})
+	meet(t, a, b)
+	if err := b.f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "alpha to see bravo leave", func() bool { m, _ := memberOf(a.f, b.id); return !m.Online() })
+	if _, err := a.f.Open(ctx(t), visit(a, b)); !errors.Is(err, group.ErrUnreachable) {
+		t.Fatalf("Open = %v, want ErrUnreachable", err)
+	}
+}
+
+// A member is off the relay for a moment whenever its app opens it again,
+// as it does on a join, and answers at its address like an app without a
+// fortress. Opening it in that moment works once it is back.
+func TestAMemberIsOpenedWhileItIsOpenedAgain(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		noListener bool
+	}{
+		{"on the relay", true},
+		{"at its address too", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app := &webApp{password: true}
+			url := relayServer(t)
+			bravo := setup{relay: url, ui: app.ui(), noPair: true, noListener: tc.noListener}
+			a := open(t, "alpha", "alpha-1", setup{relay: url, uses: []string{OpenAction}, noPair: true})
+			b := open(t, "bravo", "bravo-1", bravo)
+			meet(t, a, b)
+
+			if err := b.f.Close(); err != nil {
+				t.Fatal(err)
+			}
+			waitFor(t, "alpha to see bravo leave the relay", func() bool { m, _ := memberOf(a.f, b.id); return !m.Relay })
+			opened := make(chan error, 1)
+			go func() {
+				_, err := a.f.Open(ctx(t), visit(a, b))
+				opened <- err
+			}()
+			time.Sleep(500 * time.Millisecond)
+			b.f = reopen(t, b, bravo)
+			if err := <-opened; err != nil {
+				t.Fatalf("Open while bravo was away = %v, want it opened once bravo is back", err)
+			}
+		})
+	}
+}
+
+func TestAMemberIsOpenedRightAfterThisOneIsOpenedAgain(t *testing.T) {
+	url := relayServer(t)
+	alpha := setup{relay: url, uses: []string{OpenAction}, noPair: true}
+	a := open(t, "alpha", "alpha-1", alpha)
+	b := open(t, "bravo", "bravo-1", setup{relay: url, ui: (&webApp{}).ui(), noPair: true, noListener: true})
+	meet(t, a, b)
 	if err := a.f.Close(); err != nil {
 		t.Fatal(err)
 	}
-	a.f = reopen(t, a, setup{uses: []string{OpenAction}, noPair: true})
-	if _, err := a.f.Open(ctx(t), visit(a, b)); !errors.Is(err, group.ErrUnreachable) {
-		t.Fatalf("Open = %v, want ErrUnreachable", err)
+	a.f = reopen(t, a, alpha)
+	if _, err := a.f.Open(ctx(t), visit(a, b)); err != nil {
+		t.Fatalf("Open right after alpha came back = %v", err)
 	}
 }
 

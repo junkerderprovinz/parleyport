@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -24,6 +25,11 @@ const (
 	directRetry = addrTTL
 	// awaitWindow is how long an answer saying "waits for approval" stands.
 	awaitWindow = 2 * time.Minute
+	// reconnectSettle is how long a call keeps trying a member that is off
+	// the relay for the moment it or this instance takes to reconnect, and
+	// reconnectRetry how far apart the tries are.
+	reconnectSettle = 3 * time.Second
+	reconnectRetry  = 100 * time.Millisecond
 )
 
 // remoteAddr is a member's direct address as far as this instance knows it:
@@ -43,17 +49,69 @@ type remoteAddr struct {
 // A member on this network is asked directly first, then at an address a
 // sweep or the member itself named, then over the relay. The routes are
 // tried one after another rather than raced, since a call can change
-// something and must not arrive twice. An error means no answer came, or
+// something and must not arrive twice. For the same reason a call that went
+// out in full at an address and got no answer there takes no other route
+// unless it is GET or HEAD. An error means no answer came, or
 // that the answer came from a member not approved here: then it is a
 // *relay.UntrustedAnswer, which the caller may read only for what cannot
 // hurt it, such as that this instance waits for approval there.
+//
+// A member that just left the relay, or that this instance cannot see
+// because its own connection just came or went, is tried again for a few
+// seconds, since a reconnect takes it away for a moment. A call that may
+// have reached the member is made again only as GET or HEAD, which change
+// nothing, and an answer, however bad, is never tried again.
 func (g *Group) Call(ctx context.Context, id, method, path string, body []byte) (int, []byte, error) {
 	if len(body) > MaxCallBytes {
 		return 0, nil, ErrTooLarge
 	}
+	until := time.Now().Add(reconnectSettle)
+	for {
+		status, out, err := g.callOnce(ctx, id, method, path, body)
+		if err == nil || !g.mayRepeat(id, method, err) || time.Now().After(until) {
+			return status, out, err
+		}
+		select {
+		case <-ctx.Done():
+			return status, out, err
+		case <-time.After(reconnectRetry):
+		}
+	}
+}
+
+// mayRepeat reports whether a call that failed with err may be made again:
+// id was between two connections, and the call either never reached it or
+// changes nothing there.
+func (g *Group) mayRepeat(id, method string, err error) bool {
+	returning := g.client != nil && g.client.MayReturn(id, reconnectSettle)
+	switch {
+	case errors.Is(err, relay.ErrAway):
+		return true
+	case errors.Is(err, errNoRoute), errors.Is(err, errNoGroup):
+		return returning
+	case errors.Is(err, relay.ErrCutOff):
+		return repeatable(method)
+	case errors.Is(err, ErrUnreachable):
+		return returning && repeatable(method)
+	}
+	return false
+}
+
+// repeatable reports whether a call with method may reach a member twice
+// without harm, as HTTP has it. Every call that changes something goes as
+// POST.
+func repeatable(method string) bool {
+	return method == http.MethodGet || method == http.MethodHead
+}
+
+// errNoRoute is ErrUnreachable for a call that found no way to the member
+// and so never went out.
+var errNoRoute = fmt.Errorf("%w", ErrUnreachable)
+
+func (g *Group) callOnce(ctx context.Context, id, method, path string, body []byte) (int, []byte, error) {
 	urls, relayed := g.routesTo(id)
 	if len(urls) == 0 && !relayed {
-		return 0, nil, ErrUnreachable
+		return 0, nil, errNoRoute
 	}
 	call := relay.ProxyCall{Method: method, Path: path, Body: body}
 	dctx, cancel := directContext(ctx, relayed)
@@ -66,6 +124,10 @@ func (g *Group) Call(ctx context.Context, id, method, path string, body []byte) 
 		res, err := g.callDirect(dctx, u, id, call)
 		if err != nil {
 			g.directFailed(ctx, u)
+			var sent sentError
+			if errors.As(err, &sent) && !repeatable(method) {
+				return 0, nil, err
+			}
 			directErr = err
 			continue
 		}

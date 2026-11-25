@@ -90,6 +90,8 @@ type node struct {
 	srv     *httptest.Server
 	store   *memStore
 	removed atomic.Int32
+	// current is the group that answers at srv.
+	current atomic.Pointer[Group]
 }
 
 type setup struct {
@@ -116,6 +118,8 @@ type setup struct {
 	// noListener opens the instance the way a desktop app runs: it calls
 	// others directly but takes no direct calls itself.
 	noListener bool
+	// app answers the calls that reach the app, appRoutes when it is nil.
+	app http.Handler
 }
 
 // open starts an instance called name. Its app answers GET /api/whoami with
@@ -126,9 +130,8 @@ func open(t *testing.T, name string, s setup) *node {
 	if n.store == nil {
 		n.store = &memStore{}
 	}
-	var current atomic.Pointer[Group]
 	n.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if g := current.Load(); g != nil && r.URL.Path == DirectPath {
+		if g := n.current.Load(); g != nil && r.URL.Path == DirectPath {
 			g.DirectHandler().ServeHTTP(w, r)
 			return
 		}
@@ -136,7 +139,7 @@ func open(t *testing.T, name string, s setup) *node {
 	}))
 	t.Cleanup(n.srv.Close)
 	n.g = openGroup(t, n, s)
-	current.Store(n.g)
+	n.current.Store(n.g)
 	return n
 }
 
@@ -157,6 +160,10 @@ func openGroup(t *testing.T, n *node, s setup) *Group {
 	direct := n.srv.URL
 	if s.noListener {
 		direct = ""
+	}
+	app := s.app
+	if app == nil {
+		app = appRoutes()
 	}
 	g, err := Open(Config{
 		Domain:              testDomain,
@@ -183,7 +190,7 @@ func openGroup(t *testing.T, n *node, s setup) *Group {
 		VouchedOnly:         s.vouchedOnly,
 		MayJoin:             s.mayJoin,
 		OnNewPhrase:         s.onNewPhrase,
-	}, appRoutes())
+	}, app)
 	if err != nil {
 		t.Fatalf("open %s: %v", n.name, err)
 	}

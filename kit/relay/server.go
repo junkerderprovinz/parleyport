@@ -421,7 +421,7 @@ func (s *Server) routeRequest(c Conn, req ProxyRequest) {
 	case target == nil:
 		refusal = &ProxyResponse{
 			RequestID: req.RequestID,
-			Error:     "no instance " + req.Target + " is connected with this relay key",
+			Error:     notConnected(req.Target),
 		}
 	case inFlightFromLocked(keyPending, c) >= maxPendingPerSender:
 		refusal = &ProxyResponse{
