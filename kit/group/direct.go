@@ -709,6 +709,12 @@ type sentError struct{ error }
 
 func (e sentError) Unwrap() error { return e.error }
 
+// unsentError is a direct call that failed before it had a connection to the
+// address, as one refused there does, so none of it went out.
+type unsentError struct{ error }
+
+func (e unsentError) Unwrap() error { return e.error }
+
 // exchange makes one direct call and opens the answer, without asking yet
 // whose key signed it.
 func (g *Group) exchange(ctx context.Context, base, target string, call relay.ProxyCall) (relay.ProxyResult, []byte, string, error) {
@@ -716,14 +722,18 @@ func (g *Group) exchange(ctx context.Context, base, target string, call relay.Pr
 	if err != nil {
 		return relay.ProxyResult{}, nil, "", err
 	}
-	var wrote atomic.Bool
+	var connected, wrote atomic.Bool
 	req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
+		GotConn:      func(httptrace.GotConnInfo) { connected.Store(true) },
 		WroteRequest: func(i httptrace.WroteRequestInfo) { wrote.Store(i.Err == nil) },
 	}))
 	lost := func(err error) error {
 		err = fmt.Errorf("%w directly at %s: %w", ErrUnreachable, base, err)
-		if wrote.Load() {
+		switch {
+		case wrote.Load():
 			return sentError{err}
+		case !connected.Load():
+			return unsentError{err}
 		}
 		return err
 	}

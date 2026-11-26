@@ -87,7 +87,7 @@ func (g *Group) mayRepeat(id, method string, err error) bool {
 	switch {
 	case errors.Is(err, relay.ErrAway):
 		return true
-	case errors.Is(err, errNoRoute), errors.Is(err, errNoGroup):
+	case errors.Is(err, errNoRoute), errors.Is(err, errNoGroup), errors.As(err, new(unsentError)):
 		return returning
 	case errors.Is(err, relay.ErrCutOff):
 		return repeatable(method)

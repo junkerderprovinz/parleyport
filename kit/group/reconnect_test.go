@@ -2,8 +2,10 @@ package group
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -139,4 +141,86 @@ func TestACallCutOffAfterItReachedTheMemberIsMadeAgainOnlyIfItChangesNothing(t *
 			}
 		})
 	}
+}
+
+// A member off the relay for a moment is called at the address it announced.
+// An address that refuses the connection never got the call, so even one that
+// changes something is made again and reaches the member once it is back.
+func TestACallRefusedAtTheAddressReachesTheMemberOnceItIsBack(t *testing.T) {
+	status, served, err := postWhileAway(t, httpDeadAddress(t))
+	if err != nil || status != http.StatusNoContent {
+		t.Errorf("POST while bravo was away = %d %v, want 204 once bravo is back", status, err)
+	}
+	if served != 1 {
+		t.Errorf("bravo served the POST %d times, want 1", served)
+	}
+}
+
+// A call that went out in full at the address and lost its answer there may
+// have done its work, so one that changes something is not made again.
+func TestACallThatLostItsAnswerAtTheAddressIsNotMadeAgain(t *testing.T) {
+	frame := testDomain.Keys(testSecret).Frame
+	var reached atomic.Int32
+	lost := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req relay.ProxyRequest
+		if json.NewDecoder(r.Body).Decode(&req) != nil {
+			http.NotFound(w, r)
+			return
+		}
+		if call, err := relay.OpenCall(frame, testDomain.Signing(), req.RequestID, req.Target, req.Sealed); err == nil &&
+			call.Method == http.MethodPost && call.Path == "/api/job" {
+			reached.Add(1)
+		}
+		if conn, _, err := http.NewResponseController(w).Hijack(); err == nil {
+			_ = conn.Close()
+		}
+	}))
+	t.Cleanup(lost.Close)
+
+	status, served, err := postWhileAway(t, lost.URL)
+	if !errors.Is(err, ErrUnreachable) {
+		t.Errorf("POST while bravo was away = %d %v, want ErrUnreachable", status, err)
+	}
+	if got := reached.Load() + served; got != 1 {
+		t.Errorf("the POST arrived %d times, want 1", got)
+	}
+}
+
+// postWhileAway has alpha POST to bravo while bravo, announced at address, is
+// off the relay for half a second, and returns the answer and how often
+// bravo's app served the call.
+func postWhileAway(t *testing.T, address string) (int, int32, error) {
+	t.Helper()
+	var served atomic.Int32
+	app := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/job" {
+			served.Add(1)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	url := relayServer(t)
+	la := lan.New(lan.Config{})
+	t.Cleanup(func() { _ = la.Close() })
+	a := open(t, "alpha", setup{relay: url, lan: la})
+	b := open(t, "bravo", setup{relay: url, noListener: true, app: app})
+	waitFor(t, "alpha to see bravo", func() bool { m, _ := memberOf(a.g, b.id); return m.Relay })
+	meet(t, a, b)
+	la.Observe(tagged(a.g, lan.Peer{ID: b.id, Name: "bravo", URL: address}))
+
+	_ = b.g.Close()
+	waitFor(t, "alpha to see bravo leave", func() bool { m, _ := memberOf(a.g, b.id); return !m.Relay })
+	type answer struct {
+		status int
+		err    error
+	}
+	got := make(chan answer, 1)
+	go func() {
+		status, _, err := call(t, a, b, http.MethodPost, "/api/job", nil)
+		got <- answer{status, err}
+	}()
+	time.Sleep(500 * time.Millisecond)
+	b.g = openGroup(t, b, setup{relay: url, noListener: true, app: app})
+	b.current.Store(b.g)
+	r := <-got
+	return r.status, served.Load(), r.err
 }
