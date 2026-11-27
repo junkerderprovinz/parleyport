@@ -462,6 +462,29 @@ func TestUnraidSpacesSendsOneSecondApart(t *testing.T) {
 	}
 }
 
+// Unraid's notify get reads the first line of a description only.
+func TestUnraidPutsAMultiLineBodyOnOneLine(t *testing.T) {
+	notify.SetUnraidSpacing(t, 0)
+	run := &runner{}
+	e := failed
+	e.Body = "a: 1 → 2\n\nb: 3 → 4\r\n  c: 5 → 6\n"
+
+	sendOne(t, notify.Channel{ID: "u", Kind: notify.KindUnraid}, notify.Options{Unraid: run}, e)
+
+	if got := argAfter(run.args, "-d"); got != "a: 1 → 2 · b: 3 → 4 · c: 5 → 6" {
+		t.Errorf("description = %q", got)
+	}
+}
+
+func argAfter(args []string, flag string) string {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == flag {
+			return args[i+1]
+		}
+	}
+	return ""
+}
+
 func TestUnraidStripsBackslashesAndQuotes(t *testing.T) {
 	notify.SetUnraidSpacing(t, 0)
 	run := &runner{}

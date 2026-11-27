@@ -231,6 +231,18 @@ func (d *Dispatcher) ping(ctx context.Context, check string, p Ping, body string
 // text through echo -e and into JSON they build by hand.
 var unraidText = strings.NewReplacer(`\`, "", `"`, "")
 
+// oneLine joins the lines of s with a dot, since Unraid's notify get reads
+// the first line of a description only.
+func oneLine(s string) string {
+	var lines []string
+	for _, l := range strings.Split(s, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			lines = append(lines, l)
+		}
+	}
+	return strings.Join(lines, " · ")
+}
+
 // unraidGate keeps Unraid notifications a second apart across the process,
 // since the notify script names its file after the second and a second
 // message within it replaces the first while the script still succeeds.
@@ -262,7 +274,7 @@ func (d *Dispatcher) unraid(ctx context.Context, e Event) error {
 	if d.source != "" {
 		args = append(args, "-e", unraidText.Replace(d.source))
 	}
-	args = append(args, "-s", unraidText.Replace(e.Title), "-d", unraidText.Replace(e.Body), "-i", e.Severity.importance())
+	args = append(args, "-s", unraidText.Replace(e.Title), "-d", unraidText.Replace(oneLine(e.Body)), "-i", e.Severity.importance())
 	if e.Link != "" {
 		args = append(args, "-l", unraidText.Replace(e.Link))
 	}
